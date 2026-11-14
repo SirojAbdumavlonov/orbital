@@ -1,0 +1,45 @@
+@@stat
+cpu  10132153 290696 3084719 46828483 16683 0 25195 0 0 0
+cpu0 1393280 32966 572056 13343292 6130 0 17875 0 0 0
+cpu1 1335860 36722 456700 11161530 4006 0 1964 0 0 0
+cpu2 3712131 110462 1007321 11140990 3459 0 3005 0 0 0
+cpu3 3690882 110546 1048642 11182671 3088 0 2351 0 0 0
+@@meminfo
+MemTotal:        8143288 kB
+MemFree:          912004 kB
+MemAvailable:    5120000 kB
+Buffers:          200000 kB
+Cached:          3500000 kB
+SwapCached:            0 kB
+SwapTotal:       2097148 kB
+SwapFree:        2000000 kB
+@@loadavg
+0.42 0.37 0.30 2/412 31337
+@@uptime
+864123.45 3400000.12
+@@nproc
+4
+@@cpuinfo
+model name	: AMD EPYC 7B13 64-Core Processor
+@@os
+PRETTY_NAME="Ubuntu 24.04.1 LTS"
+NAME="Ubuntu"
+VERSION_ID="24.04"
+@@uname
+Linux 6.8.0-45-generic x86_64
+@@hostname
+web-01
+@@df
+Filesystem     Type 1024-blocks     Used Available Capacity Mounted on
+/dev/sda1      ext4    81106868 30123456  46835460      40% /
+/dev/sdb1      xfs    524032000 104806400 419225600      20% /var/lib/docker
+@@net
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 1234567    1000    0    0    0     0          0         0  1234567    1000    0    0    0     0       0          0
+  eth0: 987654321  800000    0    0    0     0          0         0 123456789  600000    0    0    0     0       0          0
+@@ps
+  812 www-data  12.5  1.2  98304 nginx
+ 1022 root       3.1  4.0 327680 dockerd
+  611 mysql      2.0 12.5 1024000 mysqld
+@@end

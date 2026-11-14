@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Engine tests (incl. live SSH)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: "clippy, rustfmt" }
+      - uses: Swatinem/rust-cache@v2
+      - name: Start disposable sshd
+        run: |
+          sudo apt-get update && sudo apt-get install -y openssh-server
+          sudo KEYDIR=/tmp/outpost-it-keys bash scripts/it-sshd.sh | tee /tmp/it-env
+      - name: Clippy
+        run: cargo clippy -p outpost-core --all-targets -- -D warnings
+      - name: Test
+        run: |
+          source /tmp/it-env
+          cargo test -p outpost-core -- --test-threads=1
+
+  frontend:
+    name: Frontend (types, unit tests, build)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx vite build
+
+  macos:
+    name: macOS app bundle
+    needs: [core, frontend]
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Build universal .app / .dmg
+        run: npm run tauri build -- --target universal-apple-darwin
+        # For signed + notarized releases add APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
+        # APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID as repository secrets.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Outpost-macos
+          path: target/universal-apple-darwin/release/bundle/dmg/*.dmg
