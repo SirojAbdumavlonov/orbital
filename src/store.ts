@@ -90,6 +90,8 @@ interface State {
   connecting: Record<string, boolean>;
   prompt: Prompt | null;
   editing: Profile | "new" | null;
+  /** The "Import from ~/.ssh/config" dialog is open. */
+  importingSsh: boolean;
   globalView: "activity" | "knownHosts" | "settings" | null;
   /** Back and forward history, like a browser. */
   navBack: Loc[];
@@ -126,6 +128,7 @@ interface State {
   toast(t: Omit<Toast, "id">): void;
   dismiss(id: number): void;
   setEditing(p: Profile | "new" | null): void;
+  setImportingSsh(open: boolean): void;
   setGlobalView(v: State["globalView"]): void;
 }
 
@@ -156,6 +159,7 @@ export const useStore = create<State>((set, get) => ({
   connecting: {},
   prompt: null,
   editing: null,
+  importingSsh: false,
   globalView: null,
   navBack: [],
   navFwd: [],
@@ -388,6 +392,10 @@ export const useStore = create<State>((set, get) => ({
 
   dismiss(id) {
     sonner.dismiss(id);
+  },
+
+  setImportingSsh(importingSsh) {
+    set({ importingSsh });
   },
 
   setEditing(editing) {

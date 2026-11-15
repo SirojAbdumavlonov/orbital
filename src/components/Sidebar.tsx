@@ -1,7 +1,7 @@
 import { PROTOCOL_NAMES } from "./ProfileDialog";
-import { Activity, ChevronLeft, ChevronRight, KeyRound, Loader2, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sun, Unplug } from "lucide-react";
+import { Activity, ChevronLeft, FileInput, ChevronRight, KeyRound, Loader2, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sun, Unplug } from "lucide-react";
 import { useResolvedTheme, useSettings } from "../lib/settings";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Profile } from "../lib/api";
 import { useStore } from "../store";
 
@@ -33,9 +33,7 @@ export function Sidebar() {
         <button className="icon-btn" title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} onClick={() => setPref({ theme: theme === "dark" ? "light" : "dark" })}>
           {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
         </button>
-        <button className="icon-btn" title="Add server (⌘N)" aria-label="Add server" onClick={() => setEditing("new")}>
-          <Plus size={16} />
-        </button>
+        <AddMenu />
       </div>
       <div className="sidebar-scroll">
         {groups.length === 0 && <p className="faint" style={{ padding: "8px" }}>No servers yet.</p>}
@@ -111,6 +109,45 @@ export function NavButtons() {
       </button>
       <button className="icon-btn" title="Back (⌘[ or swipe right with two fingers)" aria-label="Back" disabled={navBack.length === 0} onClick={goBack}><ChevronLeft size={17} /></button>
       <button className="icon-btn" title="Forward (⌘])" aria-label="Forward" disabled={navFwd.length === 0} onClick={goForward}><ChevronRight size={17} /></button>
+    </div>
+  );
+}
+
+/** "+" at the top of the sidebar: add a server by hand or import from ~/.ssh/config. */
+function AddMenu() {
+  const { setEditing, setImportingSsh } = useStore();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("mousedown", away);
+    window.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("mousedown", away);
+      window.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  const pick = (f: () => void) => () => {
+    setOpen(false);
+    f();
+  };
+  return (
+    <div className="menu-anchor" ref={ref}>
+      <button className="icon-btn" title="Add server" aria-label="Add server" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Plus size={16} />
+      </button>
+      {open && (
+        <div className="menu add-menu" role="menu">
+          <button role="menuitem" className="menu-item" onClick={pick(() => setEditing("new"))}>
+            <Plus size={14} /><span className="menu-name">Add server…</span><span className="state">⌘N</span>
+          </button>
+          <button role="menuitem" className="menu-item" onClick={pick(() => setImportingSsh(true))}>
+            <FileInput size={14} /><span className="menu-name">Import from ~/.ssh/config…<small>Pick hosts, jump hosts included</small></span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

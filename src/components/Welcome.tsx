@@ -1,8 +1,8 @@
-import { Plus } from "lucide-react";
+import { FileInput, Plus } from "lucide-react";
 import { useStore } from "../store";
 
 export function Welcome() {
-  const { profiles, setEditing, connect } = useStore();
+  const { profiles, setEditing, setImportingSsh, connect } = useStore();
   const recent = [...profiles].filter((p) => p.lastConnectedAt).sort((a, b) => (b.lastConnectedAt! > a.lastConnectedAt! ? 1 : -1)).slice(0, 5);
   return (
     <div className="welcome drag" data-tauri-drag-region>
@@ -13,7 +13,10 @@ export function Welcome() {
           Browse and edit files, restart services, manage containers and open a shell — over one SSH connection,
           with every change written to a tamper-evident activity log.
         </p>
-        <button className="btn primary" onClick={() => setEditing("new")}><Plus size={14} /> Add server</button>
+        <div className="welcome-actions">
+          <button className="btn primary" onClick={() => setEditing("new")}><Plus size={14} /> Add server</button>
+          <button className="btn" onClick={() => setImportingSsh(true)}><FileInput size={14} /> Import from ~/.ssh/config</button>
+        </div>
         {recent.length > 0 && (
           <div className="recent">
             <span className="faint" style={{ fontSize: 12, marginBottom: 4 }}>Recently opened</span>
