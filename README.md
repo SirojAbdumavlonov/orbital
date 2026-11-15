@@ -33,6 +33,7 @@ Cyberduck is good at moving files. Real server work is more than that: you edit 
 | **Docker** | Containers grouped by Compose project, filtered by state and sorted by name, state, image, CPU or memory, with live CPU and memory, logs, `inspect` and the Compose file (edit it, apply with `up -d`, restart a service, pull images). Start, stop, restart, pause and remove (removing asks you to type the container name). Falls back to sudo when you aren't in the `docker` group. |
 | **Monitor** | CPU (overall and per core), memory and cache, swap, load, disks, network throughput, top processes, what uses the CPU and memory (by program, service, user or process), disk usage by folder with drill-down, plus server details: OS, kernel, machine and vendor, IP addresses, gateway, DNS, time zone, pending updates, reboot needed, failed services. Agentless: nothing is installed on the server. |
 | **Terminal** | A full xterm (256 colours, links, resize) over the same connection. "Open terminal here" starts a shell in the folder you're browsing. No Terminal.app or iTerm needed. |
+| **Uptime monitoring** | Check websites (status code, optionally text the page must contain) and ports every 1, 5 or 15 minutes from your Mac while Orbital is open. A macOS notification when one goes down and when it's back, uptime over 24 hours and 7 days, latency, the last error, and a warning when an HTTPS certificate expires within 14 days. The domains of a connected server's nginx sites are one click away. |
 | **Activity log** | Every change, success or failure, is recorded: who, which server, what, the exact command sent, exit code and duration. The log is append-only (enforced by the database) and **SHA-256 hash-chained**, so tampering is detectable with one click. Exports to CSV and JSON. |
 | **Cyberduck-grade security** | Passwords and passphrases are saved encrypted on your Mac, readable only there, and Orbital never interrupts you with Keychain prompts. Unknown host keys need your confirmation; a changed host key is refused outright. Supports password (with keyboard-interactive fallback), private keys (OpenSSH/PEM, encrypted or not) and ssh-agent (1Password, Secretive, YubiKey). Keys in `~/.ssh/known_hosts` are trusted automatically. The sudo password goes over stdin, never on the command line and never into the log. Jump hosts (ProxyJump) with a separate host-key check and credentials per hop. Optional Touch ID before saved credentials are used. |
 
@@ -85,6 +86,7 @@ npm run demo            # http://localhost:1430
 
 ```bash
 cargo test -p orbital-core     # unit tests (parsers, audit chain, host-key pinning, shell quoting)
+                               # and tests/uptime_mock.rs (uptime checks against a local mock HTTP server)
 npm test                       # frontend unit tests
 npm run typecheck
 ```
@@ -115,7 +117,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT
 
 ```
 crates/orbital-core/   engine: ssh, sftp, metrics, services, docker, config_edit, terminal, audit, db,
-                       tools, nginx, webservers, databases, users, cron, usage, firewall, fail2ban, certbot, sshd, ports, sysinfo
+                       tools, nginx, webservers, databases, users, cron, usage, firewall, fail2ban, certbot, sshd, ports, sysinfo, uptime
   tests/live_ssh.rs    end-to-end tests against a real sshd
 src-tauri/             Tauri shell: typed commands -> Engine (no business logic)
 src/                   React UI (views/, components/, lib/api.ts mirrors the Rust types)

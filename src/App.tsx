@@ -20,6 +20,8 @@ import { SettingsView } from "./views/SettingsView";
 import { useApplyTheme, useSettings } from "./lib/settings";
 import { usePanelResizing } from "./lib/resize";
 import { useUpdateChecks } from "./lib/updates";
+import { useUptimeAlerts } from "./lib/uptime";
+import { UptimeView } from "./views/UptimeView";
 import { MonitorView } from "./views/MonitorView";
 import { NginxView } from "./views/NginxView";
 import { ToolView } from "./views/ToolView";
@@ -40,6 +42,7 @@ import { TerminalView } from "./views/TerminalView";
 
 const GLOBAL_TITLES = {
   activity: ["Activity log", "Every change across all servers, hash-chained so tampering is detectable"],
+  uptime: ["Uptime", "Websites and ports checked from this Mac, with a notification when one goes down"],
   knownHosts: ["Security", "Saved credentials and the host identities you've verified"],
   settings: ["Settings", "Preferences for Orbital on this Mac"],
 } as const;
@@ -137,6 +140,7 @@ export default function App() {
   const sidebarHidden = useSettings((x) => x.sidebarHidden);
   usePanelResizing();
   useUpdateChecks();
+  useUptimeAlerts();
 
   useEffect(() => {
     loadProfiles();
@@ -173,7 +177,7 @@ export default function App() {
               <button className="btn" style={{ marginLeft: "auto" }} onClick={() => setGlobalView(null)}>Close</button>
             </div>
           </header>
-          {globalView === "activity" ? <ActivityView /> : globalView === "settings" ? <SettingsView /> : <KnownHostsView />}
+          {globalView === "activity" ? <ActivityView /> : globalView === "uptime" ? <UptimeView /> : globalView === "settings" ? <SettingsView /> : <KnownHostsView />}
         </div>
       )}
       {order.map((id) => <Workspace key={id} s={sessions[id]} visible={!!showWorkspace && id === active} />)}

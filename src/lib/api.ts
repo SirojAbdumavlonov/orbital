@@ -223,7 +223,7 @@ export interface ContainerStats {
 
 export type ContainerAction = "start" | "stop" | "restart" | "pause" | "unpause" | "remove" | "forceRemove";
 
-export type AuditCategory = "connection" | "file" | "config" | "service" | "docker" | "terminal" | "command" | "security";
+export type AuditCategory = "connection" | "file" | "config" | "service" | "docker" | "terminal" | "command" | "security" | "uptime";
 export interface AuditEvent {
   seq: number;
   id: string;
@@ -308,6 +308,70 @@ export interface TransferReport {
   bytes: number;
   skipped: number;
 }
+
+// ---------- uptime checks (run from this Mac) ----------
+
+export type CheckKind = "http" | "tcp";
+export type CheckState = "unknown" | "up" | "down";
+
+export interface CheckInput {
+  name: string;
+  kind: CheckKind;
+  /** A URL (http) or host:port (tcp). */
+  target: string;
+  expectedStatus?: number | null;
+  contains?: string | null;
+  intervalMinutes: 1 | 5 | 15;
+  paused?: boolean;
+}
+
+export interface Check {
+  id: string;
+  name: string;
+  kind: CheckKind;
+  target: string;
+  expectedStatus: number;
+  contains: string | null;
+  intervalMinutes: 1 | 5 | 15;
+  paused: boolean;
+  createdAt: string;
+}
+
+export interface CheckResult {
+  at: string;
+  up: boolean;
+  latencyMs: number | null;
+  statusCode: number | null;
+  error: string | null;
+  certExpires: string | null;
+  /** Set when the TLS certificate expires within 14 days. */
+  warning: string | null;
+}
+
+export interface StateChange {
+  at: string;
+  up: boolean;
+  error: string | null;
+}
+
+export interface CheckStatus {
+  check: Check;
+  state: CheckState;
+  last: CheckResult | null;
+  /** Latest results, oldest first. */
+  recent: CheckResult[];
+  uptime24h: number | null;
+  uptime7d: number | null;
+  lastError: StateChange | null;
+  since: string | null;
+  /** Newest first. */
+  changes: StateChange[];
+}
+
+export type UptimeEvent =
+  | { type: "result"; checkId: string; result: CheckResult }
+  | { type: "changed"; checkId: string; name: string; target: string; change: "wentDown" | "recovered"; error: string | null }
+  | { type: "certWarning"; checkId: string; name: string; message: string };
 
 // ---------- port forwarding, live logs, deploys ----------
 
@@ -846,4 +910,15 @@ export const api = {
     invoke<AuditEvent[]>("audit_query", { filter }),
   auditVerify: () => invoke<{ ok: boolean; checked: number; firstBrokenSeq: number | null }>("audit_verify"),
   auditExport: (format: "json" | "csv", path: string) => invoke<void>("audit_export", { format, path }),
+  /** Results and alerts from the uptime checks, for as long as the page lives. */
+  uptimeWatch: (onEvent: (e: UptimeEvent) => void) => {
+    const ch = new Channel<UptimeEvent>();
+    ch.onmessage = onEvent;
+    return invoke<void>("uptime_watch", { onEvent: ch });
+  },
+  listUptime: () => invoke<CheckStatus[]>("list_uptime"),
+  saveUptimeCheck: (id: string | null, input: CheckInput) => invoke<Check>("save_uptime_check", { id, input }),
+  setUptimePaused: (id: string, paused: boolean) => invoke<Check>("set_uptime_paused", { id, paused }),
+  deleteUptimeCheck: (id: string) => invoke<void>("delete_uptime_check", { id }),
+  runUptimeCheck: (id: string) => invoke<CheckStatus>("run_uptime_check", { id }),
 };

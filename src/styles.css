@@ -23,6 +23,8 @@
   --bad: #e5645a;
   --warn: #e8a23a;
   --idle: #6e7a91;
+  --bad-soft: #e5645a2e;
+  --warn-soft: #e8a23a59;
   --radius-s: 6px;
   --radius-m: 10px;
   --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
@@ -61,6 +63,8 @@
   --bad: #cc4237;
   --warn: #b97710;
   --idle: #8b95a8;
+  --bad-soft: #cc423724;
+  --warn-soft: #b9771052;
   --btn-hover: #e3e8ef;
   --btn-hover-line: #c3cbd8;
   --danger-ink: #b3332a;
@@ -497,3 +501,30 @@ tr.dim td { opacity: .6; }
 .deploy-steps li.failed { color: var(--bad); }
 .deploy-output { margin: 0; max-height: 320px; overflow: auto; padding: 10px 12px; background: var(--term-bg); font: 11.5px/1.5 var(--mono); color: var(--ink-2); white-space: pre-wrap; word-break: break-all; user-select: text; }
 .warn-notice { display: flex; gap: 8px; align-items: flex-start; color: var(--warn); margin: 0 16px 12px; }
+
+/* ---------- Uptime ---------- */
+.split.no-drawer { grid-template-columns: minmax(0, 1fr); }
+.uptime-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--idle); vertical-align: middle; }
+.uptime-dot.up { background: var(--ok); }
+.uptime-dot.warn { background: var(--warn); }
+.uptime-dot.down { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+.uptime-dot.paused { background: transparent; border: 1.5px solid var(--idle); }
+.uptime-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.uptime-name b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uptime-target { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uptime-ticks { display: flex; gap: 2px; align-items: stretch; height: 18px; }
+.uptime-ticks i { width: 4px; border-radius: 1px; background: var(--slate-4); }
+.uptime-ticks i.up { background: var(--ok); }
+.uptime-ticks i.warn { background: var(--warn); }
+.uptime-ticks i.down { background: var(--bad); }
+.uptime-latency { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.uptime-latency .mono { min-width: 52px; color: var(--ink-2); }
+.uptime-error { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--ink-2); }
+.uptime-suggest { flex-wrap: nowrap; }
+.uptime-suggest .chips { flex-wrap: wrap; }
+.uptime-suggest .chip { display: inline-flex; align-items: center; gap: 4px; }
+.uptime-warning { display: flex; align-items: center; gap: 8px; color: var(--warn); border-color: var(--warn-soft); }
+.warn-ink { color: var(--warn); flex: none; }
+.uptime-changes { list-style: none; margin: 0; padding: 0 14px 18px; font-size: 12px; }
+.uptime-changes li { padding: 6px 0; border-bottom: 1px solid var(--row-line); }
+.uptime-changes li .mono { margin: 2px 0 0 14px; }

@@ -51,6 +51,46 @@ fn move_old_data(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Run the uptime checks in the background while the app is open. Going down
+/// and coming back show a macOS notification; the page also gets every event
+/// (it shows the toast and refreshes).
+fn start_uptime(app: tauri::AppHandle, engine: &Arc<Engine>) {
+    use orbital_core::uptime::{Change, UptimeEvent};
+    use tauri_plugin_notification::NotificationExt;
+    engine.set_uptime_listener(move |ev| {
+        let note = match &ev {
+            UptimeEvent::Changed {
+                name,
+                change: Change::WentDown,
+                error,
+                ..
+            } => Some((
+                format!("{name} is down"),
+                error.clone().unwrap_or_else(|| "The check failed.".into()),
+            )),
+            UptimeEvent::Changed {
+                name,
+                target,
+                change: Change::Recovered,
+                ..
+            } => Some((format!("{name} is back up"), target.clone())),
+            UptimeEvent::CertWarning { name, message, .. } => Some((format!("{name}: certificate expiring"), message.clone())),
+            UptimeEvent::Result { .. } => None,
+        };
+        if let Some((title, body)) = note {
+            if let Err(e) = app.notification().builder().title(title).body(body).show() {
+                tracing::warn!("couldn't show a notification: {e}");
+            }
+        }
+        let watch = app.state::<commands::UptimeWatch>();
+        let ch = watch.0.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(ch) = ch {
+            let _ = ch.send(ev);
+        }
+    });
+    tauri::async_runtime::spawn(engine.clone().run_uptime());
+}
+
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -62,6 +102,8 @@ pub fn run() {
         // and fetched from the release's latest.json; the UI asks before installing.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
+        .manage(commands::UptimeWatch::default())
         .setup(|app| {
             let dir = app.path().data_dir()?.join(DATA_DIR);
             if let Err(e) = move_old_data(&dir) {
@@ -75,7 +117,9 @@ pub fn run() {
             let engine = Engine::with_presence(Arc::new(db), secrets, Arc::new(orbital_core::presence::LocalAuth));
             #[cfg(not(target_os = "macos"))]
             let engine = Engine::new(Arc::new(db), secrets);
-            app.manage(Arc::new(engine));
+            let engine = Arc::new(engine);
+            start_uptime(app.handle().clone(), &engine);
+            app.manage(engine);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -170,6 +214,12 @@ pub fn run() {
             commands::audit_query,
             commands::audit_verify,
             commands::audit_export,
+            commands::uptime_watch,
+            commands::list_uptime,
+            commands::save_uptime_check,
+            commands::set_uptime_paused,
+            commands::delete_uptime_check,
+            commands::run_uptime_check,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Orbital");

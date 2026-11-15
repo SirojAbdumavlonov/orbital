@@ -4,6 +4,9 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Uptime monitoring** (sidebar → Uptime, or ⌘K): add websites (HTTP or HTTPS, with the status code to expect and optionally text the page must contain) and ports (TCP `host:port`), checked every 1, 5 or 15 minutes from this Mac while Orbital is open. Each check shows its state, the last 30 results, a latency sparkline, uptime over 24 hours and 7 days and the last error; pause, edit, delete or check now. When a check goes down or comes back, macOS shows a notification, the app a toast, and the activity log records it (new "Uptime" category). A failure is retried once a few seconds later before it counts, and restarting Orbital doesn't repeat an alert. HTTPS checks warn when the certificate expires within 14 days. With a server connected, its nginx sites' domains are offered as one-click checks. Results are kept for 7 days, up/down changes for 90.
+
 ### Fixed
 - Text fields no longer capitalise the first letter, autocorrect or spell-check what you type (macOS did this to user names, hosts and paths, so connections failed).
 
