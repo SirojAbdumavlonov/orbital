@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Outpost",
-  "version": "0.1.0",
-  "identifier": "app.outpost.desktop",
+  "productName": "Orbital",
+  "version": "1.0.0",
+  "identifier": "app.orbital.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,14 +13,17 @@
     "windows": [
       {
         "label": "main",
-        "title": "Outpost",
+        "title": "Orbital",
         "width": 1320,
         "height": 840,
         "minWidth": 980,
         "minHeight": 620,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 18, "y": 22 }
+        "trafficLightPosition": {
+          "x": 18,
+          "y": 22
+        }
       }
     ],
     "security": {
@@ -29,15 +32,32 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
+    "targets": [
+      "app",
+      "dmg"
+    ],
     "category": "DeveloperTool",
     "shortDescription": "Modern SFTP client and server workbench",
-    "copyright": "© 2026 Outpost",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "copyright": "© 2026 Orbital",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "macOS": {
       "minimumSystemVersion": "12.0",
       "entitlements": "entitlements.plist",
       "hardenedRuntime": true
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI5OTNCQjEwRDgyNTIxRjEKUldUeElTWFlFTHVUS2Uzb2FJN2lIZzBsSGJnOVNBS2lMendOU0VkTFVjdks4a1ZjS3I1SU1NZHUK",
+      "endpoints": [
+        "https://github.com/orbital-app/orbital/releases/latest/download/latest.json"
+      ]
     }
   }
 }

@@ -1,10 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <rect x="64" y="64" width="896" height="896" rx="200" fill="#1A2130"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#232C3F"/>
+      <stop offset="1" stop-color="#161C28"/>
+    </linearGradient>
+    <radialGradient id="planet" cx="0.36" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#FAD488"/>
+      <stop offset="0.55" stop-color="#F2B544"/>
+      <stop offset="1" stop-color="#B9791A"/>
+    </radialGradient>
+  </defs>
+  <!-- tile -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
   <rect x="64" y="64" width="896" height="896" rx="200" fill="none" stroke="#2F3A50" stroke-width="8"/>
-  <!-- signal arcs -->
-  <path d="M332 470 A 220 220 0 0 1 692 470" fill="none" stroke="#F2B544" stroke-width="44" stroke-linecap="round" opacity="0.45"/>
-  <path d="M402 520 A 130 130 0 0 1 622 520" fill="none" stroke="#F2B544" stroke-width="44" stroke-linecap="round" opacity="0.75"/>
-  <circle cx="512" cy="566" r="46" fill="#F2B544"/>
-  <!-- mast -->
-  <path d="M512 612 L 432 812 M512 612 L 592 812 M462 738 L 562 738" stroke="#E6EAF2" stroke-width="36" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <g transform="rotate(-22 512 512)">
+    <!-- far side of the orbit, behind the planet -->
+    <path d="M182 512 A 330 112 0 0 1 842 512" fill="none" stroke="#E6EAF2" stroke-opacity="0.32" stroke-width="28" stroke-linecap="round"/>
+  </g>
+  <!-- planet -->
+  <circle cx="512" cy="512" r="170" fill="url(#planet)"/>
+  <g transform="rotate(-22 512 512)">
+    <!-- near side of the orbit, in front: a dark cut separates it from the planet -->
+    <path d="M318 602.6 A 330 112 0 0 0 706 602.6" fill="none" stroke="#1B2232" stroke-width="56" stroke-linecap="butt"/>
+    <path d="M182 512 A 330 112 0 0 0 842 512" fill="none" stroke="#E6EAF2" stroke-width="28" stroke-linecap="round"/>
+    <!-- satellite -->
+    <circle cx="765" cy="584" r="40" fill="#E6EAF2" stroke="#1B2232" stroke-width="16"/>
+  </g>
 </svg>

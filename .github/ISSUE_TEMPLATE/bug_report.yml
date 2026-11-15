@@ -1,0 +1,42 @@
+name: Bug report
+description: Something in Orbital doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Security problems go to a private advisory, not here** (see SECURITY.md).
+        Please remove host names, IP addresses and anything secret from logs before pasting them.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations: { required: true }
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Connect to a server running Ubuntu 24.04\n2. Open the Firewall tab\n3. …"
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: Orbital version
+      placeholder: "1.0.0"
+    validations: { required: true }
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and chip
+      placeholder: "macOS 15.1, Apple M2"
+  - type: input
+    id: server
+    attributes:
+      label: Server OS
+      placeholder: "Ubuntu 24.04, Debian 12, Rocky 9 …"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error message or Activity log entry
+      render: text

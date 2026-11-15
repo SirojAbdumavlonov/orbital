@@ -12,20 +12,22 @@ export function Prompts() {
   useEffect(() => setSecret(""), [prompt]);
   if (!prompt) return null;
   const profile = profiles.find((p) => p.id === prompt.profileId);
+  const jumpFor = prompt.type === "credentials" && prompt.forProfileId !== prompt.profileId ? profiles.find((p) => p.id === prompt.forProfileId) : null;
   const close = () => setPrompt(null);
 
   if (prompt.type === "hostkey") {
     return (
       <Modal
         title="Unknown host key"
-        subtitle={<>Outpost hasn't connected to <b>{prompt.host}:{prompt.port}</b> before.</>}
+        subtitle={<>Orbital hasn't connected to <b>{prompt.host}:{prompt.port}</b> before.</>}
         onClose={close}
         footer={
           <>
             <button className="btn" onClick={close}>Cancel</button>
             <button
               className="btn primary"
-              onClick={() => connect(prompt.profileId, { acceptFingerprint: prompt.fingerprint, secret: prompt.secret, remember: prompt.remember })}
+              // The confirmation names the endpoint it was shown for; the engine pins it for that endpoint only.
+              onClick={() => connect(prompt.profileId, { ...prompt.opts, acceptFingerprint: prompt.fingerprint, acceptHost: prompt.host, acceptPort: prompt.port })}
             >
               Trust and connect
             </button>
@@ -37,7 +39,7 @@ export function Prompts() {
           <p style={{ margin: 0 }} className="muted">
             Compare this fingerprint with the one your hosting provider or server admin gave you (on the server:
             <span className="mono"> ssh-keygen -lf /etc/ssh/ssh_host_{prompt.algorithm.includes("ed25519") ? "ed25519" : "ecdsa"}_key.pub</span>).
-            Once trusted, Outpost refuses to connect if it ever changes.
+            Once trusted, Orbital refuses to connect if it ever changes.
           </p>
         </div>
         <div className="fingerprint">
@@ -86,11 +88,17 @@ export function Prompts() {
     );
   }
 
-  const submit = () => connect(prompt.profileId, { secret, remember });
+  const submit = () =>
+    connect(
+      prompt.profileId,
+      prompt.forProfileId === prompt.profileId
+        ? { ...prompt.opts, secret, remember }
+        : { ...prompt.opts, hopSecrets: { ...prompt.opts?.hopSecrets, [prompt.forProfileId]: secret }, remember },
+    );
   return (
     <Modal
       title={`${prompt.what} for ${prompt.user}@${prompt.host}`}
-      subtitle={profile?.name}
+      subtitle={jumpFor ? `${jumpFor.name} — jump host for ${profile?.name ?? "this server"}` : profile?.name}
       onClose={close}
       footer={
         <>
@@ -111,7 +119,7 @@ export function Prompts() {
       />
       <label className="check">
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-        <span>Save in Keychain</span>
+        <span>Remember on this Mac (encrypted)</span>
       </label>
     </Modal>
   );

@@ -1,6 +1,6 @@
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
-  ArrowUp, Download, Eye, EyeOff, FilePlus, FileText, Folder, FolderPlus, Link2, Lock, Pencil, RefreshCw, Save,
+  ArrowRightLeft, ArrowUp, Download, Eye, EyeOff, FilePlus, FileText, Folder, FolderPlus, FolderUp, Link2, Lock, Pencil, RefreshCw, Save,
   ShieldCheck, SquareTerminal, Trash2, Upload, X,
 } from "lucide-react";
 import Editor, { DiffEditor, DiffOnMount, OnMount } from "@monaco-editor/react";
@@ -10,7 +10,8 @@ import { api, asApiError, FileEntry, SafeWriteReport } from "../lib/api";
 import { baseName, breadcrumbs, bytes, joinPath, octal, parentPath, relativeTime } from "../lib/format";
 import { languageFor } from "../lib/language";
 import "../lib/monaco";
-import { OpenFile, SessionState, useStore } from "../store";
+import { useResolvedTheme, useSettings } from "../lib/settings";
+import { isSsh, OpenFile, SessionState, useStore } from "../store";
 
 export function FilesView({ s }: { s: SessionState }) {
   return (
@@ -23,7 +24,8 @@ export function FilesView({ s }: { s: SessionState }) {
 
 // ---------------------------------------------------------------- browser
 function Browser({ s }: { s: SessionState }) {
-  const { patch, toast, openTerminal } = useStore();
+  const { patch, toast, openTerminal, openFile } = useStore();
+  const ssh = isSsh(s);
   const sid = s.info.id;
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -34,6 +36,7 @@ function Browser({ s }: { s: SessionState }) {
   const [rename, setRename] = useState<FileEntry | null>(null);
   const [chmodOf, setChmodOf] = useState<FileEntry | null>(null);
   const [newItem, setNewItem] = useState<"file" | "folder" | null>(null);
+  const [copyOf, setCopyOf] = useState<FileEntry | null>(null);
 
   const load = useCallback(async (path = s.cwd) => {
     setLoading(true);
@@ -53,15 +56,7 @@ function Browser({ s }: { s: SessionState }) {
 
   async function openEntry(e: FileEntry) {
     if (e.kind === "dir") return go(e.path);
-    const existing = s.files.find((f) => f.path === e.path);
-    if (existing) return patch(sid, { activeFile: e.path });
-    try {
-      const [fc, validator] = await Promise.all([api.readFile(sid, e.path), api.validatorFor(e.path)]);
-      const file: OpenFile = { path: fc.path, content: fc.content, original: fc.content, mtime: fc.mtime, writable: fc.writable, validator };
-      patch(sid, (cur) => ({ files: [...cur.files, file], activeFile: file.path }));
-    } catch (err) {
-      toast({ kind: "error", title: `Can't open ${e.name}`, body: asApiError(err).message });
-    }
+    return openFile(sid, e.path);
   }
 
   async function remove(e: FileEntry) {
@@ -100,6 +95,7 @@ function Browser({ s }: { s: SessionState }) {
       try {
         const n = await api.upload(sid, p, joinPath(s.cwd, name));
         toast({ kind: "success", title: `Uploaded ${name}`, body: bytes(n) });
+        load();
       } catch (err) {
         toast({ kind: "error", title: `Upload of ${name} failed`, body: asApiError(err).message });
       }
@@ -110,6 +106,11 @@ function Browser({ s }: { s: SessionState }) {
   async function pickUpload() {
     const picked = await openDialog({ multiple: true, title: `Upload to ${s.cwd}` });
     if (picked) uploadPaths(Array.isArray(picked) ? picked : [picked]);
+  }
+
+  async function pickUploadFolder() {
+    const picked = await openDialog({ directory: true, multiple: false, title: `Upload a folder to ${s.cwd}` });
+    if (typeof picked === "string") uploadPaths([picked]);
   }
 
   // Native drag & drop from Finder.
@@ -150,8 +151,9 @@ function Browser({ s }: { s: SessionState }) {
         <button className="icon-btn" title={showHidden ? "Hide dotfiles" : "Show dotfiles"} aria-label="Toggle hidden files" onClick={() => setShowHidden(!showHidden)}>{showHidden ? <Eye size={15} /> : <EyeOff size={15} />}</button>
         <button className="icon-btn" title="New file" aria-label="New file" onClick={() => setNewItem("file")}><FilePlus size={15} /></button>
         <button className="icon-btn" title="New folder" aria-label="New folder" onClick={() => setNewItem("folder")}><FolderPlus size={15} /></button>
-        <button className="icon-btn" title="Upload files (or drop them here)" aria-label="Upload" onClick={pickUpload}><Upload size={15} /></button>
-        <button className="icon-btn" title="Open terminal in this folder" aria-label="Open terminal here" onClick={() => openTerminal(sid, s.cwd)}><SquareTerminal size={15} /></button>
+        <button className="icon-btn" title="Upload files from this Mac (or drop files and folders here)" aria-label="Upload files" onClick={pickUpload}><Upload size={15} /></button>
+        <button className="icon-btn" title="Upload a folder from this Mac" aria-label="Upload folder" onClick={pickUploadFolder}><FolderUp size={15} /></button>
+        {ssh && <button className="icon-btn" title="Open terminal in this folder" aria-label="Open terminal here" onClick={() => openTerminal(sid, s.cwd)}><SquareTerminal size={15} /></button>}
       </div>
       <div className="list" role="listbox" tabIndex={0} onKeyDown={(e) => {
         if (e.key === "Enter" && selected) openEntry(selected);
@@ -167,7 +169,7 @@ function Browser({ s }: { s: SessionState }) {
             className={`entry ${e.kind === "dir" ? "dir" : ""} ${e.hidden ? "hidden" : ""} ${sel === e.path ? "sel" : ""}`}
             onClick={() => setSel(e.path)}
             onDoubleClick={() => openEntry(e)}
-            title={`${e.mode}  ${e.owner ?? e.uid ?? ""}:${e.group ?? e.gid ?? ""}`}
+            title={ssh ? `${e.mode}  ${e.owner ?? e.uid ?? ""}:${e.group ?? e.gid ?? ""}` : e.name}
           >
             {e.kind === "dir" ? <Folder size={15} color="var(--amber)" /> : e.kind === "symlink" ? <Link2 size={15} className="faint" /> : <FileText size={15} className="faint" />}
             <span className="n">{e.name}</span>
@@ -178,11 +180,12 @@ function Browser({ s }: { s: SessionState }) {
       </div>
       {selected && (
         <div className="toolbar" style={{ borderTop: "1px solid var(--slate-4)", borderBottom: 0 }}>
-          <span className="mono faint" title="Permissions">{selected.mode}</span>
+          {ssh ? <span className="mono faint" title="Permissions">{selected.mode}</span> : <span className="mono faint">{selected.kind === "dir" ? "Folder" : bytes(selected.size)}</span>}
           <span className="spacer" />
           {selected.kind !== "dir" && <button className="icon-btn" title="Download" aria-label="Download" onClick={() => download(selected)}><Download size={14} /></button>}
+          {ssh && <button className="icon-btn" title="Copy to another server" aria-label="Copy to another server" onClick={() => setCopyOf(selected)}><ArrowRightLeft size={14} /></button>}
           <button className="icon-btn" title="Rename" aria-label="Rename" onClick={() => setRename(selected)}><Pencil size={14} /></button>
-          <button className="icon-btn" title="Permissions" aria-label="Permissions" onClick={() => setChmodOf(selected)}><Lock size={14} /></button>
+          {ssh && <button className="icon-btn" title="Permissions" aria-label="Permissions" onClick={() => setChmodOf(selected)}><Lock size={14} /></button>}
           <button className="icon-btn" title="Delete" aria-label="Delete" onClick={() => remove(selected)}><Trash2 size={14} /></button>
         </div>
       )}
@@ -215,6 +218,7 @@ function Browser({ s }: { s: SessionState }) {
           }}
         />
       )}
+      {copyOf && <CopyDialog s={s} entry={copyOf} onClose={() => setCopyOf(null)} />}
       {chmodOf && <ChmodDialog entry={chmodOf} onClose={() => setChmodOf(null)} onSubmit={async (mode) => { await api.chmod(sid, chmodOf.path, mode); setChmodOf(null); load(); }} />}
     </section>
   );
@@ -236,6 +240,74 @@ function NameDialog(p: { title: string; initial: string; action: string; onClose
     <Modal title={p.title} onClose={p.onClose} footer={<><button className="btn" onClick={p.onClose}>Cancel</button><button className="btn primary" disabled={!valid} onClick={submit}>{p.action}</button></>}>
       {err && <div className="alert">{err}</div>}
       <input className="input mono" autoFocus value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+    </Modal>
+  );
+}
+
+/** Copy a file or folder to another server that is connected right now. */
+function CopyDialog({ s, entry, onClose }: { s: SessionState; entry: FileEntry; onClose: () => void }) {
+  const toast = useStore((x) => x.toast);
+  const sessions = useStore((x) => x.sessions);
+  const order = useStore((x) => x.order);
+  const others = order.map((id) => sessions[id]).filter((o) => o && o.info.id !== s.info.id && !o.lost);
+  const [target, setTarget] = useState(others[0]?.info.id ?? "");
+  const [dir, setDir] = useState(others[0]?.cwd ?? "");
+  const [overwrite, setOverwrite] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const dst = sessions[target];
+  const valid = !!dst && dir.startsWith("/");
+
+  async function go() {
+    if (!valid) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const rep = await api.copyBetween({ srcSessionId: s.info.id, srcPath: entry.path, dstSessionId: target, dstPath: joinPath(dir, entry.name), overwrite });
+      toast({
+        kind: "success",
+        title: `Copied ${entry.name} to ${dst.profile.name}`,
+        body: [`${rep.files} ${rep.files === 1 ? "file" : "files"}, ${bytes(rep.bytes)}`, rep.skipped ? `${rep.skipped} links or special files skipped` : ""].filter(Boolean).join("\n"),
+      });
+      // Make the other server's file list show the new item next time it is looked at.
+      useStore.getState().patch(target, { cwd: dir });
+      onClose();
+    } catch (e) {
+      setErr(asApiError(e).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={`Copy ${entry.name} to another server`}
+      subtitle={<>From <b>{s.profile.name}</b> <span className="mono">{entry.path}</span></>}
+      onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!valid || busy} onClick={go}>{busy ? "Copying…" : "Copy"}</button></>}
+    >
+      {err && <div className="alert">{err}</div>}
+      {others.length === 0 ? (
+        <p className="note">Connect to the server you want to copy to first (click it in the sidebar), then come back here.</p>
+      ) : (
+        <>
+          <label className="field">
+            <span>To server</span>
+            <select className="input" value={target} onChange={(e) => { setTarget(e.target.value); setDir(sessions[e.target.value]?.cwd ?? ""); }}>
+              {others.map((o) => <option key={o.info.id} value={o.info.id}>{o.profile.name} ({o.info.label})</option>)}
+            </select>
+          </label>
+          <label className="field">
+            <span>Into folder</span>
+            <input className="input mono" value={dir} onChange={(e) => setDir(e.target.value)} />
+            <span className="hint">Will be created as <span className="mono">{valid ? joinPath(dir, entry.name) : "…"}</span>. Files travel through this Mac; the two servers don't connect to each other.</span>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
+            <span>Replace it if it already exists there</span>
+          </label>
+        </>
+      )}
     </Modal>
   );
 }
@@ -272,8 +344,10 @@ function ChmodDialog(p: { entry: FileEntry; onClose: () => void; onSubmit: (mode
 }
 
 // ---------------------------------------------------------------- editor
-function EditorPane({ s }: { s: SessionState }) {
+export function EditorPane({ s }: { s: SessionState }) {
   const { patch, toast } = useStore();
+  const monacoTheme = useResolvedTheme() === "light" ? "orbital-light" : "orbital-dark";
+  const editorPrefs = useSettings();
   const sid = s.info.id;
   const file = s.files.find((f) => f.path === s.activeFile) ?? null;
   const [review, setReview] = useState<OpenFile | null>(null);
@@ -335,7 +409,7 @@ function EditorPane({ s }: { s: SessionState }) {
           <div>
             <FileText size={28} />
             <h3>Open a file to edit it here</h3>
-            <p>Double-click a file. Config files like nginx, sshd and sudoers are checked before they go live, and the previous version is kept as a backup.</p>
+            {isSsh(s) ? <p>Double-click a file. Config files like nginx, sshd and sudoers are checked before they go live, and the previous version is kept as a backup.</p> : <p>Double-click a text file to edit it. Saving replaces the file; there are no server-side checks or backups on this kind of connection.</p>}
           </div>
         </div>
       </section>
@@ -365,14 +439,15 @@ function EditorPane({ s }: { s: SessionState }) {
       <div style={{ flex: 1, minHeight: 0 }}>
         <Editor
           key={file.path}
-          theme="outpost-dark"
+          theme={monacoTheme}
           path={`${sid}${file.path}`}
           language={languageFor(file.path)}
           value={file.content}
           onChange={(v) => update(file.path, { content: v ?? "" })}
           onMount={onMount}
           options={{
-            fontFamily: "JetBrains Mono", fontSize: 13, lineHeight: 20, minimap: { enabled: false },
+            fontFamily: "JetBrains Mono", fontSize: editorPrefs.editorFontSize, lineHeight: Math.round(editorPrefs.editorFontSize * 1.55),
+            minimap: { enabled: editorPrefs.editorMinimap }, wordWrap: editorPrefs.editorWordWrap ? "on" : "off",
             renderWhitespace: "boundary", scrollBeyondLastLine: false, smoothScrolling: true, padding: { top: 10 },
             automaticLayout: true, bracketPairColorization: { enabled: true }, stickyScroll: { enabled: true },
           }}
@@ -388,6 +463,7 @@ function EditorPane({ s }: { s: SessionState }) {
 
 function SaveReview({ s, file, onClose, onSaved }: { s: SessionState; file: OpenFile; onClose: () => void; onSaved: (r: SafeWriteReport) => void }) {
   const toast = useStore((x) => x.toast);
+  const monacoTheme = useResolvedTheme() === "light" ? "orbital-light" : "orbital-dark";
   const [validate, setValidate] = useState(!!file.validator);
   const [sudo, setSudo] = useState(!file.writable);
   const [busy, setBusy] = useState(false);
@@ -460,7 +536,7 @@ function SaveReview({ s, file, onClose, onSaved }: { s: SessionState; file: Open
       )}
       <div style={{ height: "52vh", border: "1px solid var(--slate-4)", borderRadius: 6, overflow: "hidden" }}>
         <DiffEditor
-          theme="outpost-dark"
+          theme={monacoTheme}
           original={file.original}
           modified={file.content}
           language={languageFor(file.path)}
@@ -471,7 +547,7 @@ function SaveReview({ s, file, onClose, onSaved }: { s: SessionState; file: Open
         />
       </div>
       <p className="faint" style={{ margin: 0 }}>
-        The current file is backed up next to it as <span className="mono">{baseName(file.path)}.outpost-bak-…</span> (last 5 kept).
+        The current file is backed up next to it as <span className="mono">{baseName(file.path)}.orbital-bak-…</span> (last 5 kept).
         {validate && file.validator?.stage === "postInstall" && " If the check fails, the backup is restored automatically."}
       </p>
     </Modal>

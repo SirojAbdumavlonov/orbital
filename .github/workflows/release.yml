@@ -1,0 +1,98 @@
+name: Release
+
+# Push a tag like v1.0.0 to build the macOS app and attach it to a draft
+# GitHub Release. Review the draft, then publish it.
+#
+# Signing and notarization run when these repository secrets are set
+# (Settings → Secrets and variables → Actions); without them the build is
+# unsigned and macOS will warn on first open:
+#   APPLE_CERTIFICATE           base64 of the Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD  password of that .p12
+#   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Name (TEAMID)"
+#   APPLE_ID, APPLE_PASSWORD    Apple ID and an app-specific password
+#   APPLE_TEAM_ID
+#
+# In-app updates (required): each release carries Orbital.app.tar.gz, its
+# signature and latest.json, which installed copies read to find updates.
+#   TAURI_SIGNING_PRIVATE_KEY           contents of ~/.tauri/orbital-updater.key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password (leave unset if it has none)
+# Its public half is plugins.updater.pubkey in src-tauri/tauri.conf.json. Lose
+# the private key and installed copies can't be updated any more: back it up.
+#
+# Where releases go: this repository, unless the variable RELEASES_REPO
+# (Settings → Variables) names another, e.g. "you/orbital-releases" for
+# public downloads from a private code repository. That needs the secret
+# RELEASES_TOKEN: a token allowed to write that repository's contents.
+#
+# Installed copies only see published, non-prerelease releases: publish the
+# draft to roll an update out. Tags with a "-" (v1.2.0-beta.1) become
+# prereleases, which nobody is offered automatically.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS universal build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Check that the tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          app=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          [ "v$app" = "$GITHUB_REF_NAME" ] || { echo "tauri.conf.json says $app, tag is $GITHUB_REF_NAME"; exit 1; }
+      - name: Release notes, update settings and destination
+        id: prep
+        env:
+          RELEASES_REPO: ${{ vars.RELEASES_REPO }}
+          HAS_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          [ "$HAS_KEY" = "true" ] || { echo "::error::The secret TAURI_SIGNING_PRIVATE_KEY is missing; see the top of release.yml"; exit 1; }
+          dest="${RELEASES_REPO:-$GITHUB_REPOSITORY}"
+          echo "owner=${dest%%/*}" >> "$GITHUB_OUTPUT"
+          echo "repo=${dest#*/}" >> "$GITHUB_OUTPUT"
+          # The updater artifacts and the address installed copies check.
+          cat > "$RUNNER_TEMP/release.conf.json" <<JSON
+          {"bundle": {"createUpdaterArtifacts": true},
+           "plugins": {"updater": {"endpoints": ["https://github.com/$dest/releases/latest/download/latest.json"]}}}
+          JSON
+          echo "config=$RUNNER_TEMP/release.conf.json" >> "$GITHUB_OUTPUT"
+          # This version's CHANGELOG section becomes the release text and the
+          # "What's new" the app shows.
+          version="${GITHUB_REF_NAME#v}"
+          notes=$(awk -v v="$version" '$0 ~ "^## \\[?"v"[] ]" {on=1; next} on && /^## / {exit} on' CHANGELOG.md)
+          [ -n "$notes" ] || notes="See CHANGELOG.md for what changed."
+          { echo "notes<<NOTES_END"; echo "$notes"; echo "NOTES_END"; } >> "$GITHUB_OUTPUT"
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ vars.RELEASES_REPO && secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Orbital ${{ github.ref_name }}"
+          owner: ${{ steps.prep.outputs.owner }}
+          repo: ${{ steps.prep.outputs.repo }}
+          releaseBody: ${{ steps.prep.outputs.notes }}
+          releaseDraft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          includeUpdaterJson: true
+          args: --target universal-apple-darwin --config ${{ steps.prep.outputs.config }}

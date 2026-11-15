@@ -1,8 +1,88 @@
-import { Braces, Pause, Play, RefreshCw, RotateCw, ScrollText, Search, Square, Trash2 } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowUpNarrowWide, Braces, Download, FileCode2, Pause, Pencil, Play, RefreshCw, RotateCw, ScrollText, Search, Square, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { confirm, StateDot } from "../components/ui";
-import { api, asApiError, Container, ContainerAction, ContainerStats } from "../lib/api";
+import { confirm, StateDot, DrawerClose } from "../components/ui";
+import { Modal } from "../components/ui";
+import { api, asApiError, ComposeAction, ComposeTarget, Container, ContainerAction, ContainerStats, ExecOutput } from "../lib/api";
 import { SessionState, useStore } from "../store";
+
+type StateFilter = "all" | "running" | "stopped" | "paused";
+type SortKey = "name" | "state" | "image" | "cpu" | "memory";
+
+/** Running first when sorting by state ascending. */
+const STATE_RANK: Record<string, number> = { running: 0, restarting: 1, paused: 2, created: 3, exited: 4, dead: 5 };
+const isStopped = (c: Container) => ["exited", "created", "dead"].includes(c.state);
+
+/** Docker Compose records where a container came from in its labels. */
+function composeOf(inspect: any): ComposeTarget | null {
+  const l = inspect?.Config?.Labels ?? {};
+  const project = l["com.docker.compose.project"];
+  if (!project) return null;
+  const files = String(l["com.docker.compose.project.config_files"] ?? "").split(",").map((f: string) => f.trim()).filter(Boolean);
+  return { project, files, workingDir: l["com.docker.compose.project.working_dir"] ?? null, service: l["com.docker.compose.service"] ?? null };
+}
+
+function ComposePane({ s, inspect }: { s: SessionState; inspect: any }) {
+  const { toast, openFile } = useStore();
+  const sid = s.info.id;
+  const target = composeOf(inspect);
+  const file = target?.files[0] ?? null;
+  const [text, setText] = useState<string | null>(null);
+  const [busy, setBusy] = useState<ComposeAction | null>(null);
+  const [out, setOut] = useState<{ title: string; o: ExecOutput } | null>(null);
+  useEffect(() => {
+    setText(null);
+    if (file) api.readFile(sid, file).then((f) => setText(f.content)).catch((e) => setText(`# Couldn't read ${file}: ${asApiError(e).message}`));
+  }, [sid, file]);
+
+  if (!inspect) return <pre className="logs">Loading…</pre>;
+  if (!target) return <div className="empty"><p>This container wasn't started with Docker Compose.</p></div>;
+
+  async function run(action: ComposeAction, scope: "project" | "service") {
+    if (!target) return;
+    const t = scope === "project" ? { ...target, service: null } : target;
+    if (action === "up") {
+      const ok = await confirm({
+        title: `Apply ${t.project}?`,
+        body: "docker compose up -d recreates every container whose configuration or image changed. They are briefly unavailable while that happens.",
+        confirmLabel: "Apply",
+      });
+      if (!ok) return;
+    }
+    setBusy(action);
+    try {
+      const o = await api.composeAction(sid, t, action);
+      const what = `${action === "up" ? "Apply" : action === "restart" ? "Restart" : "Pull"} ${t.service ?? t.project}`;
+      setOut({ title: o.exitCode === 0 ? `${what}: done` : `${what}: failed`, o });
+    } catch (e) {
+      toast({ kind: "error", title: "Compose failed", body: asApiError(e).message });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <>
+      <dl className="kv">
+        <dt>Project</dt><dd className="mono">{target.project}</dd>
+        <dt>Service</dt><dd className="mono">{target.service ?? "—"}</dd>
+        <dt>Folder</dt><dd className="mono">{target.workingDir ?? "—"}</dd>
+        <dt>Files</dt><dd className="mono">{target.files.map((f) => <div key={f}><a className="link" onClick={() => openFile(sid, f)}>{f}</a></div>)}</dd>
+      </dl>
+      <div className="actions">
+        {file && <button className="btn primary" onClick={() => openFile(sid, file)} title="Open in the editor; saving checks it with docker compose config"><Pencil size={13} /> Edit</button>}
+        <button className="btn" disabled={!!busy} onClick={() => run("up", "project")} title="docker compose up -d: create or recreate what changed"><Upload size={13} className={busy === "up" ? "spin" : ""} /> Apply changes</button>
+        {target.service && <button className="btn" disabled={!!busy} onClick={() => run("restart", "service")}><RotateCw size={13} className={busy === "restart" ? "spin" : ""} /> Restart {target.service}</button>}
+        <button className="btn" disabled={!!busy} onClick={() => run("pull", "project")} title="Download newer images; apply to use them"><Download size={13} className={busy === "pull" ? "spin" : ""} /> Pull images</button>
+      </div>
+      <pre className="logs">{file ? text ?? "Loading…" : "Docker didn't record which file this project came from."}</pre>
+      {out && (
+        <Modal title={out.title} wide onClose={() => setOut(null)} footer={<button className="btn primary" onClick={() => setOut(null)}>Close</button>}>
+          <pre className="output" style={{ maxHeight: 420 }}>{[out.o.stdout, out.o.stderr].filter((x) => x.trim()).join("\n") || "docker compose printed nothing."}</pre>
+        </Modal>
+      )}
+    </>
+  );
+}
 
 export function DockerView({ s }: { s: SessionState }) {
   const toast = useStore((x) => x.toast);
@@ -13,7 +93,10 @@ export function DockerView({ s }: { s: SessionState }) {
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<string | null>(null);
-  const [pane, setPane] = useState<"logs" | "inspect">("logs");
+  const [pane, setPane] = useState<"logs" | "inspect" | "compose">("logs");
+  const [stateFilter, setStateFilter] = useState<StateFilter>("all");
+  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [desc, setDesc] = useState(false);
   const [logs, setLogs] = useState("");
   const [inspect, setInspect] = useState<any>(null);
   const [busy, setBusy] = useState(false);
@@ -35,21 +118,46 @@ export function DockerView({ s }: { s: SessionState }) {
   const cur = list.find((c) => c.id === sel);
   useEffect(() => {
     if (!cur) return;
+    if (!cur.composeProject) setPane((p) => (p === "compose" ? "logs" : p));
     setLogs("Loading…");
     setInspect(null);
     api.containerLogs(sid, cur.id, 400).then(setLogs).catch((e) => setLogs(asApiError(e).message));
     api.inspectContainer(sid, cur.id).then(setInspect).catch(() => {});
   }, [sel]);
 
+  const statOf = (c: Container) => stats.find((x) => c.id.startsWith(x.id) || x.name === c.names);
   const groups = useMemo(() => {
+    const num = (v?: string) => parseFloat(v ?? "") || 0;
+    const key = (c: Container): string | number => {
+      switch (sortKey) {
+        case "state": return STATE_RANK[c.state] ?? 9;
+        case "image": return c.image;
+        case "cpu": return num(statOf(c)?.cpuPercent);
+        case "memory": return num(statOf(c)?.memPercent);
+        default: return c.names;
+      }
+    };
+    const cmp = (a: Container, b: Container) => {
+      const x = key(a), y = key(b);
+      const r = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y));
+      return (desc ? -r : r) || a.names.localeCompare(b.names);
+    };
+    const shown = list.filter((c) => {
+      if (stateFilter === "running" && c.state !== "running") return false;
+      if (stateFilter === "stopped" && !isStopped(c)) return false;
+      if (stateFilter === "paused" && c.state !== "paused") return false;
+      return !q || `${c.names} ${c.image}`.toLowerCase().includes(q.toLowerCase());
+    });
     const g = new Map<string, Container[]>();
-    for (const c of list.filter((c) => !q || `${c.names} ${c.image}`.toLowerCase().includes(q.toLowerCase()))) {
+    for (const c of shown) {
       const k = c.composeProject ?? "";
       g.set(k, [...(g.get(k) ?? []), c]);
     }
-    return [...g.entries()].sort(([a], [b]) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)));
-  }, [list, q]);
-  const statOf = (c: Container) => stats.find((x) => c.id.startsWith(x.id) || x.name === c.names);
+    return [...g.entries()]
+      .map(([k, cs]) => [k, cs.sort(cmp)] as const)
+      .sort(([a], [b]) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)));
+  }, [list, stats, q, stateFilter, sortKey, desc]);
+  const counts = { running: list.filter((c) => c.state === "running").length, stopped: list.filter(isStopped).length, paused: list.filter((c) => c.state === "paused").length };
 
   async function act(action: ContainerAction) {
     if (!cur) return;
@@ -80,15 +188,27 @@ export function DockerView({ s }: { s: SessionState }) {
   }
 
   if (!s.info.dockerVersion) {
-    return <div className="empty"><div><h3>Docker isn't available on this server</h3><p>Outpost looks for the <span className="mono">docker</span> command. Install Docker Engine, or add {s.profile.username} to the <span className="mono">docker</span> group, then reconnect.</p></div></div>;
+    return <div className="empty"><div><h3>Docker isn't available on this server</h3><p>Orbital looks for the <span className="mono">docker</span> command. Install Docker Engine, or add {s.profile.username} to the <span className="mono">docker</span> group, then reconnect.</p></div></div>;
   }
 
   return (
     <div className="view">
       <div className="toolbar">
         <div className="search"><Search size={14} /><input className="input" placeholder="Find a container or image" value={q} onChange={(e) => setQ(e.target.value)} /></div>
-        <span className="faint">Docker {s.info.dockerVersion} · {list.filter((c) => c.state === "running").length} of {list.length} running</span>
+        <div className="segmented" aria-label="Show containers">
+          {([["all", `All ${list.length}`], ["running", `Running ${counts.running}`], ["stopped", `Stopped ${counts.stopped}`], ["paused", `Paused ${counts.paused}`]] as [StateFilter, string][]).map(([id, label]) => (
+            <button key={id} className={stateFilter === id ? "on" : ""} onClick={() => setStateFilter(id)}>{label}</button>
+          ))}
+        </div>
         <span className="spacer" />
+        <label className="faint sort">Sort by
+          <select className="input" value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}>
+            <option value="name">Name</option><option value="state">State</option><option value="image">Image</option><option value="cpu">CPU</option><option value="memory">Memory</option>
+          </select>
+        </label>
+        <button className="icon-btn" aria-label={desc ? "Descending; switch to ascending" : "Ascending; switch to descending"} title={desc ? "Descending" : "Ascending"} onClick={() => setDesc(!desc)}>
+          {desc ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
+        </button>
         <button className="icon-btn" aria-label="Refresh" onClick={load}><RefreshCw size={14} className={loading ? "spin" : ""} /></button>
       </div>
       {error && <div className="alert" style={{ margin: 12 }}>{error}</div>}
@@ -116,6 +236,8 @@ export function DockerView({ s }: { s: SessionState }) {
             ))}
           </table>
           {!loading && list.length === 0 && !error && <div className="empty"><p>No containers on this server yet.</p></div>}
+          {list.length > 0 && groups.length === 0 && <div className="empty" style={{ flex: "none" }}><p>No containers match.</p></div>}
+          <p className="footnote">Docker {s.info.dockerVersion} · {counts.running} of {list.length} running</p>
         </div>
         <aside className="drawer">
           {!cur ? (
@@ -123,6 +245,7 @@ export function DockerView({ s }: { s: SessionState }) {
           ) : (
             <>
               <div className="drawer-head">
+                <DrawerClose onClose={() => setSel(null)} />
                 <h3 className="mono">{cur.names}</h3>
                 <div className="muted mono" style={{ fontSize: 12 }}>{cur.id.slice(0, 12)} · {cur.image}</div>
               </div>
@@ -138,11 +261,14 @@ export function DockerView({ s }: { s: SessionState }) {
                 <div className="segmented">
                   <button className={pane === "logs" ? "on" : ""} onClick={() => setPane("logs")}><ScrollText size={12} /> Logs</button>
                   <button className={pane === "inspect" ? "on" : ""} onClick={() => setPane("inspect")}><Braces size={12} /> Inspect</button>
+                  {cur.composeProject && <button className={pane === "compose" ? "on" : ""} onClick={() => setPane("compose")}><FileCode2 size={12} /> Compose</button>}
                 </div>
                 <span className="spacer" />
                 {pane === "logs" && <button className="icon-btn" aria-label="Refresh logs" onClick={() => api.containerLogs(sid, cur.id, 400).then(setLogs)}><RefreshCw size={13} /></button>}
               </div>
-              <pre className="logs">{pane === "logs" ? logs : inspect ? JSON.stringify(inspect, null, 2) : "Loading…"}</pre>
+              {pane === "compose" && cur.composeProject
+                ? <ComposePane s={s} inspect={inspect} />
+                : <pre className="logs">{pane === "logs" ? logs : inspect ? JSON.stringify(inspect, null, 2) : "Loading…"}</pre>}
             </>
           )}
         </aside>

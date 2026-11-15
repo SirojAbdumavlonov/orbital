@@ -1,23 +1,35 @@
+import { X } from "lucide-react";
+import NumberFlow from "@number-flow/react";
+import * as Dialog from "@radix-ui/react-dialog";
 import { ReactNode, useEffect, useState } from "react";
 import { create } from "zustand";
 
+/**
+ * A dialog, built on Radix Dialog: focus stays inside while it is open, Esc and
+ * a click outside close it (when `onClose` is given), and screen readers get
+ * its title and description.
+ */
 export function Modal(props: { title: string; subtitle?: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; onClose?: () => void }) {
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => e.key === "Escape" && props.onClose?.();
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, [props.onClose]);
   return (
-    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && props.onClose?.()}>
-      <div className={`modal ${props.wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-label={props.title}>
-        <div className="modal-head">
-          <h2>{props.title}</h2>
-          {props.subtitle && <p>{props.subtitle}</p>}
-        </div>
-        <div className="modal-body">{props.children}</div>
-        {props.footer && <div className="modal-foot">{props.footer}</div>}
-      </div>
-    </div>
+    <Dialog.Root open onOpenChange={(open) => !open && props.onClose?.()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="scrim">
+          <Dialog.Content
+            className={`modal ${props.wide ? "wide" : ""}`}
+            {...(props.subtitle ? {} : { "aria-describedby": undefined })}
+            onEscapeKeyDown={(e) => !props.onClose && e.preventDefault()}
+            onPointerDownOutside={(e) => !props.onClose && e.preventDefault()}
+          >
+            <div className="modal-head">
+              <Dialog.Title asChild><h2>{props.title}</h2></Dialog.Title>
+              {props.subtitle && <Dialog.Description asChild><p>{props.subtitle}</p></Dialog.Description>}
+            </div>
+            <div className="modal-body">{props.children}</div>
+            {props.footer && <div className="modal-foot">{props.footer}</div>}
+          </Dialog.Content>
+        </Dialog.Overlay>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
@@ -63,7 +75,7 @@ export function ConfirmHost() {
         </>
       }
     >
-      {req.body && <div className="muted">{req.body}</div>}
+      {req.body && <div className="muted" style={{ whiteSpace: "pre-line" }}>{req.body}</div>}
       {req.requireText && (
         <label className="field">
           <span>Type <b className="mono">{req.requireText}</b> to confirm</span>
@@ -104,4 +116,28 @@ export function Bar({ value, cache, hot }: { value: number; cache?: number; hot?
       {cache != null && <i className="cache" style={{ width: `${Math.min(100, Math.max(0, cache))}%` }} />}
     </div>
   );
+}
+
+/** Closes a detail panel; Esc does the same unless a dialog is open or the user is typing. */
+export function DrawerClose({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || document.querySelector(".modal")) return;
+      if ((e.target as Element).closest?.("input, textarea, select, .monaco-editor, .xterm")) return;
+      onClose();
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [onClose]);
+  return (
+    <button className="icon-btn drawer-close" aria-label="Close details" title="Close (Esc)" onClick={onClose}>
+      <X size={14} />
+    </button>
+  );
+}
+
+/** A live number that rolls to its new value (NumberFlow). Shows "—" while unknown. */
+export function LiveNumber({ value, decimals = 0, suffix }: { value: number | null | undefined; decimals?: number; suffix?: string }) {
+  if (value == null || !Number.isFinite(value)) return <>—</>;
+  return <NumberFlow value={value} format={{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }} suffix={suffix} willChange />;
 }

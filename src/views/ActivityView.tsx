@@ -24,7 +24,7 @@ export function ActivityView({ profileId }: { profileId?: string }) {
   useEffect(() => { api.auditVerify().then(setVerify).catch(() => {}); }, []);
 
   async function exportLog(format: "csv" | "json") {
-    const path = await save({ defaultPath: `outpost-activity-${new Date().toISOString().slice(0, 10)}.${format}`, title: "Export activity log" });
+    const path = await save({ defaultPath: `orbital-activity-${new Date().toISOString().slice(0, 10)}.${format}`, title: "Export activity log" });
     if (!path) return;
     try {
       await api.auditExport(format, path);

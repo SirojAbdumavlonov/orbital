@@ -1,15 +1,48 @@
-import { Trash2 } from "lucide-react";
+import { Fingerprint, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { confirm } from "../components/ui";
-import { api, KnownHost } from "../lib/api";
+import { api, asApiError, KnownHost, PresenceStatus } from "../lib/api";
+import { useStore } from "../store";
 
 export function KnownHostsView() {
   const [hosts, setHosts] = useState<KnownHost[]>([]);
   const load = () => api.knownHosts().then(setHosts);
   useEffect(() => { load(); }, []);
+  const toast = useStore((x) => x.toast);
+  const [gate, setGate] = useState<PresenceStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.presenceStatus().then(setGate).catch(() => {}); }, []);
+  async function toggleGate(on: boolean) {
+    setBusy(true);
+    try {
+      // The engine asks for Touch ID / the login password before changing this, in either direction.
+      setGate(await api.setPresenceGate(on));
+    } catch (e) {
+      toast({ kind: "error", title: on ? "Couldn't turn on Touch ID" : "Touch ID is still required", body: asApiError(e).message });
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <div className="view">
-      <div className="toolbar"><span className="muted">Servers whose identity you've confirmed. Outpost also trusts keys already in <span className="mono">~/.ssh/known_hosts</span>.</span></div>
+      {gate && (
+        <div className="toolbar" style={{ alignItems: "flex-start", gap: 12, height: "auto", padding: "12px 16px" }}>
+          <Fingerprint size={20} className="muted" style={{ flexShrink: 0, marginTop: 2 }} />
+          <label className="check" style={{ flex: 1 }}>
+            <input type="checkbox" checked={gate.enabled} disabled={busy || (!gate.available && !gate.enabled)} onChange={(e) => toggleGate(e.target.checked)} />
+            <span>
+              Require Touch ID before using saved credentials
+              <br />
+              <span className="faint" style={{ fontSize: 12 }}>
+                {gate.available
+                  ? "Orbital asks for Touch ID or your Mac password each time it connects with a password, passphrase or sudo password it has saved."
+                  : "This Mac has no Touch ID or login password that Orbital can ask for."}
+              </span>
+            </span>
+          </label>
+        </div>
+      )}
+      <div className="toolbar"><span className="muted">Servers whose identity you've confirmed. Orbital also trusts keys already in <span className="mono">~/.ssh/known_hosts</span>.</span></div>
       <div className="scroll">
         <table className="table">
           <thead><tr><th>Host</th><th>Key type</th><th>Fingerprint</th><th>Trusted on</th><th /></tr></thead>

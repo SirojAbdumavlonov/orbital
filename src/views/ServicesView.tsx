@@ -1,6 +1,6 @@
 import { Play, RefreshCw, RotateCw, Search, Square, ToggleLeft, ToggleRight, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { confirm, StateDot } from "../components/ui";
+import { confirm, StateDot, DrawerClose } from "../components/ui";
 import { api, asApiError, Service, ServiceAction, ServiceDetail } from "../lib/api";
 import { bytes } from "../lib/format";
 import { SessionState, useStore } from "../store";
@@ -125,6 +125,7 @@ export function ServicesView({ s }: { s: SessionState }) {
           ) : (
             <>
               <div className="drawer-head">
+                <DrawerClose onClose={() => setSel(null)} />
                 <h3 className="mono">{cur.unit}</h3>
                 <div className="muted">{cur.description}</div>
               </div>

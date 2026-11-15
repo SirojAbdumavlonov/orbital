@@ -48,7 +48,7 @@ monaco.languages.setMonarchTokensProvider("nginx", {
   },
 } as any);
 
-monaco.editor.defineTheme("outpost-dark", {
+monaco.editor.defineTheme("orbital-dark", {
   base: "vs-dark",
   inherit: true,
   rules: [
@@ -71,6 +71,32 @@ monaco.editor.defineTheme("outpost-dark", {
     "editorWidget.background": "#222B3D",
     "diffEditor.insertedTextBackground": "#4FBF8B22",
     "diffEditor.removedTextBackground": "#E5645A22",
+  },
+});
+
+monaco.editor.defineTheme("orbital-light", {
+  base: "vs",
+  inherit: true,
+  rules: [
+    { token: "comment", foreground: "7A859A", fontStyle: "italic" },
+    { token: "keyword", foreground: "2F5FB3" },
+    { token: "keyword.block", foreground: "A8700A", fontStyle: "bold" },
+    { token: "keyword.constant", foreground: "8A4FC7" },
+    { token: "variable", foreground: "1B8A7A" },
+    { token: "string", foreground: "3F7F1F" },
+    { token: "number", foreground: "C0562B" },
+  ],
+  colors: {
+    "editor.background": "#FFFFFF",
+    "editor.lineHighlightBackground": "#F3F5F8",
+    "editorLineNumber.foreground": "#A9B3C3",
+    "editorLineNumber.activeForeground": "#4B566C",
+    "editor.selectionBackground": "#E3A32C40",
+    "editorCursor.foreground": "#C98A12",
+    "editorIndentGuide.background1": "#E3E8EF",
+    "editorWidget.background": "#F3F5F8",
+    "diffEditor.insertedTextBackground": "#23905F22",
+    "diffEditor.removedTextBackground": "#CC423722",
   },
 });
 

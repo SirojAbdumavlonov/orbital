@@ -3,12 +3,15 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 
 const now = () => Math.floor(Date.now() / 1000);
-const profiles = [
-  { id: "p1", name: "prod-web-01", host: "203.0.113.10", port: 22, username: "deploy", authMethod: "agent", keyPath: null, sudoMode: "password", groupName: "Production", color: "#e5645a", initialPath: null, createdAt: "2026-10-01T10:00:00Z", lastConnectedAt: "2026-11-14T18:00:00Z" },
-  { id: "p2", name: "db-primary", host: "10.0.4.21", port: 22, username: "ops", authMethod: "key", keyPath: "~/.ssh/id_ed25519", sudoMode: "noPassword", groupName: "Production", color: "#8fb4ff", initialPath: null, createdAt: "2026-10-01T10:00:00Z", lastConnectedAt: "2026-11-12T08:00:00Z" },
-  { id: "p3", name: "staging", host: "staging.example.dev", port: 2222, username: "sirojiddin", authMethod: "password", keyPath: null, sudoMode: "auto", groupName: "Staging", color: null, initialPath: null, createdAt: "2026-10-01T10:00:00Z", lastConnectedAt: null },
+const profiles: any[] = [
+  { id: "p4", name: "media (R2)", host: "a1b2c3d4.r2.cloudflarestorage.com", port: 443, username: "6f1e0c2b9a", authMethod: "password", keyPath: null, sudoMode: "never", groupName: "Storage", color: null, initialPath: null, jumpProfileId: null, protocol: "s3", region: "auto", pathStyle: false, createdAt: "2026-10-01T10:00:00Z", lastConnectedAt: null },
+  { id: "p5", name: "team cloud", host: "cloud.example.com", port: 443, username: "sirojiddin", authMethod: "password", keyPath: null, sudoMode: "never", groupName: "Storage", color: null, initialPath: "/remote.php/dav/files/sirojiddin", jumpProfileId: null, protocol: "webdavs", region: null, pathStyle: false, createdAt: "2026-10-01T10:00:00Z", lastConnectedAt: null },
+  { id: "p1", name: "prod-web-01", host: "203.0.113.10", port: 22, username: "deploy", authMethod: "agent", keyPath: null, sudoMode: "password", groupName: "Production", color: "#e5645a", initialPath: null, jumpProfileId: null, protocol: "sftp", region: null, pathStyle: false, createdAt: "2026-10-01T10:00:00Z", lastConnectedAt: "2026-11-14T18:00:00Z" },
+  { id: "p2", name: "db-primary", host: "10.0.4.21", port: 22, username: "ops", authMethod: "key", keyPath: "~/.ssh/id_ed25519", sudoMode: "noPassword", groupName: "Production", color: "#8fb4ff", initialPath: null, jumpProfileId: "p1", protocol: "sftp", region: null, pathStyle: false, createdAt: "2026-10-01T10:00:00Z", lastConnectedAt: "2026-11-12T08:00:00Z" },
+  { id: "p3", name: "staging", host: "staging.example.dev", port: 2222, username: "sirojiddin", authMethod: "password", keyPath: null, sudoMode: "auto", groupName: "Staging", color: null, initialPath: null, jumpProfileId: null, protocol: "sftp", region: null, pathStyle: false, createdAt: "2026-10-01T10:00:00Z", lastConnectedAt: null },
 ];
 const trusted = new Set(["p1", "p2"]);
+const presence = { available: true, enabled: false };
 
 const NGINX = `user www-data;
 worker_processes auto;
@@ -61,7 +64,9 @@ http {
 
 const dirs: Record<string, [string, "file" | "dir" | "symlink", number, string][]> = {
   "/": [["etc", "dir", 4096, "rwxr-xr-x"], ["home", "dir", 4096, "rwxr-xr-x"], ["srv", "dir", 4096, "rwxr-xr-x"], ["var", "dir", 4096, "rwxr-xr-x"]],
-  "/etc": [["docker", "dir", 4096, "rwxr-xr-x"], ["nginx", "dir", 4096, "rwxr-xr-x"], ["ssh", "dir", 4096, "rwxr-xr-x"], ["systemd", "dir", 4096, "rwxr-xr-x"], ["hosts", "file", 221, "rw-r--r--"], ["sudoers", "file", 1800, "r--r-----"]],
+  "/etc/cron.daily": [["apt-compat", "file", 1478, "rwxr-xr-x"], ["dpkg", "file", 652, "rwxr-xr-x"], ["logrotate", "file", 377, "rwxr-xr-x"]],
+  "/etc/cron.weekly": [["man-db", "file", 1020, "rwxr-xr-x"]],
+  "/etc": [["cron.d", "dir", 4096, "rwxr-xr-x"], ["cron.daily", "dir", 4096, "rwxr-xr-x"], ["docker", "dir", 4096, "rwxr-xr-x"], ["nginx", "dir", 4096, "rwxr-xr-x"], ["ssh", "dir", 4096, "rwxr-xr-x"], ["systemd", "dir", 4096, "rwxr-xr-x"], ["hosts", "file", 221, "rw-r--r--"], ["sudoers", "file", 1800, "r--r-----"]],
   "/home/deploy": [[".bashrc", "file", 3771, "rw-r--r--"], [".ssh", "dir", 4096, "rwx------"], ["apps", "dir", 4096, "rwxr-xr-x"], ["backup.sh", "file", 812, "rwxr-xr-x"], ["docker-compose.yml", "file", 1460, "rw-r--r--"]],
   "/etc/nginx": [["conf.d", "dir", 4096, "rwxr-xr-x"], ["sites-available", "dir", 4096, "rwxr-xr-x"], ["sites-enabled", "dir", 4096, "rwxr-xr-x"], ["snippets", "dir", 4096, "rwxr-xr-x"], ["fastcgi_params", "file", 1125, "rw-r--r--"], ["mime.types", "file", 5465, "rw-r--r--"], ["nginx.conf", "file", 1482, "rw-r--r--"]],
 };
@@ -134,9 +139,251 @@ const audit = [
 ].map(([action, category, target, command, outcome, exitCode], i) => ({
   seq: 100 - i, id: String(i), ts: new Date(Date.now() - i * 1000 * 60 * 37).toISOString(), profileId: "p1",
   server: "deploy@203.0.113.10", actor: "sirojiddin", category, action, target, command, outcome, exitCode,
-  durationMs: 40 + i * 31, details: outcome === "failure" ? { error: "Validation failed, change was rolled back: nginx: [emerg] unexpected \"}\" in /etc/nginx/sites-enabled/shop:41", validator: "nginx" } : { sha256: "9f86d081884c7d65…", backup: target?.toString().startsWith("/etc") ? `${target}.outpost-bak-20261114" ` : undefined },
+  durationMs: 40 + i * 31, details: outcome === "failure" ? { error: "Validation failed, change was rolled back: nginx: [emerg] unexpected \"}\" in /etc/nginx/sites-enabled/shop:41", validator: "nginx" } : { sha256: "9f86d081884c7d65…", backup: target?.toString().startsWith("/etc") ? `${target}.orbital-bak-20261114" ` : undefined },
   prevHash: "a3c1…", hash: "5be0d2f4c8a1e9b7…",
 }));
+
+const tools = [
+  { id: "nginx", name: "nginx", category: "Web server", running: true, binary: "/usr/sbin/nginx", unit: "nginx.service", unitState: "active", paths: [{ path: "/etc/nginx", isDir: true }, { path: "/var/log/nginx", isDir: true }] },
+  { id: "docker", name: "Docker", category: "Containers", running: true, binary: "/usr/bin/docker", unit: "docker.service", unitState: "active", paths: [{ path: "/etc/docker/daemon.json", isDir: false }] },
+  { id: "postgresql", name: "PostgreSQL", category: "Database", running: true, binary: "/usr/bin/psql", unit: "postgresql.service", unitState: "active", paths: [{ path: "/etc/postgresql", isDir: true }, { path: "/var/log/postgresql", isDir: true }] },
+  { id: "sshd", name: "SSH server", category: "Access", running: true, binary: "/usr/sbin/sshd", unit: "ssh.service", unitState: "active", paths: [{ path: "/etc/ssh/sshd_config", isDir: false }, { path: "/etc/ssh/sshd_config.d", isDir: true }] },
+  { id: "fail2ban", name: "Fail2ban", category: "Access", running: true, binary: "/usr/bin/fail2ban-server", unit: "fail2ban.service", unitState: "active", paths: [{ path: "/etc/fail2ban", isDir: true }] },
+  { id: "ufw", name: "UFW firewall", category: "Access", running: true, binary: "/usr/sbin/ufw", unit: "ufw.service", unitState: "active", paths: [{ path: "/etc/ufw", isDir: true }, { path: "/etc/default/ufw", isDir: false }] },
+  { id: "certbot", name: "HTTPS certificates", category: "Certificates", running: true, binary: "/usr/bin/certbot", unit: "certbot.timer", unitState: "active", paths: [{ path: "/etc/letsencrypt/renewal", isDir: true }, { path: "/var/log/letsencrypt", isDir: true }] },
+  { id: "apache", name: "Apache", category: "Web server", running: true, binary: "/usr/sbin/apache2", unit: "apache2.service", unitState: "active", paths: [{ path: "/etc/apache2", isDir: true }] },
+  { id: "haproxy", name: "HAProxy", category: "Load balancer", running: true, binary: "/usr/sbin/haproxy", unit: "haproxy.service", unitState: "active", paths: [{ path: "/etc/haproxy/haproxy.cfg", isDir: false }] },
+  { id: "mysql", name: "MySQL / MariaDB", category: "Database", running: true, binary: "/usr/sbin/mysqld", unit: "mysql.service", unitState: "active", paths: [{ path: "/etc/mysql", isDir: true }] },
+  { id: "cron", name: "Cron", category: "Scheduling", running: true, binary: "/usr/sbin/cron", unit: "cron.service", unitState: "active", paths: [{ path: "/etc/crontab", isDir: false }, { path: "/etc/cron.d", isDir: true }] },
+  { id: "redis", name: "Redis", category: "Database", running: false, binary: "/usr/bin/redis-server", unit: "redis-server.service", unitState: "inactive", paths: [{ path: "/etc/redis/redis.conf", isDir: false }] },
+];
+
+const nginxConfig = {
+  testOk: true,
+  testOutput: "nginx: the configuration file /etc/nginx/nginx.conf syntax is ok\nnginx: configuration file /etc/nginx/nginx.conf test is successful",
+  files: [
+    { path: "/etc/nginx/nginx.conf", lines: 47 },
+    { path: "/etc/nginx/mime.types", lines: 98 },
+    { path: "/etc/nginx/sites-enabled/shop", lines: 41 },
+    { path: "/etc/nginx/sites-enabled/grafana", lines: 18 },
+    { path: "/etc/nginx/conf.d/default.conf", lines: 9 },
+  ],
+  upstreams: [{ name: "shop_api", servers: ["127.0.0.1:8081 max_fails=3", "127.0.0.1:8082 max_fails=3"], file: "/etc/nginx/nginx.conf", line: 21 }],
+  sites: [
+    { file: "/etc/nginx/sites-enabled/shop", line: 1, serverNames: ["shop.example.com", "www.shop.example.com"], listens: ["80", "[::]:80"], ssl: false, sslCertificate: null, root: null, redirect: "301 https://$host$request_uri", locations: [] },
+    { file: "/etc/nginx/sites-enabled/shop", line: 8, serverNames: ["shop.example.com"], listens: ["443 ssl http2"], ssl: true, sslCertificate: "/etc/letsencrypt/live/shop.example.com/fullchain.pem", root: "/srv/shop/public", redirect: null, locations: [
+      { path: "/api/", proxyPass: "http://shop_api", root: null, line: 16 },
+      { path: "~* \\.(js|css|png|svg|woff2)$", proxyPass: null, root: "/srv/shop/public", line: 23 },
+      { path: "/", proxyPass: null, root: null, line: 28 },
+    ] },
+    { file: "/etc/nginx/sites-enabled/grafana", line: 1, serverNames: ["grafana.example.com"], listens: ["443 ssl"], ssl: true, sslCertificate: "/etc/letsencrypt/live/grafana.example.com/fullchain.pem", root: null, redirect: null, locations: [{ path: "/", proxyPass: "http://127.0.0.1:3000", root: null, line: 9 }] },
+    { file: "/etc/nginx/sites-enabled/blog", line: 1, serverNames: ["blog.example.com"], listens: ["80"], ssl: false, sslCertificate: null, root: "/srv/blog/public", redirect: null, locations: [{ path: "/", proxyPass: null, root: null, line: 5 }] },
+    { file: "/etc/nginx/conf.d/default.conf", line: 1, serverNames: [], listens: ["80 default_server"], ssl: false, sslCertificate: null, root: "/usr/share/nginx/html", redirect: null, locations: [] },
+  ],
+};
+
+// ---- security tools ----
+const raw = (to: string, action: string, from: string, comment?: string) => `${to} ${action} ${from}${comment ? ` # ${comment}` : ""}`;
+let ufwRules: [string, string, string, string, string | null][] = [
+  ["22/tcp", "LIMIT", "IN", "Anywhere", "SSH"],
+  ["80,443/tcp", "ALLOW", "IN", "Anywhere", "web"],
+  ["5432/tcp", "ALLOW", "IN", "10.0.0.0/8", "PostgreSQL from the VPC"],
+  ["Anywhere", "DENY", "IN", "198.51.100.23", null],
+  ["22/tcp (v6)", "LIMIT", "IN", "Anywhere (v6)", "SSH"],
+  ["80,443/tcp (v6)", "ALLOW", "IN", "Anywhere (v6)", "web"],
+];
+let ufwActive = true;
+const ufw = () => ({
+  active: ufwActive, defaultIncoming: "deny", defaultOutgoing: "allow", logging: "on (low)",
+  rules: ufwActive ? ufwRules.map(([to, action, direction, from, comment], i) => ({ number: i + 1, to, action, direction, from, v6: to.includes("(v6)"), comment, raw: raw(to, `${action} ${direction}`, from, comment ?? undefined) })) : [],
+  added: ufwActive ? [] : ["limit 22/tcp comment 'SSH'", "allow 80,443/tcp comment 'web'"],
+  apps: ["Nginx Full", "Nginx HTTP", "Nginx HTTPS", "OpenSSH"],
+});
+const lockout = { kind: "PreflightFailed", message: "Pre-flight check failed", data: { check: "SSH access", output: "After this change the firewall would block SSH on port 22 from 203.0.113.9, which would cut off this connection and lock you out. Allow port 22 first." } };
+const banned: Record<string, string[]> = { sshd: ["45.155.205.233", "193.32.162.81", "218.92.0.112"], "nginx-http-auth": [] };
+const f2b = () => ({
+  version: "1.0.2", running: true, error: null, clientIp: "203.0.113.9",
+  jails: [
+    { name: "sshd", currentlyFailed: 4, totalFailed: 1893, currentlyBanned: banned.sshd.length, totalBanned: 212, banned: banned.sshd, watching: ["_SYSTEMD_UNIT=sshd.service + _COMM=sshd"], bantime: "3600", findtime: "600", maxretry: "5", ignoreIp: ["127.0.0.1/8", "::1"] },
+    { name: "nginx-http-auth", currentlyFailed: 0, totalFailed: 7, currentlyBanned: banned["nginx-http-auth"].length, totalBanned: 1, banned: banned["nginx-http-auth"], watching: ["/var/log/nginx/error.log"], bantime: "600", findtime: "600", maxretry: "3", ignoreIp: [] },
+  ],
+});
+const days = (n: number) => new Date(Date.now() + n * 86400e3).toISOString();
+const certs = () => ({
+  version: "2.9.0", plugins: ["nginx", "standalone", "webroot"], error: null,
+  autoRenew: { via: "certbot.timer", active: true, nextRun: "Sun 2026-11-15 22:41:00 UTC" },
+  certificates: [
+    { name: "shop.example.com", domains: ["shop.example.com", "www.shop.example.com"], expires: days(56), daysLeft: 56, valid: true, keyType: "ECDSA", certificatePath: "/etc/letsencrypt/live/shop.example.com/fullchain.pem", privateKeyPath: "/etc/letsencrypt/live/shop.example.com/privkey.pem", status: "VALID: 56 days" },
+    { name: "grafana.example.com", domains: ["grafana.example.com"], expires: days(12), daysLeft: 12, valid: true, keyType: "RSA", certificatePath: "/etc/letsencrypt/live/grafana.example.com/fullchain.pem", privateKeyPath: "/etc/letsencrypt/live/grafana.example.com/privkey.pem", status: "VALID: 12 days" },
+  ],
+});
+const certbotOut = (title: string) => ({ stdout: `Saving debug log to /var/log/letsencrypt/letsencrypt.log\n${title}\n`, stderr: "", exitCode: 0, durationMs: 8200 });
+const ports = {
+  source: "ss", complete: true, firewallActive: true,
+  ports: [
+    { protocol: "tcp", address: "0.0.0.0", port: 22, scope: "all", process: "sshd", pid: 900, unit: "ssh.service", firewall: "open" },
+    { protocol: "tcp", address: "::", port: 22, scope: "all", process: "sshd", pid: 900, unit: "ssh.service", firewall: "open" },
+    { protocol: "udp", address: "127.0.0.53", port: 53, scope: "local", process: "systemd-resolve", pid: 500, unit: "systemd-resolved.service", firewall: null },
+    { protocol: "tcp", address: "0.0.0.0", port: 80, scope: "all", process: "nginx", pid: 812, unit: "nginx.service", firewall: "open" },
+    { protocol: "tcp", address: "0.0.0.0", port: 443, scope: "all", process: "nginx", pid: 812, unit: "nginx.service", firewall: "open" },
+    { protocol: "tcp", address: "127.0.0.1", port: 3000, scope: "local", process: "grafana", pid: 2210, unit: "grafana-server.service", firewall: null },
+    { protocol: "tcp", address: "0.0.0.0", port: 5432, scope: "all", process: "postgres", pid: 1200, unit: "postgresql@16-main.service", firewall: "restricted" },
+    { protocol: "tcp", address: "127.0.0.1", port: 6379, scope: "local", process: "redis-server", pid: 1302, unit: "redis-server.service", firewall: null },
+    { protocol: "tcp", address: "0.0.0.0", port: 8080, scope: "all", process: "docker-proxy", pid: 3001, unit: "docker.service", firewall: "docker" },
+    { protocol: "tcp", address: "10.0.0.5", port: 9100, scope: "address", process: "node_exporter", pid: 1410, unit: "node-exporter.service", firewall: "blocked" },
+  ],
+};
+const sshd = {
+  version: "OpenSSH_9.6p1 Ubuntu-3ubuntu13.5", testOk: true, testOutput: "", readable: true,
+  configFiles: ["/etc/ssh/sshd_config", "/etc/ssh/sshd_config.d/50-cloud-init.conf"],
+  sessions: [{ user: "deploy", tty: "pts/0", since: "2026-11-15 10:01", from: "203.0.113.9" }, { user: "deploy", tty: "pts/1", since: "2026-11-15 11:42", from: "203.0.113.9" }],
+  settings: { port: "22", permitrootlogin: "yes", passwordauthentication: "yes", kbdinteractiveauthentication: "no", pubkeyauthentication: "yes", permitemptypasswords: "no", maxauthtries: "6", x11forwarding: "yes", logingracetime: "120", usepam: "yes", clientaliveinterval: "0", allowtcpforwarding: "yes" },
+  checks: [
+    { id: "root-login", title: "Root login", level: "bad", setting: "PermitRootLogin", value: "yes", advice: "Anyone who guesses root's password owns the server. Set PermitRootLogin to no (or prohibit-password) once you can log in as another user with sudo." },
+    { id: "password-login", title: "Password login", level: "warn", setting: "PasswordAuthentication", value: "yes", advice: "Bots try passwords on every public server all day. Once your key works, set PasswordAuthentication to no. Make sure this profile logs in with a key first, or you will lock yourself out." },
+    { id: "max-auth-tries", title: "Attempts per connection", level: "warn", setting: "MaxAuthTries", value: "6", advice: "Each connection may try this many passwords or keys. 3 or 4 slows guessing down." },
+    { id: "x11", title: "X11 forwarding", level: "warn", setting: "X11Forwarding", value: "yes", advice: "Lets remote graphical apps reach your screen. Servers rarely need it: set X11Forwarding to no." },
+    { id: "grace", title: "Time to log in", level: "info", setting: "LoginGraceTime", value: "120", advice: "Seconds an unauthenticated connection may stay open. 30 frees slots held by bots sooner." },
+    { id: "allow-list", title: "Who may log in", level: "info", setting: "AllowUsers / AllowGroups", value: "everyone with an account", advice: "Any account with a valid key or password can log in. AllowUsers or AllowGroups limits SSH to the people who need it." },
+    { id: "port", title: "Port", level: "info", setting: "Port", value: "22", advice: "The standard port. Moving it cuts log noise from bots but doesn't stop a real attacker; keys and fail2ban matter more." },
+  ],
+};
+
+const COMPOSE = `services:
+  web:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./public:/usr/share/nginx/html:ro
+    depends_on: [api]
+    restart: unless-stopped
+
+  api:
+    image: ghcr.io/example/shop-api:2.4.1
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DATABASE_URL: postgres://shop@db:5432/shop
+    restart: unless-stopped
+`;
+
+// ---- databases, web servers, users ----
+const MB = 1024 * 1024;
+const dbs: Record<string, any> = {
+  postgres: { version: "16.4 (Ubuntu 16.4-1.pgdg24.04+1)", connections: 9, maxConnections: 100, error: null, databases: [
+    { name: "postgres", sizeBytes: 7.6 * MB, connections: 1, tables: null, system: true },
+    { name: "shop", sizeBytes: 1830 * MB, connections: 6, tables: null, system: false },
+    { name: "shop_analytics", sizeBytes: 412 * MB, connections: 2, tables: null, system: false },
+  ] },
+  mysql: { version: "8.0.39-0ubuntu0.24.04.2", connections: 4, maxConnections: 151, error: null, databases: [
+    { name: "information_schema", sizeBytes: 0, connections: 0, tables: 79, system: true },
+    { name: "mysql", sizeBytes: 2.5 * MB, connections: 0, tables: 38, system: true },
+    { name: "wordpress", sizeBytes: 96 * MB, connections: 3, tables: 12, system: false },
+  ] },
+};
+let redisKeys = [{ db: 0, keys: 15230, expires: 4210 }, { db: 1, keys: 88, expires: 0 }];
+const redis = () => ({ version: "7.2.4", role: "master", uptimeSecs: 3456000, connectedClients: 23, usedMemory: 182 * MB, maxMemory: 512 * MB, evictionPolicy: "allkeys-lru", hits: 9234112, misses: 412330, lastSave: Math.floor(Date.now() / 1000) - 1800, lastSaveOk: true, aofEnabled: false, keyspace: redisKeys, error: null });
+let apacheSites = [{ name: "000-default", file: "/etc/apache2/sites-available/000-default.conf", enabled: true }, { name: "wiki", file: "/etc/apache2/sites-available/wiki.conf", enabled: true }, { name: "old-blog", file: "/etc/apache2/sites-available/old-blog.conf", enabled: false }];
+const apache = () => ({ testOk: true, testOutput: "Syntax OK", serverRoot: "/etc/apache2", documentRoot: "/var/www/html", managesSites: true, sites: apacheSites,
+  vhosts: [
+    { serverName: "intranet.example.com", aliases: [], port: 8081, file: "/etc/apache2/sites-enabled/000-default.conf", line: 1 },
+    { serverName: "wiki.example.com", aliases: ["docs.example.com"], port: 8081, file: "/etc/apache2/sites-enabled/wiki.conf", line: 1 },
+  ],
+  modules: ["alias", "auth_basic", "core", "deflate", "dir", "headers", "mime", "mpm_event", "php8.3", "proxy", "proxy_fcgi", "rewrite", "ssl"] });
+const haState: Record<string, string> = { "web/web1": "UP", "web/web2": "UP", "web/web3": "MAINT", "api/api1": "UP", "api/api2": "DOWN" };
+const haproxy = () => ({ configFile: "/etc/haproxy/haproxy.cfg", testOk: true, testOutput: "Configuration file is valid", socket: "/run/haproxy/admin.sock",
+  sections: [
+    { kind: "frontend", name: "www", line: 18, binds: ["*:80", "*:443"], mode: "http", balance: null, defaultBackend: "web", useBackends: ["api if { path_beg /api }"], servers: [], status: "OPEN" },
+    { kind: "backend", name: "web", line: 26, binds: [], mode: "http", balance: "roundrobin", defaultBackend: null, useBackends: [], status: "UP", servers: ["web1", "web2", "web3"].map((n, i) => ({ name: n, address: `10.0.0.1${i + 1}:8080`, options: "check", status: haState[`web/${n}`], sessions: haState[`web/${n}`] === "UP" ? 12 - i * 3 : 0, check: haState[`web/${n}`] === "UP" ? "L7OK" : "" })) },
+    { kind: "backend", name: "api", line: 33, binds: [], mode: "http", balance: "leastconn", defaultBackend: null, useBackends: [], status: "UP", servers: ["api1", "api2"].map((n, i) => ({ name: n, address: `10.0.0.2${i + 1}:8081`, options: "check inter 2s", status: haState[`api/${n}`], sessions: haState[`api/${n}`] === "UP" ? 7 : 0, check: haState[`api/${n}`] === "UP" ? "L7OK" : "L4CON" })) },
+  ] });
+const groups = [["sudo", 27, ["deploy"]], ["docker", 998, ["deploy", "anna"]], ["www-data", 33, ["deploy"]], ["adm", 4, ["syslog"]], ["systemd-journal", 101, []], ["deploy", 1000, []], ["anna", 1001, []], ["ci", 1002, []], ["users", 100, []], ["plugdev", 46, []]].map(([name, gid, members]) => ({ name, gid, members }));
+let users: any[] = [
+  { name: "root", uid: 0, gid: 0, primaryGroup: "root", groups: [], fullName: "root", home: "/root", shell: "/bin/bash", system: false, admin: true, passwordStatus: "L", passwordChanged: "2026-10-01", sshKeys: 1, canLogin: true },
+  { name: "deploy", uid: 1000, gid: 1000, primaryGroup: "deploy", groups: ["sudo", "docker", "www-data"], fullName: "Deploy", home: "/home/deploy", shell: "/bin/bash", system: false, admin: true, passwordStatus: "P", passwordChanged: "2026-11-01", sshKeys: 2, canLogin: true },
+  { name: "anna", uid: 1001, gid: 1001, primaryGroup: "anna", groups: ["docker"], fullName: "Anna Karimova", home: "/home/anna", shell: "/usr/bin/zsh", system: false, admin: false, passwordStatus: "L", passwordChanged: "2026-10-12", sshKeys: 1, canLogin: true },
+  { name: "ci", uid: 1002, gid: 1002, primaryGroup: "ci", groups: [], fullName: "CI runner", home: "/home/ci", shell: "/bin/bash", system: false, admin: false, passwordStatus: "L", passwordChanged: "2026-09-02", sshKeys: 1, canLogin: true },
+  { name: "www-data", uid: 33, gid: 33, primaryGroup: "www-data", groups: [], fullName: "www-data", home: "/var/www", shell: "/usr/sbin/nologin", system: true, admin: false, passwordStatus: "L", passwordChanged: null, sshKeys: null, canLogin: false },
+];
+const usersReport = () => ({ users, groups, shells: ["/bin/sh", "/bin/bash", "/usr/bin/zsh"], uidMin: 1000, adminGroup: "sudo", complete: true });
+
+// ---- cron and resource usage ----
+const iso = (d: Date) => d.toISOString().replace(/\.\d+Z$/, "+00:00");
+const inMin = (m: number) => iso(new Date(Date.now() + m * 60000));
+let cronJobs: any[] = [
+  { source: "user", user: "deploy", file: null, line: 3, schedule: "0 3 * * *", command: "/usr/local/bin/backup.sh >> /var/log/backup.log 2>&1", note: "Nightly database backup", paused: false, description: "Every day at 03:00", nextRuns: [inMin(14 * 60), inMin(38 * 60)], lastRun: iso(new Date(Date.now() - 10 * 3600e3)).replace("+00:00", "+0000"), raw: "0 3 * * * /usr/local/bin/backup.sh >> /var/log/backup.log 2>&1" },
+  { source: "user", user: "deploy", file: null, line: 4, schedule: "*/5 * * * *", command: "curl -fsS -m 10 https://hc.example.com/ping/shop", note: "Uptime ping", paused: false, description: "Every 5 minutes", nextRuns: [inMin(3), inMin(8)], lastRun: iso(new Date(Date.now() - 2 * 60e3)).replace("+00:00", "+0000"), raw: "*/5 * * * * curl -fsS -m 10 https://hc.example.com/ping/shop" },
+  { source: "user", user: "deploy", file: null, line: 5, schedule: "30 2 * * 0", command: "cd /srv/shop && docker compose pull -q", note: null, paused: true, description: "Every Sunday at 02:30", nextRuns: [], lastRun: null, raw: "#orbital-paused# 30 2 * * 0 cd /srv/shop && docker compose pull -q" },
+  { source: "user", user: "root", file: null, line: 1, schedule: "@reboot", command: "/opt/scripts/mount-volumes.sh", note: null, paused: false, description: "When the server starts", nextRuns: [], lastRun: null, raw: "@reboot /opt/scripts/mount-volumes.sh" },
+  { source: "system", user: "root", file: "/etc/cron.d/certbot", line: 12, schedule: "0 */12 * * *", command: "test -x /usr/bin/certbot && perl -e 'sleep int(rand(43200))' && certbot -q renew", note: null, paused: false, description: "Every 12 hours, on the hour", nextRuns: [inMin(4 * 60)], lastRun: iso(new Date(Date.now() - 8 * 3600e3)).replace("+00:00", "+0000"), raw: "" },
+  { source: "system", user: "root", file: "/etc/crontab", line: 17, schedule: "17 * * * *", command: "cd / && run-parts --report /etc/cron.hourly", note: null, paused: false, description: "Every hour at :17", nextRuns: [inMin(37)], lastRun: iso(new Date(Date.now() - 23 * 60e3)).replace("+00:00", "+0000"), raw: "" },
+];
+const cron = () => ({ jobs: cronJobs, serverNow: iso(new Date()), timezone: "UTC", complete: true,
+  periodic: [{ period: "daily", path: "/etc/cron.daily/apt-compat" }, { period: "daily", path: "/etc/cron.daily/logrotate" }, { period: "weekly", path: "/etc/cron.weekly/man-db" }],
+  timers: [
+    { unit: "certbot.timer", activates: "certbot.service", calendar: "*-*-* 00,12:00:00", next: "Mon 2026-11-16 00:00:00 UTC", last: "Sun 2026-11-15 12:00:04 UTC", description: "Run certbot twice daily" },
+    { unit: "apt-daily.timer", activates: "apt-daily.service", calendar: "*-*-* 6,18:00", next: "Sun 2026-11-15 18:22:31 UTC", last: "Sun 2026-11-15 06:41:10 UTC", description: "Daily apt download activities" },
+    { unit: "logrotate.timer", activates: "logrotate.service", calendar: "daily", next: "Mon 2026-11-16 00:00:00 UTC", last: "Sun 2026-11-15 00:00:02 UTC", description: "Daily rotation of log files" },
+  ] });
+const describe = (s: string) => ({ "*/5 * * * *": "Every 5 minutes", "0 * * * *": "Every hour at :00", "0 3 * * *": "Every day at 03:00", "0 9 * * 1-5": "Every weekday at 09:00", "0 2 * * 0": "Every Sunday at 02:00", "0 4 1 * *": "Every month on day 1 at 04:00", "@reboot": "When the server starts" } as Record<string, string>)[s.trim()] ?? `Custom: ${s}`;
+const GB = 1024 ** 3;
+const disk: Record<string, [string, number, boolean][]> = {
+  "/": [["var", 38.2 * GB, true], ["usr", 6.1 * GB, true], ["home", 4.4 * GB, true], ["srv", 3.2 * GB, true], ["opt", 1.1 * GB, true], ["swap.img", 2 * GB, false], ["boot", 0.2 * GB, true], ["etc", 0.01 * GB, true]],
+  "/var": [["lib", 31.5 * GB, true], ["log", 5.8 * GB, true], ["cache", 0.7 * GB, true], ["backups", 0.2 * GB, true]],
+  "/var/lib": [["docker", 26.9 * GB, true], ["postgresql", 3.6 * GB, true], ["apt", 0.6 * GB, true], ["redis", 0.3 * GB, true]],
+  "/var/log": [["journal", 3.9 * GB, true], ["nginx", 1.4 * GB, true], ["syslog.1", 0.3 * GB, false], ["syslog", 0.12 * GB, false]],
+};
+const procs = [
+  ["java", "deploy", 61.4, 1.8 * GB, "shop-api.service", 1], ["postgres", "postgres", 22.8, 1.2 * GB, "postgresql@16-main.service", 14], ["nginx", "www-data", 9.6, 0.11 * GB, "nginx.service", 9],
+  ["dockerd", "root", 4.1, 0.16 * GB, "docker.service", 1], ["redis-server", "redis", 2.2, 0.19 * GB, "redis-server.service", 1], ["node", "deploy", 1.9, 0.42 * GB, "docker.service", 2],
+  ["sshd", "root", 0.4, 0.02 * GB, "ssh.service", 3], ["systemd", "root", 0.1, 0.01 * GB, null, 1],
+] as const;
+const processUsage = () => {
+  const jitter = () => 0.85 + Math.random() * 0.3;
+  const processes = procs.map(([c, u, cpu, rss, unit], i) => ({ pid: 800 + i * 37, user: u, command: c, cpu: Math.round(cpu * jitter() * 10) / 10, memPercent: (rss / (16 * GB)) * 100, rssBytes: rss, unit }));
+  const group = (k: (p: any) => string | null) => {
+    const m: Record<string, any> = {};
+    processes.forEach((p, i) => { const n = k(p); if (!n) return; m[n] ??= { name: n, processes: 0, cpu: 0, rssBytes: 0 }; m[n].processes += procs[i][5]; m[n].cpu += p.cpu; m[n].rssBytes += p.rssBytes; });
+    return Object.values(m).sort((a: any, b: any) => b.cpu - a.cpu);
+  };
+  return { cores: 8, method: "sampled", processes, byProgram: group((p) => p.command), byService: group((p) => p.unit), byUser: group((p) => p.user) };
+};
+
+// ---- file storage (S3, WebDAV) ----
+const storage: Record<string, [string, number, boolean][]> = {
+  "/": [["media-prod", 0, true], ["backups", 0, true], ["site-assets", 0, true]],
+  "/media-prod": [["uploads", 0, true], ["thumbs", 0, true], ["robots.txt", 64, false]],
+  "/media-prod/uploads": [["2026", 0, true], ["cover.jpg", 2.4 * 1024 * 1024, false], ["hero.webp", 812 * 1024, false], ["manifest.json", 3120, false]],
+  "/backups": [["shop-2026-11-14.dump", 305 * 1024 * 1024, false], ["shop-2026-11-15.dump", 309 * 1024 * 1024, false]],
+};
+const cloud: Record<string, [string, number, boolean][]> = {
+  "/": [["Documents", 0, true], ["Photos", 0, true], ["Shared", 0, true], ["notes.md", 2048, false], ["Readme.md", 1200, false]],
+  "/Documents": [["invoices", 0, true], ["contract.pdf", 412 * 1024, false], ["plan.md", 5400, false]],
+};
+const storageListing = (tree: Record<string, [string, number, boolean][]>, path: string) =>
+  (tree[path] ?? []).map(([name, size, dir]) => ({ name, path: `${path === "/" ? "" : path}/${name}`, kind: dir ? "dir" : "file", size, mode: "", modeOctal: 0, mtime: dir ? null : now() - 3600 * 7, uid: null, gid: null, owner: null, group: null, hidden: name.startsWith(".") }));
+
+// ---- tunnels, logs, deploys ----
+let tunnels: any[] = [{ id: "tn1", sessionId: "s-p1", localPort: 5432, remoteHost: "127.0.0.1", remotePort: 5432, openConnections: 1, totalConnections: 6, bytes: 4.2 * 1024 * 1024, label: "PostgreSQL" }];
+const LOG_LINES = [
+  '203.0.113.50 - - "GET /api/products HTTP/2.0" 200 1832 "-" "Mozilla/5.0"',
+  '198.51.100.7 - - "POST /api/cart HTTP/2.0" 201 412 "-" "Mozilla/5.0"',
+  '[warn] 812#812: *4411 upstream response is buffered to a temporary file',
+  '203.0.113.50 - - "GET /static/app.js HTTP/2.0" 304 0 "-" "Mozilla/5.0"',
+  'shop-api: INFO  OrderService - order 18422 paid (12.40 EUR)',
+  '192.0.2.14 - - "GET /admin HTTP/1.1" 404 153 "-" "curl/8.5"',
+  'shop-api: ERROR PaymentClient - timeout after 5000 ms calling provider',
+  '203.0.113.50 - - "GET /api/products/77 HTTP/2.0" 200 940 "-" "Mozilla/5.0"',
+];
+const logTimers: Record<string, number> = {};
+let apps: any[] = [{ id: "app1", profileId: "p1", name: "shop", path: "/srv/shop", branch: "main", build: "npm ci && npm run build", restartKind: "service", restartTarget: "shop-api.service", createdAt: "2026-10-02T09:00:00Z" }];
+const commits = [
+  { id: "9f2c1e7a", short: "9f2c1e7", author: "Aziza", when: "3 hours ago", subject: "Checkout: retry the payment provider once" },
+  { id: "4be81d02", short: "4be81d0", author: "Sirojiddin", when: "19 hours ago", subject: "Product page: lazy-load images" },
+  { id: "c07a9b13", short: "c07a9b1", author: "Aziza", when: "2 days ago", subject: "Bump dependencies" },
+];
+let head = "4be81d02";
+let deploys: any[] = [{ id: "d1", appId: "app1", kind: "deploy", startedAt: "2026-11-14T17:45:00Z", finishedAt: "2026-11-14T17:46:10Z", fromCommit: "c07a9b13", toCommit: "4be81d02", outcome: "success", summary: "c07a9b1 → 4be81d0" }];
 
 let termCb: ((m: any) => void) | null = null;
 let line = "";
@@ -144,23 +391,170 @@ const b64 = (s: string) => btoa(unescape(encodeURIComponent(s)));
 const prompt = "\x1b[1;33mdeploy@prod-web-01\x1b[0m:\x1b[1;34m/srv/shop\x1b[0m$ ";
 
 export function install() {
-  mockIPC((cmd, args: any) => {
+  mockIPC(async (cmd, args: any) => {
     switch (cmd) {
-      case "list_profiles": return profiles;
+      case "list_profiles": return profiles.map((p) => ({ ...p }));
+      case "update_profile": {
+        const i = profiles.findIndex((p) => p.id === args.id);
+        Object.assign(profiles[i], args.input);
+        return { ...profiles[i] };
+      }
+      case "set_secret": return null;
       case "has_secret": return true;
+      case "presence_status": return presence;
+      case "set_presence_gate": presence.enabled = args.enabled; return { ...presence };
       case "connect": {
-        if (!trusted.has(args.profileId) && !args.opts?.acceptFingerprint)
+        if (profiles.find((x) => x.id === args.profileId)?.protocol === "sftp" && !trusted.has(args.profileId) && !args.opts?.acceptFingerprint)
           throw { kind: "UnknownHostKey", message: "unknown", data: { host: "staging.example.dev", port: 2222, algorithm: "ssh-ed25519", fingerprint: "SHA256:kq3W0dF7vYV1oR6nZQh2xJmUe8pT5cB4sLaGi9NwEo0" } };
         trusted.add(args.profileId);
         const p = profiles.find((x) => x.id === args.profileId)!;
-        return { id: "s-" + p.id, profileId: p.id, label: `${p.username}@${p.host}`, home: "/home/deploy", hasSystemd: true, dockerVersion: "27.3.1", elevation: true, connectedAt: new Date().toISOString() };
+        if (p.protocol !== "sftp")
+          return { id: "s-" + p.id, profileId: p.id, label: `${p.protocol === "s3" ? "s3" : "https"}://${p.username}@${p.host}`, home: "/", hasSystemd: false, dockerVersion: null, elevation: false, via: [], connectedAt: new Date().toISOString(), protocol: p.protocol };
+        return { protocol: "sftp", id: "s-" + p.id, profileId: p.id, label: `${p.username}@${p.host}`, home: "/home/deploy", hasSystemd: true, dockerVersion: "27.3.1", elevation: true, via: p.jumpProfileId ? ["deploy@203.0.113.10:22"] : [], connectedAt: new Date().toISOString() };
       }
-      case "list_dir": return listing(args.path);
-      case "read_file": return { path: args.path, content: args.path.endsWith("nginx.conf") ? NGINX : "# demo file\n", size: 1482, mtime: now() - 9000, modeOctal: 0o644, writable: !args.path.startsWith("/etc") };
+      case "list_dir": return args.sessionId === "s-p4" ? storageListing(storage, args.path) : args.sessionId === "s-p5" ? storageListing(cloud, args.path) : listing(args.path);
+      case "list_tunnels": return tunnels.map((t) => ({ ...t }));
+      case "open_tunnel": {
+        const t = { id: "tn" + (tunnels.length + 2), sessionId: args.sessionId, localPort: args.localPort ?? (args.remotePort >= 1024 ? args.remotePort : 40000 + args.remotePort), remoteHost: args.remoteHost, remotePort: args.remotePort, openConnections: 0, totalConnections: 0, bytes: 0, label: args.label ?? null };
+        tunnels = [...tunnels, t];
+        return t;
+      }
+      case "close_tunnel": tunnels = tunnels.filter((t) => t.id !== args.id); return null;
+      case "log_files": return [{ path: "/var/log/syslog", size: 0.12 * GB }, { path: "/var/log/auth.log", size: 2.1 * MB }, { path: "/var/log/nginx/access.log", size: 48 * MB }, { path: "/var/log/nginx/error.log", size: 1.2 * MB }, { path: "/var/log/postgresql/postgresql-16-main.log", size: 6.4 * MB }];
+      case "follow_logs": {
+        const id = "lg" + Math.random().toString(36).slice(2, 8);
+        const send = (n: number) => args.onEvent.onmessage({ type: "data", text: Array.from({ length: n }, () => `2026-11-15T${new Date().toTimeString().slice(0, 8)} ${LOG_LINES[Math.floor(Math.random() * LOG_LINES.length)]}`).join("\n") + "\n" });
+        setTimeout(() => send(40), 100);
+        logTimers[id] = window.setInterval(() => send(1 + Math.floor(Math.random() * 3)), 900);
+        return id;
+      }
+      case "stop_logs": clearInterval(logTimers[args.id]); delete logTimers[args.id]; return null;
+      case "list_apps": return apps.filter((a) => a.profileId === args.profileId);
+      case "save_app": {
+        if (args.id) { apps = apps.map((a) => (a.id === args.id ? { ...a, ...args.input } : a)); return apps.find((a) => a.id === args.id); }
+        const a = { ...args.input, id: "app" + (apps.length + 2), profileId: args.profileId, createdAt: new Date().toISOString() };
+        apps = [...apps, a];
+        return a;
+      }
+      case "delete_app": apps = apps.filter((a) => a.id !== args.id); return null;
+      case "app_checkout": return { head, branch: "main", remote: "git@github.com:example/shop.git", dirty: [], recent: commits };
+      case "deploy_history": return deploys.filter((d) => d.appId === args.appId);
+      case "deploy_log": return "$ git fetch --prune origin main\n$ git merge --ff-only FETCH_HEAD\nUpdating c07a9b1..4be81d0\nFast-forward\n$ npm ci && npm run build\nadded 812 packages in 21s\n✓ built in 9.4s\n$ systemctl restart shop-api.service\n";
+      case "run_deploy": {
+        const ev = (m: any) => args.onEvent.onmessage(m);
+        const target = args.rollbackTo ?? commits[0].id;
+        const steps: [string, string[]][] = args.rollbackTo
+          ? [["Check out " + target.slice(0, 7), [`HEAD is now at ${target.slice(0, 7)}`]], ["Build", ["added 812 packages in 19s", "✓ built in 9.1s"]], ["Restart shop-api.service", ["shop-api.service is active"]]]
+          : [["Fetch main", ["From github.com:example/shop", ` * branch            main       -> FETCH_HEAD`]], ["Update to the latest commit", [`Updating ${head.slice(0, 7)}..${target.slice(0, 7)}`, "Fast-forward", " src/payments/client.ts | 14 +++++++++-----"]], ["Build", ["added 812 packages in 21s", "vite v6.0.3 building for production...", "✓ built in 9.4s"]], ["Restart shop-api.service", ["shop-api.service is active"]]];
+        return new Promise((resolve) => {
+          let t = 0;
+          steps.forEach(([name, out]) => {
+            setTimeout(() => ev({ type: "step", name }), (t += 300));
+            out.forEach((o) => setTimeout(() => ev({ type: "output", text: o + "\n" }), (t += 350)));
+            setTimeout(() => ev({ type: "stepEnd", ok: true, code: 0 }), (t += 250));
+          });
+          setTimeout(() => {
+            const rec = { id: "d" + (deploys.length + 2), appId: args.appId, kind: args.rollbackTo ? "rollback" : "deploy", startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), fromCommit: head, toCommit: target, outcome: "success", summary: `${head.slice(0, 7)} → ${target.slice(0, 7)}` };
+            head = target;
+            deploys = [rec, ...deploys];
+            ev({ type: "done", ok: true, record: rec });
+            resolve(rec);
+          }, (t += 300));
+        });
+      }
+      case "read_file": return { path: args.path, content: args.path.endsWith("nginx.conf") ? NGINX : args.path.endsWith("docker-compose.yml") ? COMPOSE : "# demo file\n", size: 1482, mtime: now() - 9000, modeOctal: 0o644, writable: !args.path.startsWith("/etc") };
       case "validator_for": return args.path.startsWith("/etc/nginx/") ? { name: "nginx", command: "nginx -t", stage: "postInstall" } : null;
-      case "safe_write": return { path: args.path, bytes: args.content.length, privileged: args.privileged, backupPath: args.path + ".outpost-bak-20261115011500", validator: "nginx", validatorOutput: "syntax is ok", newMtime: now(), suggestedReload: "nginx.service" };
+      case "safe_write": return { path: args.path, bytes: args.content.length, privileged: args.privileged, backupPath: args.path + ".orbital-bak-20261115011500", validator: "nginx", validatorOutput: "syntax is ok", newMtime: now(), suggestedReload: "nginx.service" };
       case "write_file": return now();
       case "metrics": return metric();
+      case "detect_tools": return tools;
+      case "nginx_config": return nginxConfig;
+      case "listening_ports": return ports;
+      case "cron_report": return cron();
+      case "cron_preview": return /^(@reboot|[0-9*/,\-a-z]+( [0-9*/,\-a-z]+){4})$/i.test(args.schedule.trim()) ? { description: describe(args.schedule), nextRuns: [inMin(60), inMin(24 * 60)], error: null } : { description: "", nextRuns: [], error: "a schedule has five fields: minute hour day-of-month month day-of-week (for example 0 3 * * *)" };
+      case "cron_change": {
+        const c = args.change;
+        if (c.type === "add") cronJobs = [...cronJobs, { source: "user", user: args.user, file: null, line: 9, schedule: c.schedule, command: c.command, note: c.note, paused: false, description: describe(c.schedule), nextRuns: [inMin(60)], lastRun: null, raw: `${c.schedule} ${c.command}` }];
+        else if (c.type === "delete") cronJobs = cronJobs.filter((j) => j.raw !== c.raw);
+        else cronJobs = cronJobs.map((j) => j.raw !== c.raw ? j : c.type === "pause" ? { ...j, paused: true, nextRuns: [], raw: `#orbital-paused# ${j.raw}` } : c.type === "resume" ? { ...j, paused: false, nextRuns: [inMin(30)], raw: j.raw.replace("#orbital-paused# ", "") } : { ...j, schedule: c.schedule, command: c.command, note: c.note, description: describe(c.schedule), raw: `${c.schedule} ${c.command}` });
+        return cron();
+      }
+      case "cron_run": return new Promise((r) => setTimeout(() => r({ stdout: args.command.includes("backup") ? "Dumping shop… done (1.8 GB → 305 MB)\nUploading to s3://backups/shop/2026-11-15.dump… done\n" : "OK\n", stderr: "", exitCode: 0, durationMs: 1800 }), 900));
+      case "disk_usage": {
+        const e = (disk[args.path] ?? [["data", 0.4 * GB, true], ["cache", 0.1 * GB, true]]).map(([name, bytes, isDir]) => ({ name, bytes, isDir, path: `${args.path === "/" ? "" : args.path}/${name}` }));
+        return new Promise((r) => setTimeout(() => r({ path: args.path, total: e.reduce((n, x) => n + x.bytes, 0) * 1.02, entries: e, fsSize: 80 * GB, fsUsed: 58.4 * GB, fsFree: 21.6 * GB, mount: "/", partial: false }), 700));
+      }
+      case "process_usage": return processUsage();
+      case "list_databases": return dbs[args.kind] ?? { version: "7.0.12", connections: 4, maxConnections: 838860, error: null, databases: [{ name: "admin", sizeBytes: 40960, connections: null, tables: 1, system: true }, { name: "app", sizeBytes: 220 * MB, connections: null, tables: 14, system: false }] };
+      case "backup_database": return new Promise((r) => setTimeout(() => r(Math.round(dbs[args.kind]?.databases.find((d: any) => d.name === args.name)?.sizeBytes / 6 || 4 * MB)), 1200));
+      case "redis_info": return redis();
+      case "redis_action": if (args.action === "flushAll") redisKeys = []; else if (args.action?.flushDb !== undefined) redisKeys = redisKeys.filter((k) => k.db !== args.action.flushDb); return redis();
+      case "apache_status": return apache();
+      case "apache_site": apacheSites = apacheSites.map((x) => (x.name === args.name ? { ...x, enabled: args.enable } : x)); return apache();
+      case "haproxy_status": return haproxy();
+      case "haproxy_server_state": haState[`${args.backend}/${args.server}`] = args.state === "ready" ? "UP" : args.state === "drain" ? "DRAIN" : "MAINT"; return haproxy();
+      case "list_users": return usersReport();
+      case "create_user": {
+        const u = args.user;
+        const uid = u.uid ?? Math.max(...users.map((x) => (x.uid < 60000 ? x.uid : 0))) + 1;
+        users = [...users, { name: u.name, uid, gid: uid, primaryGroup: u.primaryGroup ?? u.name, groups: u.groups, fullName: u.fullName ?? "", home: u.home ?? `/home/${u.name}`, shell: u.shell ?? "/bin/sh", system: u.system, admin: u.groups.includes("sudo"), passwordStatus: args.password ? "P" : "L", passwordChanged: "2026-11-15", sshKeys: u.sshKeys.length || null, canLogin: true }];
+        return usersReport();
+      }
+      case "change_user": {
+        const c = args.change;
+        if (args.name === "deploy" && !args.force && (c.type === "lock" || c.type === "delete" || (c.type === "groups" && !c.groups.includes("sudo"))))
+          throw { kind: "PreflightFailed", message: "Pre-flight check failed", data: { check: "your access", output: c.type === "groups" ? "deploy would leave the sudo group and lose sudo, so Orbital couldn't change the server any more through this account." : "deploy is the account this connection uses." } };
+        users = c.type === "delete" ? users.filter((u) => u.name !== args.name) : users.map((u) => u.name !== args.name ? u : {
+          ...u,
+          ...(c.type === "groups" ? { groups: c.groups, admin: c.groups.includes("sudo") } : {}),
+          ...(c.type === "shell" ? { shell: c.shell } : {}),
+          ...(c.type === "lock" ? { passwordStatus: "L", sshKeys: null } : {}),
+          ...(c.type === "unlock" ? { passwordStatus: "P" } : {}),
+          ...(c.type === "password" ? { passwordStatus: "P", passwordChanged: "2026-11-15" } : {}),
+          ...(c.type === "addKey" ? { sshKeys: (u.sshKeys ?? 0) + 1 } : {}),
+        });
+        return usersReport();
+      }
+      case "system_info": return { hostname: "prod-web-01", fqdn: "prod-web-01.example.com", os: "Ubuntu 24.04.1 LTS", kernel: "6.8.0-45-generic", arch: "x86_64", virtualization: "kvm", vendor: "Hetzner", product: "vServer", cpuThreads: 8, bootTime: "2026-10-06 09:14:02", timezone: "Asia/Tashkent", addresses: [{ interface: "eth0", address: "203.0.113.10/32" }, { interface: "eth0", address: "2001:db8::1/64" }, { interface: "docker0", address: "172.17.0.1/16" }], gateway: "172.31.1.1", dns: ["185.12.64.1", "185.12.64.2"], usersLoggedIn: 2, processes: 214, failedUnits: [], updates: 12, securityUpdates: 3, rebootRequired: true, packageManager: "apt", securityModule: "AppArmor, on" };
+      case "sshd_report": return sshd;
+      case "ufw_status": return ufw();
+      case "ufw_add": {
+        const r = args.rule;
+        const to = r.app ?? `${r.port}${r.protocol === "any" ? "" : "/" + r.protocol}`;
+        ufwRules.push([to, r.action.toUpperCase(), r.direction.toUpperCase(), r.address ?? "Anywhere", r.comment]);
+        return ufw();
+      }
+      case "ufw_update": {
+        const r = args.rule;
+        const at = Math.min(...args.old.map((o: any) => o.number)) - 1;
+        const gone = new Set(args.old.map((o: any) => o.number - 1));
+        const to = r.app ?? `${r.port}${r.protocol === "any" ? "" : "/" + r.protocol}`;
+        const next = ufwRules.filter((_, i) => !gone.has(i));
+        next.splice(at, 0, [to, r.action.toUpperCase(), "IN", r.address ?? "Anywhere", r.comment]);
+        ufwRules = next;
+        return ufw();
+      }
+      case "ufw_delete": {
+        const gone = new Set(args.rules.map((o: any) => o.number - 1));
+        const left = ufwRules.filter((_, i) => !gone.has(i));
+        if (!args.force && !left.some(([to, a, , from]) => to.startsWith("22") && a !== "DENY" && from.startsWith("Anywhere"))) throw lockout;
+        ufwRules = left;
+        return ufw();
+      }
+      case "ufw_set_enabled": ufwActive = args.enabled; return ufw();
+      case "fail2ban_status": return f2b();
+      case "fail2ban_unban": for (const j of Object.keys(banned)) if (!args.jail || args.jail === j) banned[j] = banned[j].filter((x) => x !== args.ip); return f2b();
+      case "fail2ban_ban":
+        if (args.ip === "203.0.113.9") throw { ...lockout, data: { check: "SSH access", output: "203.0.113.9 is the address this connection comes from; banning it would lock you out." } };
+        banned[args.jail] = [...banned[args.jail], args.ip]; return f2b();
+      case "certbot_status": return certs();
+      case "certbot_issue": return certbotOut(`Requesting a certificate for ${args.request.domains.join(" and ")}\n\nSuccessfully received certificate.\nCertificate is saved at: /etc/letsencrypt/live/${args.request.domains[0]}/fullchain.pem\nSuccessfully deployed certificate for ${args.request.domains[0]} to /etc/nginx/sites-enabled/blog`);
+      case "certbot_renew": return certbotOut(args.mode === "dryRun" ? "Processing /etc/letsencrypt/renewal/shop.example.com.conf\nSimulating renewal of an existing certificate for shop.example.com\n\nCongratulations, all simulated renewals succeeded" : `Renewing an existing certificate for ${args.name}`);
+      case "certbot_delete":
+        if (!args.force) throw { kind: "PreflightFailed", message: "Pre-flight check failed", data: { check: "web server config", output: `These files still use this certificate, so the web server would fail to start without it:\n/etc/nginx/sites-enabled/${args.name.split(".")[0]}` } };
+        return certbotOut(`Deleted all files relating to certificate ${args.name}.`);
+      case "copy_between": return { files: 12, dirs: 3, bytes: 482113, skipped: 0 };
+      case "service_action": return { command: `systemctl ${args.action} -- ${args.unit}`, preflight: args.unit.startsWith("nginx") ? ["nginx -t", "syntax is ok"] : null, output: { stdout: "", stderr: "", exitCode: 0, durationMs: 120 } };
       case "list_services": return services;
       case "service_detail": return {
         unit: args.unit,
@@ -170,7 +564,12 @@ export function install() {
       case "list_containers": return containers;
       case "container_stats": return containers.filter((c) => c.state === "running").map((c, i) => ({ id: c.id, name: c.names, cpuPercent: `${(0.4 + i * 3.7).toFixed(2)}%`, memUsage: `${120 + i * 210}MiB / 15.5GiB`, memPercent: "2.1%", netIo: "1.2GB / 900MB", blockIo: "0B / 0B", pids: "12" }));
       case "container_logs": return "2026-11-15T01:02:11.120Z  INFO  Started ShopApiApplication in 6.81 seconds\n2026-11-15T01:02:12.004Z  INFO  Tomcat started on port 8081 (http)\n2026-11-15T01:04:40.551Z  WARN  Slow query: SELECT * FROM orders WHERE … (1840 ms)\n";
-      case "inspect_container": return { Id: args.id, Config: { Image: "nginx:1.27-alpine", Env: ["TZ=Asia/Tashkent"] }, State: { Status: "running", Health: { Status: "healthy" } } };
+      case "inspect_container": {
+        const c = containers.find((x) => x.id === args.id);
+        const labels = c?.composeProject ? { "com.docker.compose.project": c.composeProject, "com.docker.compose.service": c.names.replace(`${c.composeProject}-`, "").replace(/-\d+$/, ""), "com.docker.compose.project.config_files": `/srv/${c.composeProject}/docker-compose.yml`, "com.docker.compose.project.working_dir": `/srv/${c.composeProject}` } : {};
+        return { Id: args.id, Config: { Image: c?.image ?? "nginx:1.27-alpine", Env: ["TZ=Asia/Tashkent"], Labels: labels }, State: { Status: "running", Health: { Status: "healthy" } } };
+      }
+      case "compose_action": return { stdout: "", stderr: args.action === "pull" ? ` ✔ web Pulled\n ✔ api Pulled\n` : ` ✔ Container ${args.target.project}-${args.target.service ?? "web"}-1  ${args.action === "up" ? "Running" : "Started"}\n`, exitCode: 0, durationMs: 2400 };
       case "audit_query": return audit.filter((e) => !args.filter?.category || e.category === args.filter.category);
       case "audit_verify": return { ok: true, checked: 1284, firstBrokenSeq: null };
       case "known_hosts": return [{ host: "203.0.113.10", port: 22, algorithm: "ssh-ed25519", fingerprint: "SHA256:Xw2pRfa9Lw0YkU0yV5mJbqzB2hD1tXcN7pGfE4sHjAo", addedAt: "2026-10-01T10:00:00Z" }];
@@ -193,6 +592,27 @@ export function install() {
         return null;
       }
       case "plugin:event|listen": return 1;
+      case "plugin:dialog|save": return `/Users/demo/Downloads/${args.options?.defaultPath ?? "download"}`;
+      // Updates: a newer version is always on offer; the download takes a few seconds.
+      case "plugin:app|version": return "1.0.0";
+      case "plugin:updater|check":
+        await new Promise((r) => setTimeout(r, 700));
+        return {
+          rid: 1, currentVersion: "1.0.0", version: "1.1.0", date: "2026-11-20T12:00:00Z", rawJson: {},
+          body: "### Added\n- Transfer queue with progress for uploads and downloads\n- Import hosts from ~/.ssh/config\n\n### Fixed\n- WebDAV listings on servers that omit content length",
+        };
+      case "plugin:updater|download_and_install": {
+        const total = 14_200_000;
+        const send = (m: any) => args.onEvent.onmessage(m);
+        send({ event: "Started", data: { contentLength: total } });
+        for (let got = 0; got < total; got += 710_000) {
+          await new Promise((r) => setTimeout(r, 120));
+          send({ event: "Progress", data: { chunkLength: Math.min(710_000, total - got) } });
+        }
+        send({ event: "Finished" });
+        return null;
+      }
+      case "plugin:process|restart": location.reload(); return null;
       default: return null;
     }
   });

@@ -1,19 +1,20 @@
 [package]
-name = "outpost"
+name = "orbital"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Outpost — the modern server workbench for macOS"
+repository.workspace = true
+description = "Orbital — the modern server workbench for macOS"
 
 [lib]
-name = "outpost_lib"
+name = "orbital_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-outpost-core = { path = "../crates/outpost-core" }
+orbital-core = { path = "../crates/orbital-core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
@@ -22,3 +23,5 @@ tokio = { version = "1", features = ["full"] }
 base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"

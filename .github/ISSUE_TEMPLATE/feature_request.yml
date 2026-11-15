@@ -1,0 +1,19 @@
+name: Feature request
+description: Suggest something Orbital should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The server task, and how you do it today (terminal commands, other apps).
+    validations: { required: true }
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Software involved (nginx, Docker, PostgreSQL …), server OS, screenshots.

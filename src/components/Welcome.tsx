@@ -5,7 +5,7 @@ export function Welcome() {
   const { profiles, setEditing, connect } = useStore();
   const recent = [...profiles].filter((p) => p.lastConnectedAt).sort((a, b) => (b.lastConnectedAt! > a.lastConnectedAt! ? 1 : -1)).slice(0, 5);
   return (
-    <div className="welcome drag">
+    <div className="welcome drag" data-tauri-drag-region>
       <div className="welcome-inner" style={{ WebkitAppRegion: "no-drag" } as any}>
         <img src="/logo.svg" width={56} height={56} alt="" />
         <h1>{profiles.length ? "Pick a server to open" : "Add your first server"}</h1>

@@ -1,30 +1,37 @@
 {
-  "name": "outpost",
+  "name": "orbital",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
-  "description": "Outpost \u2014 the modern server workbench for macOS",
+  "description": "Orbital — the modern server workbench for macOS",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "tauri": "tauri",
-    "demo": "VITE_DEMO=1 vite --port 1430"
+    "demo": "VITE_DEMO=1 vite --port 1430",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.1.0",
     "@fontsource/jetbrains-mono": "^5.1.0",
     "@monaco-editor/react": "^4.7.0",
+    "@number-flow/react": "^0.6.2",
+    "@radix-ui/react-dialog": "^1.3.1",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.1",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
+    "cmdk": "^1.1.1",
     "lucide-react": "^0.460.0",
     "monaco-editor": "^0.52.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "sonner": "^2.0.8",
     "zustand": "^5.0.0"
   },
   "devDependencies": {

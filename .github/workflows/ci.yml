@@ -18,16 +18,30 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { components: "clippy, rustfmt" }
       - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
       - name: Start disposable sshd
         run: |
-          sudo apt-get update && sudo apt-get install -y openssh-server
-          sudo KEYDIR=/tmp/outpost-it-keys bash scripts/it-sshd.sh | tee /tmp/it-env
+          sudo apt-get update && sudo apt-get install -y openssh-server ufw fail2ban certbot python3-venv
+          sudo KEYDIR=/tmp/orbital-it-keys bash scripts/it-sshd.sh | tee /tmp/it-env
+      - name: Start FTP, WebDAV and S3 test servers
+        run: bash scripts/it-storage.sh | tail -n 1 | tee -a /tmp/it-env
+      - name: Prepare ufw and fail2ban for the live tests
+        # The runner keeps accepting everything (default allow), so enabling
+        # ufw can't cut it off; fail2ban runs its stock sshd jail.
+        run: |
+          sudo ufw default allow incoming
+          sudo ufw --force enable
+          sudo systemctl restart fail2ban
+          sleep 2
+          sudo fail2ban-client status
+          echo 'export ORBITAL_IT_UFW=1 ORBITAL_IT_FAIL2BAN=1 ORBITAL_IT_USERS=1' >> /tmp/it-env
       - name: Clippy
-        run: cargo clippy -p outpost-core --all-targets -- -D warnings
+        run: cargo clippy -p orbital-core --all-targets -- -D warnings
       - name: Test
         run: |
           source /tmp/it-env
-          cargo test -p outpost-core -- --test-threads=1
+          cargo test -p orbital-core -- --test-threads=1
 
   frontend:
     name: Frontend (types, unit tests, build)
@@ -53,11 +67,13 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci
+      - name: Clippy (app crate)
+        run: cargo clippy -p orbital --all-targets -- -D warnings
       - name: Build universal .app / .dmg
         run: npm run tauri build -- --target universal-apple-darwin
         # For signed + notarized releases add APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
         # APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID as repository secrets.
       - uses: actions/upload-artifact@v4
         with:
-          name: Outpost-macos
+          name: Orbital-macos
           path: target/universal-apple-darwin/release/bundle/dmg/*.dmg
