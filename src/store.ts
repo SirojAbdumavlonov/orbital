@@ -55,7 +55,7 @@ export interface SessionState {
 }
 
 /** Where the user is: a server's tab, a global page, or the start page. */
-export type Loc = { sid: string; tab: Tab } | { global: "activity" | "knownHosts" | "settings" } | null;
+export type Loc = { sid: string; tab: Tab } | { global: NonNullable<State["globalView"]> } | null;
 
 /** Software with its own tab view (the rest get the generic one). */
 export const DEDICATED_TOOLS = ["docker", "nginx", "ufw", "fail2ban", "certbot", "sshd", "ports", "postgresql", "mysql", "mongodb", "redis", "apache", "haproxy", "users", "cron", "deploy", "logs", "tunnels"];
@@ -90,7 +90,7 @@ interface State {
   connecting: Record<string, boolean>;
   prompt: Prompt | null;
   editing: Profile | "new" | null;
-  globalView: "activity" | "knownHosts" | "settings" | null;
+  globalView: "activity" | "knownHosts" | "settings" | "domains" | null;
   /** Back and forward history, like a browser. */
   navBack: Loc[];
   navFwd: Loc[];

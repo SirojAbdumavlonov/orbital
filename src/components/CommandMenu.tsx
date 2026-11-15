@@ -1,5 +1,5 @@
 import { Command } from "cmdk";
-import { Activity, ArrowLeft, ArrowRight, Download, FolderTree, Gauge, KeyRound, ListChecks, Moon, Plug, Plus, RefreshCw, Server, Settings, SquareTerminal, Sun, Unplug } from "lucide-react";
+import { Activity, ArrowLeft, ArrowRight, Download, FolderTree, Globe, Gauge, KeyRound, ListChecks, Moon, Plug, Plus, RefreshCw, Server, Settings, SquareTerminal, Sun, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useUpdates } from "../lib/updates";
@@ -93,6 +93,7 @@ export function CommandMenu() {
           <Command.Item value="add server new" onSelect={run(() => st.setEditing("new"))}><Plus size={14} /> Add server…</Command.Item>
         </Command.Group>
         <Command.Group heading="Orbital">
+          <Command.Item value="domains dns records cloudflare check" onSelect={run(() => st.setGlobalView("domains"))}><Globe size={14} /> Domains and DNS</Command.Item>
           <Command.Item value="activity log" onSelect={run(() => st.setGlobalView("activity"))}><Activity size={14} /> Activity log</Command.Item>
           <Command.Item value="security touch id hosts" onSelect={run(() => st.setGlobalView("knownHosts"))}><KeyRound size={14} /> Security</Command.Item>
           <Command.Item value="settings preferences" onSelect={run(() => st.setGlobalView("settings"))}><Settings size={14} /> Settings</Command.Item>

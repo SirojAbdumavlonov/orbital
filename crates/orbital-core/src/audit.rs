@@ -23,6 +23,7 @@ pub enum Category {
     Terminal,
     Command,
     Security,
+    Dns,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

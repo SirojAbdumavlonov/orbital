@@ -4,6 +4,10 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Domains page** (sidebar, or ⌘K → Domains and DNS): connect Cloudflare with an API token and manage the DNS records of your domains: add, change and delete A, AAAA, CNAME, TXT and MX records, proxied or DNS only, with the connected servers' public addresses one click away. Saved records are checked against public resolvers (Cloudflare and Google, over HTTPS) every 10 seconds until they are live. "Check a domain" checks any name at any provider. Tokens go to the vault, behind the Touch ID gate; every change is in the activity log under DNS.
+- The HTTPS certificate dialog checks that each name already points at the server before asking Let's Encrypt, and links to Domains when one doesn't.
+
 ### Fixed
 - Text fields no longer capitalise the first letter, autocorrect or spell-check what you type (macOS did this to user names, hosts and paths, so connections failed).
 

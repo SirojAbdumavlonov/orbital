@@ -5,6 +5,7 @@ use orbital_core::config_edit::{SafeWriteReport, Validator};
 use orbital_core::cron::{CronChange, CronPreview, CronReport};
 use orbital_core::databases::{BackupFormat, DbKind, DbServer, RedisAction, RedisInfo};
 use orbital_core::deploy::{App, AppInput, Checkout, DeployRecord};
+use orbital_core::dns::{DnsAccount, DnsCheck, DnsRecord, DnsZone, ProviderKind, RecordInput, RecordType};
 use orbital_core::docker::{ComposeAction, ComposeTarget, Container, ContainerAction, ContainerStats};
 use orbital_core::engine::{DeployEvent, Engine, PresenceStatus, SessionInfo};
 use orbital_core::fail2ban::Fail2banStatus;
@@ -662,4 +663,76 @@ pub fn audit_verify(engine: Eng) -> R<VerifyReport> {
 pub fn audit_export(engine: Eng, format: String, path: String) -> R<()> {
     std::fs::write(path, engine.audit_export(&format)?)?;
     Ok(())
+}
+
+// ---------- DNS ----------
+
+#[tauri::command]
+pub fn dns_accounts(engine: Eng) -> R<Vec<DnsAccount>> {
+    engine.dns_accounts()
+}
+
+#[tauri::command]
+pub async fn add_dns_account(engine: Eng<'_>, name: String, kind: ProviderKind, token: String) -> R<DnsAccount> {
+    engine.add_dns_account(&name, kind, &token).await
+}
+
+#[tauri::command]
+pub async fn remove_dns_account(engine: Eng<'_>, id: String) -> R<()> {
+    engine.remove_dns_account(&id).await
+}
+
+#[tauri::command]
+pub async fn dns_zones(engine: Eng<'_>, account_id: String) -> R<Vec<DnsZone>> {
+    engine.dns_zones(&account_id).await
+}
+
+#[tauri::command]
+pub async fn dns_records(engine: Eng<'_>, account_id: String, zone_id: String) -> R<Vec<DnsRecord>> {
+    engine.dns_records(&account_id, &zone_id).await
+}
+
+#[tauri::command]
+pub async fn create_dns_record(engine: Eng<'_>, account_id: String, zone_id: String, zone: String, input: RecordInput) -> R<DnsRecord> {
+    engine.create_dns_record(&account_id, &zone_id, &zone, &input).await
+}
+
+#[tauri::command]
+pub async fn update_dns_record(
+    engine: Eng<'_>,
+    account_id: String,
+    zone_id: String,
+    zone: String,
+    record_id: String,
+    input: RecordInput,
+) -> R<DnsRecord> {
+    engine.update_dns_record(&account_id, &zone_id, &zone, &record_id, &input).await
+}
+
+#[tauri::command]
+pub async fn delete_dns_record(engine: Eng<'_>, account_id: String, zone_id: String, record_id: String, label: String) -> R<()> {
+    engine.delete_dns_record(&account_id, &zone_id, &record_id, &label).await
+}
+
+#[tauri::command]
+pub async fn dns_check(engine: Eng<'_>, name: String, rtype: RecordType, expected: Vec<String>) -> R<DnsCheck> {
+    engine.dns_check(&name, rtype, &expected).await
+}
+
+#[tauri::command]
+pub async fn server_public_addresses(engine: Eng<'_>, session_id: String) -> R<Vec<String>> {
+    engine.server_public_addresses(&session_id).await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PointsHere {
+    addresses: Vec<String>,
+    checks: Vec<DnsCheck>,
+}
+
+#[tauri::command]
+pub async fn dns_points_here(engine: Eng<'_>, session_id: String, names: Vec<String>) -> R<PointsHere> {
+    let (addresses, checks) = engine.dns_points_here(&session_id, &names).await?;
+    Ok(PointsHere { addresses, checks })
 }

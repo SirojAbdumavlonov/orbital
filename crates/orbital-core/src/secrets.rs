@@ -31,9 +31,9 @@ pub fn secret_key(profile_id: &str, kind: SecretKind) -> String {
     format!("profile:{profile_id}:{}", kind.as_str())
 }
 
-/// Keys under this prefix hold server credentials and are subject to the
-/// user-presence gate. Other keys (app settings) are not.
-const CREDENTIAL_PREFIX: &str = "profile:";
+/// Keys under these prefixes hold credentials (servers, DNS provider tokens)
+/// and are subject to the user-presence gate. Other keys (app settings) are not.
+const CREDENTIAL_PREFIXES: &[&str] = &["profile:", "dns:"];
 /// Where the gate's on/off switch lives: in the credential store itself, so
 /// flipping it takes the same access as reading the credentials it protects.
 const GATE_KEY: &str = "app:presence-gate";
@@ -103,7 +103,7 @@ impl GatedStore {
     }
 
     fn locked(&self, key: &str) -> bool {
-        key.starts_with(CREDENTIAL_PREFIX) && self.gate_enabled() && self.unlocks.load(Ordering::SeqCst) == 0
+        CREDENTIAL_PREFIXES.iter().any(|p| key.starts_with(p)) && self.gate_enabled() && self.unlocks.load(Ordering::SeqCst) == 0
     }
 }
 
@@ -275,6 +275,11 @@ mod tests {
             store.get(&secret_key("p2", SecretKind::Password)),
             Err(Error::PresenceRequired(_))
         ));
+        // DNS provider tokens are credentials too; app settings are not.
+        store.set("dns:a1:token", "cf-token").unwrap();
+        assert!(matches!(store.get("dns:a1:token"), Err(Error::PresenceRequired(_))));
+        store.set("app:other", "v").unwrap();
+        assert!(store.get("app:other").unwrap().is_some());
 
         // Readable only while an unlock is alive; nested unlocks are counted.
         let a = store.unlock();

@@ -14,6 +14,7 @@ import { Welcome } from "./components/Welcome";
 import { SessionState, useStore } from "./store";
 import { ActivityView } from "./views/ActivityView";
 import { DockerView } from "./views/DockerView";
+import { DomainsView } from "./views/DomainsView";
 import { EditorPane, FilesView } from "./views/FilesView";
 import { KnownHostsView } from "./views/KnownHostsView";
 import { SettingsView } from "./views/SettingsView";
@@ -42,6 +43,7 @@ const GLOBAL_TITLES = {
   activity: ["Activity log", "Every change across all servers, hash-chained so tampering is detectable"],
   knownHosts: ["Security", "Saved credentials and the host identities you've verified"],
   settings: ["Settings", "Preferences for Orbital on this Mac"],
+  domains: ["Domains", "DNS records at your provider, and whether the world sees them yet"],
 } as const;
 
 /** Software with a screen of its own; everything else gets the generic tool tab. */
@@ -173,7 +175,7 @@ export default function App() {
               <button className="btn" style={{ marginLeft: "auto" }} onClick={() => setGlobalView(null)}>Close</button>
             </div>
           </header>
-          {globalView === "activity" ? <ActivityView /> : globalView === "settings" ? <SettingsView /> : <KnownHostsView />}
+          {globalView === "activity" ? <ActivityView /> : globalView === "settings" ? <SettingsView /> : globalView === "domains" ? <DomainsView /> : <KnownHostsView />}
         </div>
       )}
       {order.map((id) => <Workspace key={id} s={sessions[id]} visible={!!showWorkspace && id === active} />)}

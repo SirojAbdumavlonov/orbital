@@ -1,5 +1,5 @@
 import { PROTOCOL_NAMES } from "./ProfileDialog";
-import { Activity, ChevronLeft, ChevronRight, KeyRound, Loader2, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sun, Unplug } from "lucide-react";
+import { Activity, ChevronLeft, ChevronRight, Globe, KeyRound, Loader2, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sun, Unplug } from "lucide-react";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useMemo } from "react";
 import { Profile } from "../lib/api";
@@ -82,6 +82,9 @@ export function Sidebar() {
         ))}
       </div>
       <div className="sidebar-foot">
+        <button className={`nav-item ${globalView === "domains" ? "on" : ""}`} onClick={() => setGlobalView("domains")}>
+          <Globe size={15} /> Domains
+        </button>
         <button className={`nav-item ${globalView === "activity" ? "on" : ""}`} onClick={() => setGlobalView("activity")}>
           <Activity size={15} /> Activity log
         </button>

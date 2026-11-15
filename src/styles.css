@@ -20,6 +20,7 @@
   --amber-ink: #241a05;
   --amber-soft: #f2b5441f;
   --ok: #4fbf8b;
+  --ok-line: #4fbf8b66;
   --bad: #e5645a;
   --warn: #e8a23a;
   --idle: #6e7a91;
@@ -58,6 +59,7 @@
   --amber-ink: #241a05;
   --amber-soft: #e3a32c2e;
   --ok: #23905f;
+  --ok-line: #23905f66;
   --bad: #cc4237;
   --warn: #b97710;
   --idle: #8b95a8;
@@ -497,3 +499,44 @@ tr.dim td { opacity: .6; }
 .deploy-steps li.failed { color: var(--bad); }
 .deploy-output { margin: 0; max-height: 320px; overflow: auto; padding: 10px 12px; background: var(--term-bg); font: 11.5px/1.5 var(--mono); color: var(--ink-2); white-space: pre-wrap; word-break: break-all; user-select: text; }
 .warn-notice { display: flex; gap: 8px; align-items: flex-start; color: var(--warn); margin: 0 16px 12px; }
+
+/* ---------- Domains (DNS) ---------- */
+.domains { flex: 1; display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 0; }
+.domains-nav { border-right: 1px solid var(--slate-4); background: var(--slate-0); padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; overflow: auto; }
+.domains-nav .grow, .dns-check .grow, .check-form .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.domains-account { margin-top: 12px; display: flex; flex-direction: column; gap: 2px; }
+.domains-account-head { display: flex; align-items: center; gap: 6px; padding: 0 4px 4px 8px; color: var(--ink-3); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.domains-account-head .icon-btn { width: 22px; height: 22px; }
+.domains-note { padding: 4px 8px; font-size: 12px; }
+.domains-note.bad-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.domains-add { margin-top: 14px; justify-content: center; }
+.domains-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.domains-main.scroll { overflow: auto; }
+.check-form { align-items: flex-end; flex-wrap: wrap; gap: 10px; }
+.check-form .field.grow { white-space: normal; min-width: 180px; }
+.notice.bad-text { display: block; }
+.dns-check { margin: 12px 0; border: 1px solid var(--slate-4); border-radius: var(--radius-s); background: var(--slate-2); }
+.drawer-section .dns-check { margin: 12px 14px; }
+.dns-check.ok { border-color: var(--ok-line); }
+.dns-check-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+.dns-check-head > div { display: flex; flex-direction: column; gap: 2px; }
+.dns-check-head small { color: var(--ink-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.dns-check .footnote { padding: 0 12px 12px; }
+.dns-check .notice { margin: 0 12px 12px; }
+.dns-answers td { font-size: 12px; white-space: pre-line; }
+.dns-answers td:first-child { width: 1%; }
+.dns-answers svg { vertical-align: -2px; margin-right: 4px; }
+.steps { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+.input-suffix { display: flex; align-items: center; gap: 6px; }
+.input-suffix .input { flex: 1; }
+.input-suffix > span { white-space: nowrap; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+.row-fields { display: flex; gap: 12px; }
+.row-fields .field { flex: 1; }
+.dns-ready { display: flex; flex-direction: column; gap: 6px; }
+.dns-ready.ok { border-color: var(--ok-line); }
+.dns-ready-head, .dns-ready-foot { display: flex; align-items: center; gap: 8px; }
+.dns-ready-head .spacer { flex: 1; }
+.dns-ready-row { display: flex; align-items: baseline; gap: 6px; font-size: 12.5px; flex-wrap: wrap; }
+.dns-ready-row svg { align-self: center; }
+.dns-ready-foot { justify-content: space-between; margin-top: 2px; }
+.split.no-drawer { grid-template-columns: minmax(0, 1fr); }

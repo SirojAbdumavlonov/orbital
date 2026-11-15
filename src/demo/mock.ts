@@ -11,6 +11,35 @@ const profiles: any[] = [
   { id: "p3", name: "staging", host: "staging.example.dev", port: 2222, username: "sirojiddin", authMethod: "password", keyPath: null, sudoMode: "auto", groupName: "Staging", color: null, initialPath: null, jumpProfileId: null, protocol: "sftp", region: null, pathStyle: false, createdAt: "2026-10-01T10:00:00Z", lastConnectedAt: null },
 ];
 const trusted = new Set(["p1", "p2"]);
+
+// DNS: one Cloudflare account; records "propagate" a few seconds after they change.
+const dnsAccounts: any[] = [{ id: "cf1", name: "Personal", kind: "cloudflare", createdAt: "2026-11-01T10:00:00Z" }];
+const dnsZones: Record<string, any[]> = {
+  cf1: [
+    { id: "z1", name: "example.com", status: "active", nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"] },
+    { id: "z2", name: "shop-demo.dev", status: "pending", nameServers: ["kim.ns.cloudflare.com", "lou.ns.cloudflare.com"] },
+  ],
+};
+let dnsRecs: any[] = [
+  { zone: "z1", id: "r1", name: "example.com", type: "A", content: "203.0.113.10", ttl: 1, proxied: true, proxiable: true, priority: null, comment: null, at: 0 },
+  { zone: "z1", id: "r2", name: "www.example.com", type: "CNAME", content: "example.com", ttl: 1, proxied: true, proxiable: true, priority: null, comment: null, at: 0 },
+  { zone: "z1", id: "r3", name: "shop.example.com", type: "A", content: "203.0.113.10", ttl: 300, proxied: false, proxiable: true, priority: null, comment: "nginx on prod-web-01", at: 0 },
+  { zone: "z1", id: "r4", name: "example.com", type: "MX", content: "mail.example.com", ttl: 3600, proxied: false, proxiable: false, priority: 10, comment: null, at: 0 },
+  { zone: "z1", id: "r5", name: "example.com", type: "TXT", content: "v=spf1 include:_spf.example.net -all", ttl: 3600, proxied: false, proxiable: false, priority: null, comment: null, at: 0 },
+  { zone: "z1", id: "r6", name: "example.com", type: "NS", content: "ada.ns.cloudflare.com", ttl: 86400, proxied: false, proxiable: false, priority: null, comment: null, at: 0 },
+];
+const dnsOut = ({ zone: _z, at: _a, ...r }: any) => ({ ...r });
+const DOH = [["Cloudflare 1.1.1.1", 4000], ["Google 8.8.8.8", 12000]] as const;
+function dnsCheck(name: string, type: string, expected: string[], any = false) {
+  const norm = (v: string) => v.replace(/\.$/, "").toLowerCase();
+  const answers = DOH.map(([resolver, delay]) => {
+    const recs = dnsRecs.filter((r) => r.name === name && Date.now() - r.at >= delay);
+    const values = recs.filter((r) => r.type === type).map((r) => (r.proxied ? (type === "A" ? "104.21.48.12" : "2606:4700:3033::6815:300c") : type === "MX" ? `${r.priority} ${r.content}` : r.content));
+    const ok = recs.length > 0 && (expected.length === 0 ? values.length > 0 : any ? expected.some((e) => values.map(norm).includes(norm(e))) : expected.every((e) => values.map(norm).includes(norm(e))));
+    return { resolver, status: recs.length || name.endsWith("example.org") ? "NOERROR" : "NXDOMAIN", values, ok, error: null };
+  });
+  return { name, type, expected, answers, verified: answers.every((a) => a.ok), checkedAt: new Date().toISOString() };
+}
 const presence = { available: true, enabled: false };
 
 const NGINX = `user www-data;
@@ -572,6 +601,35 @@ export function install() {
       case "compose_action": return { stdout: "", stderr: args.action === "pull" ? ` ✔ web Pulled\n ✔ api Pulled\n` : ` ✔ Container ${args.target.project}-${args.target.service ?? "web"}-1  ${args.action === "up" ? "Running" : "Started"}\n`, exitCode: 0, durationMs: 2400 };
       case "audit_query": return audit.filter((e) => !args.filter?.category || e.category === args.filter.category);
       case "audit_verify": return { ok: true, checked: 1284, firstBrokenSeq: null };
+      case "dns_accounts": return dnsAccounts.map((a) => ({ ...a }));
+      case "add_dns_account": {
+        await new Promise((r) => setTimeout(r, 600));
+        if (args.token.trim().length < 8) throw { kind: "PermissionDenied", message: "Cloudflare refused the token: Invalid API Token (1000)" };
+        const a = { id: "cf" + (dnsAccounts.length + 1), name: args.name, kind: "cloudflare", createdAt: new Date().toISOString() };
+        dnsAccounts.push(a);
+        dnsZones[a.id] = [{ id: "z9", name: "side-project.app", status: "active", nameServers: [] }];
+        return a;
+      }
+      case "remove_dns_account": dnsAccounts.splice(dnsAccounts.findIndex((a) => a.id === args.id), 1); return null;
+      case "dns_zones": await new Promise((r) => setTimeout(r, 300)); return dnsZones[args.accountId] ?? [];
+      case "dns_records": await new Promise((r) => setTimeout(r, 300)); return dnsRecs.filter((r) => r.zone === args.zoneId).map(dnsOut);
+      case "create_dns_record": case "update_dns_record": {
+        const i = args.input;
+        if ((i.type === "A" && !/^\d+\.\d+\.\d+\.\d+$/.test(i.content.trim())) || !i.content.trim()) throw { kind: "InvalidInput", message: `not an IPv4 address for a A record: "${i.content}"` };
+        const name = !i.name.trim() || i.name.trim() === "@" ? args.zone : i.name.trim().endsWith(args.zone) ? i.name.trim() : `${i.name.trim()}.${args.zone}`;
+        const proxiable = ["A", "AAAA", "CNAME"].includes(i.type);
+        const rec = { zone: args.zoneId, id: args.recordId ?? "r" + Math.floor(Math.random() * 1e6), name, type: i.type, content: i.content.trim(), ttl: i.ttl, proxied: proxiable && i.proxied, proxiable, priority: i.type === "MX" ? i.priority ?? 10 : null, comment: null, at: Date.now() };
+        dnsRecs = [...dnsRecs.filter((r) => r.id !== rec.id), rec];
+        return dnsOut(rec);
+      }
+      case "delete_dns_record": dnsRecs = dnsRecs.filter((r) => r.id !== args.recordId); return null;
+      case "dns_check": await new Promise((r) => setTimeout(r, 400)); return dnsCheck(args.name.trim().toLowerCase(), args.rtype, args.expected);
+      case "server_public_addresses": return args.sessionId === "s-p1" ? ["203.0.113.10", "2001:db8::1"] : args.sessionId === "s-p3" ? ["198.51.100.7"] : [];
+      case "dns_points_here": {
+        await new Promise((r) => setTimeout(r, 500));
+        const addresses = args.sessionId === "s-p1" ? ["203.0.113.10", "2001:db8::1"] : args.sessionId === "s-p3" ? ["198.51.100.7"] : [];
+        return { addresses, checks: addresses.length ? args.names.map((n: string) => dnsCheck(n, "A", addresses.filter((a) => !a.includes(":")), true)) : [] };
+      }
       case "known_hosts": return [{ host: "203.0.113.10", port: 22, algorithm: "ssh-ed25519", fingerprint: "SHA256:Xw2pRfa9Lw0YkU0yV5mJbqzB2hD1tXcN7pGfE4sHjAo", addedAt: "2026-10-01T10:00:00Z" }];
       case "open_terminal": {
         const cb = (m: any) => args.onEvent.onmessage(m);

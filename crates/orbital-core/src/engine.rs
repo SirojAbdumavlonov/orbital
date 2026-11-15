@@ -9,6 +9,7 @@ use crate::cron::{self, CronChange, CronReport};
 use crate::databases::{self, BackupFormat, DbKind, DbServer, RedisAction, RedisInfo};
 use crate::db::Database;
 use crate::deploy::{self, App, AppInput, Checkout, DeployRecord, RestartKind};
+use crate::dns::{self, DnsAccount, DnsCheck, DnsRecord, DnsZone, ProviderKind, RecordInput, RecordType};
 use crate::docker::{ComposeAction, ComposeTarget, Container, ContainerAction, ContainerStats};
 use crate::error::{Error, Result};
 use crate::fail2ban::{self, Fail2banStatus};
@@ -80,6 +81,10 @@ pub struct Engine {
     tunnels: Mutex<HashMap<String, Tunnel>>,
     log_streams: Mutex<HashMap<String, (String, Stream)>>,
     deploying: Mutex<HashSet<String>>,
+    /// DNS provider clients, kept once their token was read (like a connection).
+    dns_clients: Mutex<HashMap<String, Arc<dns::Cloudflare>>>,
+    /// Cloudflare's API and the resolvers asked when checking; tests point them at local servers.
+    dns_endpoints: std::sync::RwLock<(String, Vec<(String, String)>)>,
 }
 
 /// What a deploy reports while it runs.
@@ -114,6 +119,11 @@ impl Engine {
             tunnels: Mutex::new(HashMap::new()),
             log_streams: Mutex::new(HashMap::new()),
             deploying: Mutex::new(HashSet::new()),
+            dns_clients: Mutex::new(HashMap::new()),
+            dns_endpoints: std::sync::RwLock::new((
+                dns::CLOUDFLARE_API.into(),
+                dns::RESOLVERS.iter().map(|(l, u)| (l.to_string(), u.to_string())).collect(),
+            )),
         }
     }
 
@@ -2086,6 +2096,213 @@ impl Engine {
             "csv" => audit::export_csv(&self.db),
             _ => audit::export_json(&self.db),
         }
+    }
+}
+
+// ---------- DNS ----------
+
+impl Engine {
+    /// Point DNS calls somewhere else (tests use local mock servers).
+    #[doc(hidden)]
+    pub fn set_dns_endpoints(&self, cloudflare_api: &str, resolvers: Vec<(String, String)>) {
+        *self.dns_endpoints.write().unwrap_or_else(|p| p.into_inner()) = (cloudflare_api.into(), resolvers);
+    }
+
+    fn cloudflare_base(&self) -> String {
+        self.dns_endpoints.read().unwrap_or_else(|p| p.into_inner()).0.clone()
+    }
+
+    fn record_dns(&self, account: &DnsAccount, action: &str, target: &str, command: Option<String>, r: &Result<impl Sized>) {
+        let (outcome, details) = match r {
+            Ok(_) => (Outcome::Success, None),
+            Err(Error::PermissionDenied(m)) => (Outcome::Denied, Some(serde_json::json!({ "error": m }))),
+            Err(e) => (
+                Outcome::Failure,
+                Some(serde_json::json!({ "error": e.to_string(), "kind": e.kind() })),
+            ),
+        };
+        self.record(
+            None,
+            NewEvent {
+                category: Some(Category::Dns),
+                action: action.into(),
+                server: Some(format!("{}: {}", account.kind.label(), account.name)),
+                target: Some(target.into()),
+                command,
+                outcome: Some(outcome),
+                details,
+                ..Default::default()
+            },
+        );
+    }
+
+    pub fn dns_accounts(&self) -> Result<Vec<DnsAccount>> {
+        dns::list_accounts(&self.db)
+    }
+
+    /// Save a provider account after checking that the token works (it must
+    /// be able to list zones). Nothing is saved when it doesn't.
+    pub async fn add_dns_account(&self, name: &str, kind: ProviderKind, token: &str) -> Result<DnsAccount> {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(Error::InvalidInput("paste the API token".into()));
+        }
+        let client = dns::Cloudflare::new(&self.cloudflare_base(), zeroize::Zeroizing::new(token.to_string()))?;
+        let probe = DnsAccount {
+            id: String::new(),
+            name: name.trim().to_string(),
+            kind,
+            created_at: String::new(),
+        };
+        if let Err(e) = client.zones().await {
+            self.record_dns(
+                &probe,
+                "dns.account_add",
+                &probe.name,
+                None,
+                &Err::<(), _>(Error::Other(e.to_string())),
+            );
+            return Err(e);
+        }
+        let account = dns::insert_account(&self.db, name, kind)?;
+        if let Err(e) = self.secrets.set(&dns::token_key(&account.id), token) {
+            let _ = dns::delete_account(&self.db, &account.id);
+            return Err(e);
+        }
+        self.dns_clients.lock().await.insert(account.id.clone(), Arc::new(client));
+        self.record_dns(&account, "dns.account_add", &account.name, None, &Ok(()));
+        Ok(account)
+    }
+
+    pub async fn remove_dns_account(&self, id: &str) -> Result<()> {
+        let account = dns::get_account(&self.db, id)?;
+        self.dns_clients.lock().await.remove(id);
+        self.secrets.delete(&dns::token_key(id))?;
+        dns::delete_account(&self.db, id)?;
+        self.record_dns(&account, "dns.account_remove", &account.name, None, &Ok(()));
+        Ok(())
+    }
+
+    /// The account's client, reading its token (through the Touch ID gate) the first time.
+    async fn dns_client(&self, id: &str) -> Result<(DnsAccount, Arc<dns::Cloudflare>)> {
+        let account = dns::get_account(&self.db, id)?;
+        if let Some(c) = self.dns_clients.lock().await.get(id) {
+            return Ok((account, c.clone()));
+        }
+        let key = dns::token_key(id);
+        let _unlock = if self.secrets.gate_enabled() && self.secrets.exists(&key)? {
+            self.verify_presence(format!("use the {} DNS token \"{}\"", account.kind.label(), account.name))
+                .await?;
+            Some(self.secrets.unlock())
+        } else {
+            None
+        };
+        let token = self
+            .secrets
+            .get(&key)?
+            .ok_or_else(|| Error::InvalidInput("this account's token is missing; remove the account and add it again".into()))?;
+        let client = Arc::new(dns::Cloudflare::new(&self.cloudflare_base(), token)?);
+        self.dns_clients.lock().await.insert(id.to_string(), client.clone());
+        Ok((account, client))
+    }
+
+    pub async fn dns_zones(&self, account_id: &str) -> Result<Vec<DnsZone>> {
+        self.dns_client(account_id).await?.1.zones().await
+    }
+
+    pub async fn dns_records(&self, account_id: &str, zone_id: &str) -> Result<Vec<DnsRecord>> {
+        self.dns_client(account_id).await?.1.records(zone_id).await
+    }
+
+    fn describe(r: &RecordInput) -> String {
+        let ttl = if r.ttl == 1 { "auto".to_string() } else { format!("{}s", r.ttl) };
+        let prio = r.priority.map(|p| format!("{p} ")).unwrap_or_default();
+        let proxy = if r.proxied { ", proxied" } else { "" };
+        format!("{} {} {prio}{} (ttl {ttl}{proxy})", r.rtype.as_str(), r.name, r.content)
+    }
+
+    pub async fn create_dns_record(&self, account_id: &str, zone_id: &str, zone: &str, input: &RecordInput) -> Result<DnsRecord> {
+        let (account, c) = self.dns_client(account_id).await?;
+        let r = dns::validate(input, zone)?;
+        let out = c.create(zone_id, &r).await;
+        self.record_dns(&account, "dns.record_create", &r.name, Some(Self::describe(&r)), &out);
+        out
+    }
+
+    pub async fn update_dns_record(
+        &self,
+        account_id: &str,
+        zone_id: &str,
+        zone: &str,
+        record_id: &str,
+        input: &RecordInput,
+    ) -> Result<DnsRecord> {
+        let (account, c) = self.dns_client(account_id).await?;
+        let r = dns::validate(input, zone)?;
+        let out = c.update(zone_id, record_id, &r).await;
+        self.record_dns(&account, "dns.record_update", &r.name, Some(Self::describe(&r)), &out);
+        out
+    }
+
+    /// `label` (type and name) is only for the activity log.
+    pub async fn delete_dns_record(&self, account_id: &str, zone_id: &str, record_id: &str, label: &str) -> Result<()> {
+        let (account, c) = self.dns_client(account_id).await?;
+        let out = c.delete(zone_id, record_id).await;
+        self.record_dns(&account, "dns.record_delete", label, None, &out);
+        out
+    }
+
+    /// What the public resolvers answer for `name`, compared with `expected`
+    /// (all of it must be there; empty means any answer).
+    pub async fn dns_check(&self, name: &str, rtype: RecordType, expected: &[String]) -> Result<DnsCheck> {
+        let resolvers = self.dns_endpoints.read().unwrap_or_else(|p| p.into_inner()).1.clone();
+        dns::check(&dns::http_client()?, &resolvers, name, rtype, expected, true).await
+    }
+
+    /// The server's addresses that the internet can reach: public addresses on
+    /// its interfaces, and the address Orbital connects to when that is public.
+    pub async fn server_public_addresses(&self, sid: &str) -> Result<Vec<String>> {
+        let s = self.session(sid).await?;
+        let mut out: Vec<std::net::IpAddr> = Vec::new();
+        if let Ok(ip) = s.profile.host.parse::<std::net::IpAddr>() {
+            out.push(ip);
+        }
+        if let Ok(info) = s.system_info().await {
+            for a in info.addresses {
+                if let Ok(ip) = a.address.split('/').next().unwrap_or_default().parse() {
+                    out.push(ip);
+                }
+            }
+        }
+        let mut seen = HashSet::new();
+        Ok(out
+            .into_iter()
+            .filter(dns::is_public)
+            .filter(|ip| seen.insert(*ip))
+            .map(|ip| ip.to_string())
+            .collect())
+    }
+
+    /// For each name: does it resolve to this server? (Before asking Let's Encrypt.)
+    /// A names are checked when the server has a public IPv4 address, else AAAA.
+    pub async fn dns_points_here(&self, sid: &str, names: &[String]) -> Result<(Vec<String>, Vec<DnsCheck>)> {
+        let addrs = self.server_public_addresses(sid).await?;
+        let v4: Vec<String> = addrs.iter().filter(|a| !a.contains(':')).cloned().collect();
+        let (rtype, want) = if v4.is_empty() {
+            (RecordType::AAAA, addrs.clone())
+        } else {
+            (RecordType::A, v4)
+        };
+        let resolvers = self.dns_endpoints.read().unwrap_or_else(|p| p.into_inner()).1.clone();
+        let http = dns::http_client()?;
+        let mut checks = Vec::new();
+        if want.is_empty() {
+            return Ok((addrs, checks));
+        }
+        for n in names.iter().take(20) {
+            checks.push(dns::check(&http, &resolvers, n, rtype, &want, false).await?);
+        }
+        Ok((addrs, checks))
     }
 }
 

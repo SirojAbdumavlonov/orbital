@@ -223,7 +223,7 @@ export interface ContainerStats {
 
 export type ContainerAction = "start" | "stop" | "restart" | "pause" | "unpause" | "remove" | "forceRemove";
 
-export type AuditCategory = "connection" | "file" | "config" | "service" | "docker" | "terminal" | "command" | "security";
+export type AuditCategory = "connection" | "file" | "config" | "service" | "docker" | "terminal" | "command" | "security" | "dns";
 export interface AuditEvent {
   seq: number;
   id: string;
@@ -705,6 +705,30 @@ export interface SshdReport {
   sessions: { user: string; tty: string; since: string; from: string | null }[];
 }
 
+// ---------- DNS ----------
+
+export type DnsProvider = "cloudflare";
+export type DnsType = "A" | "AAAA" | "CNAME" | "TXT" | "MX";
+
+export interface DnsAccount { id: string; name: string; kind: DnsProvider; createdAt: string }
+export interface DnsZone { id: string; name: string; status: string; nameServers: string[] }
+export interface DnsRecord {
+  id: string;
+  name: string;
+  /** May be a type Orbital doesn't create (NS, SRV, CAA, …). */
+  type: string;
+  content: string;
+  /** Seconds; 1 = automatic. */
+  ttl: number;
+  proxied: boolean;
+  proxiable: boolean;
+  priority: number | null;
+  comment: string | null;
+}
+export interface DnsRecordInput { type: DnsType; name: string; content: string; ttl: number; proxied: boolean; priority: number | null }
+export interface ResolverAnswer { resolver: string; status: string; values: string[]; ok: boolean; error: string | null }
+export interface DnsCheck { name: string; type: DnsType; expected: string[]; answers: ResolverAnswer[]; verified: boolean; checkedAt: string }
+
 export type TermMessage = { type: "data"; data: string } | { type: "exit"; code: number | null };
 
 export const api = {
@@ -841,6 +865,24 @@ export const api = {
   terminalWrite: (terminalId: string, data: string) => invoke<void>("terminal_write", { terminalId, data }),
   terminalResize: (terminalId: string, cols: number, rows: number) => invoke<void>("terminal_resize", { terminalId, cols, rows }),
   terminalClose: (terminalId: string) => invoke<void>("terminal_close", { terminalId }),
+
+  dnsAccounts: () => invoke<DnsAccount[]>("dns_accounts"),
+  addDnsAccount: (name: string, kind: DnsProvider, token: string) => invoke<DnsAccount>("add_dns_account", { name, kind, token }),
+  removeDnsAccount: (id: string) => invoke<void>("remove_dns_account", { id }),
+  dnsZones: (accountId: string) => invoke<DnsZone[]>("dns_zones", { accountId }),
+  dnsRecords: (accountId: string, zoneId: string) => invoke<DnsRecord[]>("dns_records", { accountId, zoneId }),
+  createDnsRecord: (accountId: string, zoneId: string, zone: string, input: DnsRecordInput) =>
+    invoke<DnsRecord>("create_dns_record", { accountId, zoneId, zone, input }),
+  updateDnsRecord: (accountId: string, zoneId: string, zone: string, recordId: string, input: DnsRecordInput) =>
+    invoke<DnsRecord>("update_dns_record", { accountId, zoneId, zone, recordId, input }),
+  /** `label` ("A www.example.com") is only for the activity log. */
+  deleteDnsRecord: (accountId: string, zoneId: string, recordId: string, label: string) =>
+    invoke<void>("delete_dns_record", { accountId, zoneId, recordId, label }),
+  /** What public resolvers answer for a name; `expected` empty means any answer. */
+  dnsCheck: (name: string, rtype: DnsType, expected: string[]) => invoke<DnsCheck>("dns_check", { name, rtype, expected }),
+  serverPublicAddresses: (sessionId: string) => invoke<string[]>("server_public_addresses", { sessionId }),
+  /** Do these names resolve to this server? */
+  dnsPointsHere: (sessionId: string, names: string[]) => invoke<{ addresses: string[]; checks: DnsCheck[] }>("dns_points_here", { sessionId, names }),
 
   auditQuery: (filter: { profileId?: string; category?: AuditCategory; search?: string; limit?: number; beforeSeq?: number }) =>
     invoke<AuditEvent[]>("audit_query", { filter }),

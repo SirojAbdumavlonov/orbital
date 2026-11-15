@@ -1,7 +1,7 @@
-import { FlaskConical, Lock, Plus, RefreshCw, RotateCw, Trash2 } from "lucide-react";
+import { CheckCircle2, CircleDashed, FlaskConical, Globe, Lock, Plus, RefreshCw, RotateCw, Trash2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { confirm, Modal } from "../components/ui";
-import { api, asApiError, Certificate, CertbotStatus, CertMethod, ExecOutput, IssueRequest } from "../lib/api";
+import { api, asApiError, Certificate, CertbotStatus, CertMethod, DnsCheck, ExecOutput, IssueRequest } from "../lib/api";
 import { useRemote, withSafetyOverride } from "../lib/remote";
 import { SessionState, useStore } from "../store";
 
@@ -18,6 +18,60 @@ const METHODS: { id: CertMethod; label: string; hint: string }[] = [
   { id: "webroot", label: "Folder", hint: "Places a check file in the folder your site already serves. Your web server config isn't touched; point it at the certificate yourself." },
   { id: "standalone", label: "Standalone", hint: "certbot starts its own web server on port 80, so nothing else may be using port 80 while it runs." },
 ];
+
+/**
+ * Does each name already point at this server? Let's Encrypt checks exactly
+ * that, so a name that doesn't is the most common reason a request fails.
+ */
+function DnsReadiness({ sid, names }: { sid: string; names: string[] }) {
+  const [res, setRes] = useState<{ addresses: string[]; checks: DnsCheck[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const key = names.filter((n) => n.includes(".") && !n.startsWith("*")).join(" ");
+  const run = () => {
+    if (!key) { setRes(null); return; }
+    setBusy(true);
+    api.dnsPointsHere(sid, key.split(" "))
+      .then((r) => { setRes(r); setError(null); })
+      .catch((e) => setError(asApiError(e).message))
+      .finally(() => setBusy(false));
+  };
+  useEffect(() => {
+    const t = setTimeout(run, 700);
+    return () => clearTimeout(t);
+  }, [sid, key]);
+  if (!key) return null;
+  const bad = res?.checks.filter((c) => !c.verified) ?? [];
+  return (
+    <div className={`notice dns-ready ${res && bad.length === 0 && res.checks.length > 0 ? "ok" : ""}`} style={{ margin: 0 }}>
+      <div className="dns-ready-head">
+        <b>Do the names point at this server?</b>
+        <span className="spacer" />
+        <button className="icon-btn" aria-label="Check DNS again" onClick={run}><RefreshCw size={13} className={busy ? "spin" : ""} /></button>
+      </div>
+      {error && <div className="bad-text">{error}</div>}
+      {res && res.addresses.length === 0 && (
+        <div className="faint">Orbital couldn't find a public address on this server (it may sit behind a NAT or load balancer), so it can't tell. Check the names on the Domains page.</div>
+      )}
+      {res && res.checks.map((c) => {
+        const seen = [...new Set(c.answers.flatMap((a) => a.values))];
+        return (
+          <div key={c.name} className="dns-ready-row">
+            {c.verified ? <CheckCircle2 size={13} className="ok-text" /> : seen.length ? <XCircle size={13} className="bad-text" /> : <CircleDashed size={13} className="faint" />}
+            <span className="mono">{c.name}</span>
+            <span className="faint">{c.verified ? `→ ${c.expected.filter((e) => seen.includes(e)).join(", ")}` : seen.length ? `points at ${seen.join(", ")}, not this server (${res.addresses.join(", ")})` : `no ${c.type} record yet`}</span>
+          </div>
+        );
+      })}
+      {res && bad.length > 0 && (
+        <div className="dns-ready-foot">
+          <span className="faint">Let's Encrypt will refuse these until they point at {bad[0].expected.join(" or ")}.</span>
+          <button className="btn" onClick={() => useStore.getState().setGlobalView("domains")}><Globe size={13} /> Open Domains</button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function IssueDialog({ s, status, initialDomains, onClose, onDone }: { s: SessionState; status: CertbotStatus; initialDomains: string[]; onClose: () => void; onDone: (out: ExecOutput, title: string) => void }) {
   const sid = s.info.id;
@@ -75,6 +129,7 @@ function IssueDialog({ s, status, initialDomains, onClose, onDone }: { s: Sessio
             {suggest.map((d) => <button key={d} className={`chip ${list.includes(d) ? "on" : ""}`} onClick={() => add(d)}>{d}</button>)}
           </div>
         )}
+        <DnsReadiness sid={sid} names={list} />
         <div className="field"><span>How to prove you own the domain</span>
           <div className="segmented">
             {METHODS.map((x) => (

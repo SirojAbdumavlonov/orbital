@@ -10,6 +10,7 @@ pub mod cron;
 pub mod databases;
 pub mod db;
 pub mod deploy;
+pub mod dns;
 pub mod docker;
 pub mod engine;
 pub mod error;

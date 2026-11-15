@@ -101,6 +101,15 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE profiles ADD COLUMN region TEXT;
     ALTER TABLE profiles ADD COLUMN path_style INTEGER NOT NULL DEFAULT 0;
     "#,
+    // v5: DNS provider accounts (their API tokens are in the vault, not here).
+    r#"
+    CREATE TABLE dns_accounts (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    "#,
 ];
 
 impl Database {
