@@ -344,6 +344,8 @@ garbage line\n";
 
     /// The script must be valid POSIX sh and behave on a machine where most
     /// tools are missing.
+    // Runs the script meant for Linux servers through a local sh; Windows lacks the tools it reads.
+    #[cfg(unix)]
     #[test]
     fn script_runs_under_sh() {
         let out = std::process::Command::new("sh").arg("-c").arg(detect_script()).output().unwrap();

@@ -290,6 +290,8 @@ No IP address/network is ignored
         assert!(ban_command("sshd", "10.0.0.0/8").is_err());
     }
 
+    // Runs the script meant for Linux servers through a local sh; Windows lacks the tools it reads.
+    #[cfg(unix)]
     #[test]
     fn script_runs_under_sh() {
         let out = std::process::Command::new("sh").arg("-c").arg(STATUS_SCRIPT).output().unwrap();

@@ -939,6 +939,8 @@ SHELL=/bin/sh
         assert!(run_now_command("x;y", "true").is_err());
     }
 
+    // Runs the script meant for Linux servers through a local sh; Windows lacks the tools it reads.
+    #[cfg(unix)]
     #[test]
     fn script_runs_under_sh() {
         let out = std::process::Command::new("sh").arg("-c").arg(SCRIPT).output().unwrap();

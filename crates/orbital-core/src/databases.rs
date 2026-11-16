@@ -448,6 +448,8 @@ mod tests {
         assert_eq!(parse_backup_path("@@file /etc/passwd\n"), None);
     }
 
+    // Runs the script meant for Linux servers through a local sh; Windows lacks the tools it reads.
+    #[cfg(unix)]
     #[test]
     fn backup_script_is_valid_sh_and_cleans_up_on_failure() {
         // No database tools here: the dump fails, nothing is left in /tmp, exit is non-zero.
@@ -511,6 +513,8 @@ mod tests {
             .contains("redis-cli --no-auth-warning -n 2 FLUSHDB"));
     }
 
+    // Runs the script meant for Linux servers through a local sh; Windows lacks the tools it reads.
+    #[cfg(unix)]
     #[test]
     fn scripts_run_under_sh() {
         for script in [PG_LIST, MYSQL_LIST, MONGO_LIST] {

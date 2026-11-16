@@ -443,6 +443,8 @@ mod tests {
         assert!(haproxy_state_script("/run/../etc/x", "web", "a", HaServerState::Ready).is_err());
     }
 
+    // Runs the script meant for Linux servers through a local sh; Windows lacks the tools it reads.
+    #[cfg(unix)]
     #[test]
     fn scripts_run_under_sh() {
         for s in [APACHE_SCRIPT, HAPROXY_SCRIPT] {
