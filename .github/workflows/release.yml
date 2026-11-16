@@ -39,7 +39,7 @@ permissions:
 jobs:
   macos:
     name: macOS universal build
-    runs-on: macos-14
+    runs-on: macos-latest
     outputs:
       release_id: ${{ steps.build.outputs.releaseId }}
     steps:
