@@ -3,6 +3,7 @@ import {
   ArrowRightLeft, ArrowUp, Download, Eye, EyeOff, FilePlus, FileText, Folder, FolderPlus, FolderUp, Link2, Lock, Pencil, RefreshCw, Save,
   ShieldCheck, SquareTerminal, Trash2, Upload, X,
 } from "lucide-react";
+import { isMac, mod } from "../lib/platform";
 import Editor, { DiffEditor, DiffOnMount, OnMount } from "@monaco-editor/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { confirm, Modal } from "../components/ui";
@@ -151,13 +152,13 @@ function Browser({ s }: { s: SessionState }) {
         <button className="icon-btn" title={showHidden ? "Hide dotfiles" : "Show dotfiles"} aria-label="Toggle hidden files" onClick={() => setShowHidden(!showHidden)}>{showHidden ? <Eye size={15} /> : <EyeOff size={15} />}</button>
         <button className="icon-btn" title="New file" aria-label="New file" onClick={() => setNewItem("file")}><FilePlus size={15} /></button>
         <button className="icon-btn" title="New folder" aria-label="New folder" onClick={() => setNewItem("folder")}><FolderPlus size={15} /></button>
-        <button className="icon-btn" title="Upload files from this Mac (or drop files and folders here)" aria-label="Upload files" onClick={pickUpload}><Upload size={15} /></button>
-        <button className="icon-btn" title="Upload a folder from this Mac" aria-label="Upload folder" onClick={pickUploadFolder}><FolderUp size={15} /></button>
+        <button className="icon-btn" title="Upload files from this computer (or drop files and folders here)" aria-label="Upload files" onClick={pickUpload}><Upload size={15} /></button>
+        <button className="icon-btn" title="Upload a folder from this computer" aria-label="Upload folder" onClick={pickUploadFolder}><FolderUp size={15} /></button>
         {ssh && <button className="icon-btn" title="Open terminal in this folder" aria-label="Open terminal here" onClick={() => openTerminal(sid, s.cwd)}><SquareTerminal size={15} /></button>}
       </div>
       <div className="list" role="listbox" tabIndex={0} onKeyDown={(e) => {
         if (e.key === "Enter" && selected) openEntry(selected);
-        if ((e.key === "Backspace" && e.metaKey) && selected) remove(selected);
+        if (((e.key === "Backspace" && mod(e)) || (!isMac && e.key === "Delete")) && selected) remove(selected);
       }}>
         {error && <div className="empty"><div><h3>Can't read this folder</h3><p>{error}</p><button className="btn" onClick={() => go(s.info.home)}>Go to home folder</button></div></div>}
         {!error && visible.length === 0 && !loading && <div className="empty"><p>{filter ? "No matches in this folder." : "This folder is empty. Drop files here to upload."}</p></div>}
@@ -300,7 +301,7 @@ function CopyDialog({ s, entry, onClose }: { s: SessionState; entry: FileEntry; 
           <label className="field">
             <span>Into folder</span>
             <input className="input mono" value={dir} onChange={(e) => setDir(e.target.value)} />
-            <span className="hint">Will be created as <span className="mono">{valid ? joinPath(dir, entry.name) : "…"}</span>. Files travel through this Mac; the two servers don't connect to each other.</span>
+            <span className="hint">Will be created as <span className="mono">{valid ? joinPath(dir, entry.name) : "…"}</span>. Files travel through this computer; the two servers don't connect to each other.</span>
           </label>
           <label className="check">
             <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />

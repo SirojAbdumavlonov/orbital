@@ -29,6 +29,8 @@
   --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --sidebar: 252px;
+  /* Room for macOS's window buttons (traffic lights) left of our own controls. */
+  --lights-w: 84px;
   --btn-hover: #2a3549;
   --btn-hover-line: #3d4a64;
   --danger-ink: #ffb4ad;
@@ -103,8 +105,8 @@ input, textarea, select, button { font: inherit; color: inherit; }
 .app.no-sidebar { grid-template-columns: minmax(0, 1fr); }
 .app.no-sidebar > .sidebar { display: none; }
 /* With the sidebar hidden, its controls float beside the window buttons and the header makes room. */
-.float-nav { position: fixed; top: 0; left: 84px; height: 52px; z-index: 40; display: flex; align-items: center; gap: 2px; }
-.app.no-sidebar .header-top, .app.no-sidebar .session-strip { padding-left: 186px; }
+.float-nav { position: fixed; top: 0; left: var(--lights-w); height: 52px; z-index: 40; display: flex; align-items: center; gap: 2px; }
+.app.no-sidebar .header-top, .app.no-sidebar .session-strip { padding-left: calc(var(--lights-w) + 102px); }
 .app.no-sidebar .main > .empty, .app.no-sidebar .welcome { padding-top: 52px; }
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .drag { -webkit-app-region: drag; }
@@ -116,7 +118,7 @@ input, textarea, select, button { font: inherit; color: inherit; }
   border-right: 1px solid var(--slate-4);
   display: flex; flex-direction: column; min-height: 0;
 }
-.sidebar-top { height: 52px; padding: 0 12px 0 176px; display: flex; align-items: center; gap: 2px; }
+.sidebar-top { height: 52px; padding: 0 12px 0 calc(var(--lights-w) + 92px); display: flex; align-items: center; gap: 2px; }
 .sidebar-top .spacer { flex: 1; }
 .icon-btn:disabled { opacity: .35; cursor: default; }
 .sidebar-scroll { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
@@ -540,3 +542,6 @@ tr.dim td { opacity: .6; }
 .dns-ready-row svg { align-self: center; }
 .dns-ready-foot { justify-content: space-between; margin-top: 2px; }
 .split.no-drawer { grid-template-columns: minmax(0, 1fr); }
+
+/* Windows and Linux draw their own title bar above the page: no traffic lights to leave room for. */
+:root:not([data-platform="mac"]) { --lights-w: 8px; }

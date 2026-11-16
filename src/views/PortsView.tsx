@@ -85,7 +85,7 @@ export function PortsView({ s }: { s: SessionState }) {
                   </td>
                   <td className="mono muted">{p.unit ?? "—"}</td>
                   <td><FirewallBadge p={p} firewallActive={data.firewallActive} /></td>
-                  <td style={{ textAlign: "right" }}>{p.protocol === "tcp" && p.port !== 22 && <button className="icon-btn" aria-label={`Open port ${p.port} on this Mac`} title="Open on this Mac (tunnel)" onClick={() => forward(s, p.port, p.scope === "address" ? p.address : "localhost")}><Cable size={13} /></button>}</td>
+                  <td style={{ textAlign: "right" }}>{p.protocol === "tcp" && p.port !== 22 && <button className="icon-btn" aria-label={`Open port ${p.port} on this computer`} title="Open on this computer (tunnel)" onClick={() => forward(s, p.port, p.scope === "address" ? p.address : "localhost")}><Cable size={13} /></button>}</td>
                 </tr>
               ))}
             </tbody>

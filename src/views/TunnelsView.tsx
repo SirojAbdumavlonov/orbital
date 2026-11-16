@@ -34,7 +34,7 @@ export async function forward(s: SessionState, remotePort: number, remoteHost = 
     const t = await api.openTunnel(s.info.id, remoteHost, remotePort, localPort, known?.name ?? null);
     const at = address(t);
     copy(at);
-    toast({ kind: "success", title: `${known?.name ?? `Port ${remotePort}`} is on your Mac at ${at}`, body: `Copied to the clipboard. It stays open until you close it or disconnect.${t.localPort !== remotePort ? ` (${remotePort} was taken on this Mac, so ${t.localPort} is used.)` : ""}` });
+    toast({ kind: "success", title: `${known?.name ?? `Port ${remotePort}`} is on your computer at ${at}`, body: `Copied to the clipboard. It stays open until you close it or disconnect.${t.localPort !== remotePort ? ` (${remotePort} was taken on this computer, so ${t.localPort} is used.)` : ""}` });
     return t;
   } catch (e) {
     toast({ kind: "error", title: "Couldn't open the tunnel", body: asApiError(e).message });
@@ -42,7 +42,7 @@ export async function forward(s: SessionState, remotePort: number, remoteHost = 
   }
 }
 
-/** Ports on the server, available on this Mac through the SSH connection. */
+/** Ports on the server, available on this computer through the SSH connection. */
 export function TunnelsView({ s }: { s: SessionState }) {
   const toast = useStore((x) => x.toast);
   const sid = s.info.id;
@@ -87,12 +87,12 @@ export function TunnelsView({ s }: { s: SessionState }) {
   return (
     <div className="view">
       <div className="scroll">
-        <div className="section-title">Open on this Mac</div>
+        <div className="section-title">Open on this computer</div>
         {tunnels.length === 0 ? (
-          <div className="empty" style={{ flex: "none", padding: 18 }}><div><Cable size={24} className="faint" /><p>No tunnels yet. Pick a port below to use it from apps on your Mac, as if it ran locally.</p></div></div>
+          <div className="empty" style={{ flex: "none", padding: 18 }}><div><Cable size={24} className="faint" /><p>No tunnels yet. Pick a port below to use it from apps on your computer, as if it ran locally.</p></div></div>
         ) : (
           <table className="table">
-            <thead><tr><th>On your Mac</th><th /><th>On the server</th><th className="num">Connections</th><th className="num">Traffic</th><th /></tr></thead>
+            <thead><tr><th>On your computer</th><th /><th>On the server</th><th className="num">Connections</th><th className="num">Traffic</th><th /></tr></thead>
             <tbody>
               {tunnels.map((t) => (
                 <tr key={t.id}>
@@ -126,7 +126,7 @@ export function TunnelsView({ s }: { s: SessionState }) {
         <div className="tunnel-form">
           <label className="field"><span>Port on the server</span><input className="input mono" inputMode="numeric" placeholder="5432" value={remotePort} onChange={(e) => setRemotePort(e.target.value.replace(/\D/g, ""))} /></label>
           <label className="field"><span>Host, as the server sees it</span><input className="input mono" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} /></label>
-          <label className="field"><span>Port on this Mac</span><input className="input mono" inputMode="numeric" placeholder="same, if free" value={localPort} onChange={(e) => setLocalPort(e.target.value.replace(/\D/g, ""))} /></label>
+          <label className="field"><span>Port on this computer</span><input className="input mono" inputMode="numeric" placeholder="same, if free" value={localPort} onChange={(e) => setLocalPort(e.target.value.replace(/\D/g, ""))} /></label>
           <button className="btn primary" disabled={busy || !remotePort} onClick={() => open(Number(remotePort), remoteHost.trim() || "localhost", localPort ? Number(localPort) : null)}><Cable size={13} /> Open tunnel</button>
         </div>
         <p className="footnote">

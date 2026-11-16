@@ -32,6 +32,13 @@ let pending: Update = null;
 /** The version already announced in a toast, so background checks don't repeat it. */
 let announced: string | undefined;
 
+/**
+ * `npm run tauri dev` builds aren't installed copies: there is nothing to
+ * update, and asking would only log the updater's error. The demo (a fake
+ * backend) still shows the whole flow.
+ */
+export const updatesDisabled = import.meta.env.DEV && !import.meta.env.VITE_DEMO;
+
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export const useUpdates = create<UpdateState>((set, get) => ({
@@ -41,6 +48,10 @@ export const useUpdates = create<UpdateState>((set, get) => ({
   async check(quiet = false) {
     const busy = ["checking", "downloading", "ready"].includes(get().status);
     if (busy) return;
+    if (updatesDisabled) {
+      if (!quiet) set({ status: "error", error: "development builds don't update themselves; this works in the installed app", checkedAt: Date.now() });
+      return;
+    }
     set({ status: "checking", error: undefined });
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
@@ -105,7 +116,7 @@ export function useUpdateChecks() {
   const auto = useSettings((s) => s.autoUpdates);
   useEffect(() => {
     // Only inside the app (or the demo's mock backend), never in a plain browser.
-    if (!auto || !("__TAURI_INTERNALS__" in window)) return;
+    if (!auto || updatesDisabled || !("__TAURI_INTERNALS__" in window)) return;
     const quiet = () => void useUpdates.getState().check(true);
     const first = setTimeout(quiet, FIRST_CHECK_MS);
     const every = setInterval(quiet, EVERY_MS);

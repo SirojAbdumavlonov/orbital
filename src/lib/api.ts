@@ -765,7 +765,7 @@ export const api = {
   upload: (sessionId: string, localPath: string, remotePath: string) => invoke<number>("upload", { sessionId, localPath, remotePath }),
   download: (sessionId: string, remotePath: string, localPath: string) => invoke<number>("download", { sessionId, remotePath, localPath }),
 
-  /** Copy a file or folder from one connected server to another (streamed through this Mac). */
+  /** Copy a file or folder from one connected server to another (streamed through this computer). */
   copyBetween: (a: { srcSessionId: string; srcPath: string; dstSessionId: string; dstPath: string; overwrite: boolean }) =>
     invoke<TransferReport>("copy_between", a),
 
@@ -792,7 +792,7 @@ export const api = {
   certbotRenew: (sessionId: string, name: string | null, mode: RenewMode) => invoke<ExecOutput>("certbot_renew", { sessionId, name, mode }),
   certbotDelete: (sessionId: string, name: string, force = false) => invoke<ExecOutput>("certbot_delete", { sessionId, name, force }),
 
-  /** Forward 127.0.0.1:localPort on this Mac to remoteHost:remotePort as the server sees it. */
+  /** Forward 127.0.0.1:localPort on this computer to remoteHost:remotePort as the server sees it. */
   openTunnel: (sessionId: string, remoteHost: string, remotePort: number, localPort: number | null, label: string | null) =>
     invoke<TunnelInfo>("open_tunnel", { sessionId, remoteHost, remotePort, localPort, label }),
   closeTunnel: (id: string) => invoke<void>("close_tunnel", { id }),

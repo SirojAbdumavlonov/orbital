@@ -77,3 +77,26 @@ jobs:
         with:
           name: Orbital-macos
           path: target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+  windows:
+    name: Windows engine tests and installer
+    needs: [core, frontend]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      # Live tests need a Linux sshd; the unit tests and the mock DNS test run anywhere.
+      - name: Engine unit tests
+        run: cargo test -p orbital-core --lib --test dns_mock
+      - name: Clippy (engine and app crate)
+        run: cargo clippy -p orbital-core -p orbital --all-targets -- -D warnings
+      - name: Build the installer
+        run: npm run tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Orbital-windows
+          path: target/release/bundle/nsis/*.exe

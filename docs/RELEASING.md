@@ -43,7 +43,10 @@ offered: send the `.dmg` to whoever tests them.
      variable `RELEASES_REPO` to `you/orbital-releases`, and add a secret
      `RELEASES_TOKEN`, a fine-grained token with Contents: read and write on
      that repository.
-4. Optional: the `APPLE_*` secrets listed in `.github/workflows/release.yml`
+4. Optional: Windows code signing, so SmartScreen doesn't warn (Azure
+   Trusted Signing or a code-signing certificate, set up under
+   `bundle.windows` in `src-tauri/tauri.windows.conf.json`).
+5. Optional: the `APPLE_*` secrets listed in `.github/workflows/release.yml`
    for a signed and notarized app. Without them macOS warns on first open
    (System Settings → Privacy & Security → Open Anyway, once).
 
@@ -60,8 +63,10 @@ app to anyone.
    to preview). It bumps the version everywhere, dates the changelog section,
    commits and tags.
 3. `git push && git push origin v1.1.0`. The Release workflow builds a draft.
-4. Check the draft: it has `Orbital_1.1.0_universal.dmg`, `Orbital.app.tar.gz`,
-   its `.sig` and `latest.json`. Publish it. Installed copies see it at their
+4. Check the draft: it has `Orbital_1.1.0_universal.dmg`, `Orbital.app.tar.gz`
+   and its `.sig` (macOS), `Orbital_1.1.0_x64-setup.exe` and its `.sig`
+   (Windows; the Windows job runs after the macOS one and adds to the same
+   draft), and `latest.json` with both platforms. Publish it. Installed copies see it at their
    next check (launch, or within six hours); Settings → Check for updates
    finds it at once.
 

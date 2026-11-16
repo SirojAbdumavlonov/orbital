@@ -1,5 +1,6 @@
 import { PROTOCOL_NAMES } from "./ProfileDialog";
 import { Activity, ChevronLeft, ChevronRight, Globe, KeyRound, Loader2, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sun, Unplug } from "lucide-react";
+import { isMac, KEYS } from "../lib/platform";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useMemo } from "react";
 import { Profile } from "../lib/api";
@@ -33,7 +34,7 @@ export function Sidebar() {
         <button className="icon-btn" title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} onClick={() => setPref({ theme: theme === "dark" ? "light" : "dark" })}>
           {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
         </button>
-        <button className="icon-btn" title="Add server (⌘N)" aria-label="Add server" onClick={() => setEditing("new")}>
+        <button className="icon-btn" title={`Add server (${KEYS.newServer})`} aria-label="Add server" onClick={() => setEditing("new")}>
           <Plus size={16} />
         </button>
       </div>
@@ -109,11 +110,11 @@ export function NavButtons() {
   const setPref = useSettings((x) => x.set);
   return (
     <div className="float-nav">
-      <button className="icon-btn" title={`${hidden ? "Show" : "Hide"} sidebar (⌃⌘S)`} aria-label={hidden ? "Show sidebar" : "Hide sidebar"} onClick={() => setPref({ sidebarHidden: !hidden })}>
+      <button className="icon-btn" title={`${hidden ? "Show" : "Hide"} sidebar (${KEYS.sidebar})`} aria-label={hidden ? "Show sidebar" : "Hide sidebar"} onClick={() => setPref({ sidebarHidden: !hidden })}>
         {hidden ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
       </button>
-      <button className="icon-btn" title="Back (⌘[ or swipe right with two fingers)" aria-label="Back" disabled={navBack.length === 0} onClick={goBack}><ChevronLeft size={17} /></button>
-      <button className="icon-btn" title="Forward (⌘])" aria-label="Forward" disabled={navFwd.length === 0} onClick={goForward}><ChevronRight size={17} /></button>
+      <button className="icon-btn" title={`Back (${KEYS.back}${isMac ? " or swipe right with two fingers" : ""})`} aria-label="Back" disabled={navBack.length === 0} onClick={goBack}><ChevronLeft size={17} /></button>
+      <button className="icon-btn" title={`Forward (${KEYS.forward})`} aria-label="Forward" disabled={navFwd.length === 0} onClick={goForward}><ChevronRight size={17} /></button>
     </div>
   );
 }

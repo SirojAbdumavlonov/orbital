@@ -114,7 +114,7 @@ function AccountDialog({ onClose, onAdded }: { onClose: () => void; onAdded: (a:
         <label className="field"><span>Name in Orbital</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>API token</span>
           <input className="input mono" type="password" autoFocus value={token} onChange={(e) => setToken(e.target.value)} onKeyDown={(e) => e.key === "Enter" && token.trim() && save()} />
-          <small className="hint">Kept in Orbital's encrypted vault on this Mac (behind Touch ID when that is on), never in the activity log. Orbital checks it by listing your domains before saving it.</small>
+          <small className="hint">Kept in Orbital's encrypted vault on this computer (behind Touch ID when that is on), never in the activity log. Orbital checks it by listing your domains before saving it.</small>
         </label>
         {error && <div className="notice bad-text" style={{ margin: 0 }}>{error}</div>}
       </div>
@@ -190,8 +190,10 @@ export function CheckPanel({ name, type, expected, keepChecking, note }: { name:
   const [tries, setTries] = useState(0);
   const [polling, setPolling] = useState(keepChecking);
   const [next, setNext] = useState(0);
+  const [running, setRunning] = useState(true);
   const started = useRef(Date.now());
   const run = async () => {
+    setRunning(true);
     try {
       const c = await api.dnsCheck(name, type, expected);
       setCheck(c);
@@ -203,6 +205,7 @@ export function CheckPanel({ name, type, expected, keepChecking, note }: { name:
     } finally {
       setTries((n) => n + 1);
       setNext(POLL_SECS);
+      setRunning(false);
     }
   };
   useEffect(() => { run(); }, []);
@@ -222,17 +225,26 @@ export function CheckPanel({ name, type, expected, keepChecking, note }: { name:
   }, [polling]);
 
   const want = expected.length ? expected.join(", ") : "any answer";
+  // Every resolver that answered says the name doesn't exist at all.
+  const missing = !!check && check.answers.some((a) => !a.error) && check.answers.every((a) => a.error || a.status === "NXDOMAIN");
+  const title = check?.verified
+    ? expected.length ? "Live: every resolver answers correctly" : "Resolves: every resolver answers"
+    : running && !polling ? "Checking…"
+    : polling ? "Waiting for DNS…"
+    : error ? "Couldn't check"
+    : missing ? "This name doesn't exist in DNS yet"
+    : "Not live yet";
   return (
     <div className={`dns-check ${check?.verified ? "ok" : ""}`}>
       <div className="dns-check-head">
-        {check?.verified ? <CheckCircle2 size={16} className="ok-text" /> : polling ? <CircleDashed size={16} className="spin muted" /> : <XCircle size={16} className="bad-text" />}
+        {check?.verified ? <CheckCircle2 size={16} className="ok-text" /> : polling || running ? <CircleDashed size={16} className="spin muted" /> : <XCircle size={16} className="bad-text" />}
         <div className="grow">
-          <b>{check?.verified ? "Live: every resolver answers correctly" : polling ? "Waiting for DNS…" : error ? "Couldn't check" : "Not live yet"}</b>
+          <b>{title}</b>
           <small className="mono">{type} {name} → {want}</small>
         </div>
         {!check?.verified && (polling
           ? <span className="faint">checked {tries}× · next in {next}s</span>
-          : <button className="btn" onClick={() => { started.current = Date.now(); setPolling(keepChecking || expected.length > 0); run(); }}><RefreshCw size={13} /> Check again</button>)}
+          : <button className="btn" disabled={running} onClick={() => { started.current = Date.now(); setPolling(keepChecking || expected.length > 0); run(); }}><RefreshCw size={13} className={running ? "spin" : ""} /> {running ? "Checking…" : "Check again"}</button>)}
       </div>
       {note && <p className="footnote">{note}</p>}
       {error && <div className="notice bad-text">{error}</div>}
@@ -248,10 +260,12 @@ export function CheckPanel({ name, type, expected, keepChecking, note }: { name:
           </tbody>
         </table>
       )}
-      {!check?.verified && check && (
+      {!check?.verified && check && !running && (
         <p className="footnote">
-          New records usually appear within a minute or two. If the name existed before, resolvers keep the old answer until its TTL runs out.
-          {!polling && tries > 1 && " Still nothing after 15 minutes? Check that the domain's nameservers point at your DNS provider."}
+          {missing
+            ? "Neither resolver knows this name. For a domain itself, check that it is registered and that its nameservers are set at the registrar (that can take a few hours). For a name under it, add the record at your DNS provider."
+            : "New records usually appear within a minute or two. If the name existed before, resolvers keep the old answer until its TTL runs out."}
+          {!missing && !polling && tries > 1 && " Still nothing after 15 minutes? Check that the domain's nameservers point at your DNS provider."}
         </p>
       )}
     </div>

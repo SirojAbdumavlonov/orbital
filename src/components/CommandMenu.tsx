@@ -3,6 +3,7 @@ import { Activity, ArrowLeft, ArrowRight, Download, FolderTree, Globe, Gauge, Ke
 import { useEffect, useState } from "react";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useUpdates } from "../lib/updates";
+import { KEYS, mod } from "../lib/platform";
 import { Tab, useStore } from "../store";
 import { toolIcon } from "./ServerHeader";
 
@@ -44,7 +45,7 @@ export function CommandMenu() {
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (e.metaKey && e.key.toLowerCase() === "k") {
+      if (mod(e) && e.key.toLowerCase() === "k" && !(e.target as Element | null)?.closest?.(".xterm")) {
         e.preventDefault();
         setOpen((o) => !o);
       }
@@ -101,8 +102,8 @@ export function CommandMenu() {
           <Command.Item value="theme dark light mode" onSelect={run(() => setPref({ theme: theme === "dark" ? "light" : "dark" }))}>
             {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />} Switch to {theme === "dark" ? "light" : "dark"} mode
           </Command.Item>
-          <Command.Item value="back" onSelect={run(st.goBack)}><ArrowLeft size={14} /> Back<span className="cmdk-hint">⌘[</span></Command.Item>
-          <Command.Item value="forward" onSelect={run(st.goForward)}><ArrowRight size={14} /> Forward<span className="cmdk-hint">⌘]</span></Command.Item>
+          <Command.Item value="back" onSelect={run(st.goBack)}><ArrowLeft size={14} /> Back<span className="cmdk-hint">{KEYS.back}</span></Command.Item>
+          <Command.Item value="forward" onSelect={run(st.goForward)}><ArrowRight size={14} /> Forward<span className="cmdk-hint">{KEYS.forward}</span></Command.Item>
         </Command.Group>
       </Command.List>
     </Command.Dialog>

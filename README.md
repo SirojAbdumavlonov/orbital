@@ -64,7 +64,12 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together and [S
 
 ## Download
 
-Builds are attached to [GitHub Releases](../../releases). Until the app is signed with a Developer ID, macOS warns the first time it opens: System Settings → Privacy & Security → Open Anyway. After that Orbital updates itself: it checks for a new version at launch and every six hours, and Settings → Updates installs it with one click and a restart. How releases are made: [docs/RELEASING.md](docs/RELEASING.md).
+Builds for macOS (universal `.dmg`) and Windows 10/11 (`…_x64-setup.exe`) are attached to [GitHub Releases](../../releases).
+
+- **macOS**: until the app is signed with a Developer ID, macOS warns the first time it opens: System Settings → Privacy & Security → Open Anyway.
+- **Windows**: the installer needs no admin rights. Until it is code-signed, SmartScreen warns once: "More info" → "Run anyway". For sign-in with an SSH agent, start the "OpenSSH Authentication Agent" service (or Pageant).
+
+ After that Orbital updates itself: it checks for a new version at launch and every six hours, and Settings → Updates installs it with one click and a restart. How releases are made: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Getting started (macOS)
 

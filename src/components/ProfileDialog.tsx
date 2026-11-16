@@ -155,7 +155,7 @@ export function ProfileDialog() {
   return (
     <Modal
       title={existing ? "Edit server" : "Add server"}
-      subtitle="Passwords, passphrases and keys are saved encrypted on this Mac, and only Orbital can read them."
+      subtitle="Passwords, passphrases and keys are saved encrypted on this computer, and only Orbital can read them."
       onClose={close}
       footer={
         <>

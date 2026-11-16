@@ -1,4 +1,5 @@
 import { Fingerprint, Trash2 } from "lucide-react";
+import { isMac } from "../lib/platform";
 import { useEffect, useState } from "react";
 import { confirm } from "../components/ui";
 import { api, asApiError, KnownHost, PresenceStatus } from "../lib/api";
@@ -25,7 +26,7 @@ export function KnownHostsView() {
   }
   return (
     <div className="view">
-      {gate && (
+      {gate && isMac && (
         <div className="toolbar" style={{ alignItems: "flex-start", gap: 12, height: "auto", padding: "12px 16px" }}>
           <Fingerprint size={20} className="muted" style={{ flexShrink: 0, marginTop: 2 }} />
           <label className="check" style={{ flex: 1 }}>

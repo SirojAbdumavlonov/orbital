@@ -196,10 +196,18 @@ pub struct SshSession {
     pub connected_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// The user's home folder: `HOME` on macOS and Linux, `USERPROFILE` on Windows.
+pub fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|h| !h.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
 fn expand_tilde(p: &str) -> String {
-    if let Some(rest) = p.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return format!("{}/{}", home.to_string_lossy(), rest);
+    if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
+        if let Some(home) = home_dir() {
+            return home.join(rest).to_string_lossy().into_owned();
         }
     }
     p.to_string()
@@ -579,10 +587,39 @@ async fn keyboard_interactive(handle: &mut Handle<ClientHandler>, user: &str, pw
     Ok(false)
 }
 
-async fn agent_auth(handle: &mut Handle<ClientHandler>, user: &str) -> Result<bool> {
-    let mut agent = russh::keys::agent::client::AgentClient::connect_env()
+type AgentClient = russh::keys::agent::client::AgentClient<Box<dyn russh::keys::agent::client::AgentStream + Send + Unpin>>;
+
+/// The ssh-agent named by `SSH_AUTH_SOCK` (1Password, Secretive, …).
+#[cfg(not(windows))]
+async fn open_agent() -> Result<AgentClient> {
+    let a = russh::keys::agent::client::AgentClient::connect_env()
         .await
         .map_err(|e| Error::Ssh(format!("ssh-agent not available (is SSH_AUTH_SOCK set?): {e}")))?;
+    Ok(AgentClient::connect(a.into_inner()))
+}
+
+/// Windows: the OpenSSH agent service's pipe (or the pipe `SSH_AUTH_SOCK`
+/// names, as 1Password sets), then Pageant (PuTTY's agent).
+#[cfg(windows)]
+async fn open_agent() -> Result<AgentClient> {
+    use russh::keys::agent::client::AgentClient as Client;
+    let pipe = std::env::var("SSH_AUTH_SOCK")
+        .ok()
+        .filter(|p| p.starts_with(r"\\.\pipe\"))
+        .unwrap_or_else(|| r"\\.\pipe\openssh-ssh-agent".into());
+    if let Ok(a) = Client::connect_named_pipe(&pipe).await {
+        return Ok(AgentClient::connect(a.into_inner()));
+    }
+    match Client::connect_pageant().await {
+        Ok(a) => Ok(AgentClient::connect(a.into_inner())),
+        Err(e) => Err(Error::Ssh(format!(
+            "no SSH agent found: start the \"OpenSSH Authentication Agent\" service or Pageant ({e})"
+        ))),
+    }
+}
+
+async fn agent_auth(handle: &mut Handle<ClientHandler>, user: &str) -> Result<bool> {
+    let mut agent = open_agent().await?;
     let identities = agent.request_identities().await?;
     if identities.is_empty() {
         return Err(Error::Ssh("ssh-agent has no identities (run ssh-add)".into()));

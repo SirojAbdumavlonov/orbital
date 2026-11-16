@@ -12,7 +12,18 @@ use tauri::Manager;
 
 /// Orbital keeps its data in a hidden folder under Application Support
 /// (Finder doesn't show it): the database and the encrypted credentials vault.
+/// On Windows it is `%LOCALAPPDATA%\Orbital`: local, not the roaming profile,
+/// because the vault's key is tied to this computer.
+#[cfg_attr(windows, allow(dead_code))]
 const DATA_DIR: &str = ".orbital";
+
+fn data_dir(app: &tauri::App) -> tauri::Result<std::path::PathBuf> {
+    #[cfg(windows)]
+    let dir = app.path().local_data_dir()?.join("Orbital");
+    #[cfg(not(windows))]
+    let dir = app.path().data_dir()?.join(DATA_DIR);
+    Ok(dir)
+}
 
 /// Earlier homes of the database, newest first: Orbital's first data folder,
 /// and the folder from when the app was called Outpost.
@@ -63,7 +74,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            let dir = app.path().data_dir()?.join(DATA_DIR);
+            let dir = data_dir(app)?;
             if let Err(e) = move_old_data(&dir) {
                 tracing::error!("couldn't move data from the old folder: {e}");
             }

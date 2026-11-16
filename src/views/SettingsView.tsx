@@ -1,4 +1,5 @@
 import { Download, Monitor, Moon, RefreshCw, RotateCcw, Sun } from "lucide-react";
+import { isMac, isWindows, KEYS } from "../lib/platform";
 import { useEffect, useState } from "react";
 import { confirm } from "../components/ui";
 import { ThemePref, useSettings } from "../lib/settings";
@@ -81,7 +82,7 @@ function UpdateRow({ version }: { version: string }) {
   );
 }
 
-/** Preferences for the app itself (this Mac), not for any server. */
+/** Preferences for the app itself (this computer), not for any server. */
 export function SettingsView() {
   const st = useSettings();
   const { toast, setGlobalView } = useStore();
@@ -99,13 +100,13 @@ export function SettingsView() {
     toast({ kind: "success", title: "Remembered tabs cleared" });
   }
 
-  const themes: [ThemePref, string, typeof Sun][] = [["system", "Match macOS", Monitor], ["light", "Light", Sun], ["dark", "Dark", Moon]];
+  const themes: [ThemePref, string, typeof Sun][] = [["system", isMac ? "Match macOS" : "Match system", Monitor], ["light", "Light", Sun], ["dark", "Dark", Moon]];
   return (
     <div className="view">
       <div className="scroll">
         <div className="settings">
           <h3 className="settings-title">Appearance</h3>
-          <Row title="Theme" hint="Match macOS follows System Settings, including automatic dark mode at night.">
+          <Row title="Theme" hint={isMac ? "Match macOS follows System Settings, including automatic dark mode at night." : "Follows the light or dark mode set in Windows."}>
             <div className="segmented">
               {themes.map(([id, label, Icon]) => (
                 <button key={id} className={st.theme === id ? "on" : ""} onClick={() => st.set({ theme: id })}><Icon size={12} /> {label}</button>
@@ -142,7 +143,7 @@ export function SettingsView() {
           </Row>
 
           <h3 className="settings-title">Security</h3>
-          <Row title="Touch ID, trusted hosts" hint="Touch ID before saved passwords are used, and the host keys you have trusted.">
+          <Row title={isMac ? "Touch ID, trusted hosts" : "Trusted hosts"} hint={isMac ? "Touch ID before saved passwords are used, and the host keys you have trusted." : "The host keys you have trusted."}>
             <button className="btn" onClick={() => setGlobalView("knownHosts")}>Open Security</button>
           </Row>
 
@@ -155,8 +156,8 @@ export function SettingsView() {
           </Row>
 
           <h3 className="settings-title">About</h3>
-          <Row title={`Orbital ${version}`} hint="Servers, trusted host keys, the activity log and saved passwords (encrypted, readable only on this Mac) are kept in a hidden folder: ~/Library/Application Support/.orbital">
-            <span className="faint">⌘K command menu · ⌘[ back · ⌘] forward</span>
+          <Row title={`Orbital ${version}`} hint={`Servers, trusted host keys, the activity log and saved passwords (encrypted, readable only on this computer) are kept in ${isWindows ? "%LOCALAPPDATA%\\Orbital" : isMac ? "a hidden folder: ~/Library/Application Support/.orbital" : "~/.local/share/.orbital"}`}>
+            <span className="faint">{KEYS.commandMenu} command menu · {KEYS.back} back · {KEYS.forward} forward</span>
           </Row>
         </div>
       </div>

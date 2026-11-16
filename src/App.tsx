@@ -21,6 +21,7 @@ import { SettingsView } from "./views/SettingsView";
 import { useApplyTheme, useSettings } from "./lib/settings";
 import { usePanelResizing } from "./lib/resize";
 import { useUpdateChecks } from "./lib/updates";
+import { isSidebarKey, mod } from "./lib/platform";
 import { MonitorView } from "./views/MonitorView";
 import { NginxView } from "./views/NginxView";
 import { ToolView } from "./views/ToolView";
@@ -42,7 +43,7 @@ import { TerminalView } from "./views/TerminalView";
 const GLOBAL_TITLES = {
   activity: ["Activity log", "Every change across all servers, hash-chained so tampering is detectable"],
   knownHosts: ["Security", "Saved credentials and the host identities you've verified"],
-  settings: ["Settings", "Preferences for Orbital on this Mac"],
+  settings: ["Settings", "Preferences for Orbital on this computer"],
   domains: ["Domains", "DNS records at your provider, and whether the world sees them yet"],
 } as const;
 
@@ -143,13 +144,15 @@ export default function App() {
   useEffect(() => {
     loadProfiles();
     const keys = (e: KeyboardEvent) => {
-      // ⌃⌘S hides and shows the sidebar, as in Finder.
-      if (e.metaKey && e.ctrlKey && e.key.toLowerCase() === "s") {
+      // Ctrl shortcuts (Windows) mean something in a shell; the terminal keeps them.
+      if ((e.target as Element | null)?.closest?.(".xterm")) return;
+      // ⌃⌘S (Ctrl+Shift+S on Windows) hides and shows the sidebar, as in Finder.
+      if (isSidebarKey(e)) {
         e.preventDefault();
         const st = useSettings.getState();
         st.set({ sidebarHidden: !st.sidebarHidden });
       }
-      if (e.metaKey && e.key === "n") {
+      if (mod(e) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
         setEditing("new");
       }

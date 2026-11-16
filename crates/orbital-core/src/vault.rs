@@ -29,8 +29,24 @@ pub struct VaultStore {
     items: Mutex<BTreeMap<String, Zeroizing<String>>>,
 }
 
-/// A stable ID for this computer: the hardware UUID on macOS, machine-id on Linux.
+/// A stable ID for this computer: the hardware UUID on macOS, the MachineGuid
+/// Windows sets at install, machine-id on Linux.
 pub fn machine_id() -> String {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        if let Ok(o) = std::process::Command::new(format!(r"{root}\System32\reg.exe"))
+            .args(["query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            if let Some(id) = parse_machine_guid(&String::from_utf8_lossy(&o.stdout)) {
+                return id;
+            }
+        }
+    }
     #[cfg(target_os = "macos")]
     {
         if let Ok(o) = std::process::Command::new("/usr/sbin/ioreg")
@@ -53,6 +69,16 @@ pub fn machine_id() -> String {
         }
     }
     String::new()
+}
+
+/// `reg query … /v MachineGuid` output → the GUID.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_machine_guid(out: &str) -> Option<String> {
+    out.lines()
+        .find(|l| l.trim_start().starts_with("MachineGuid"))
+        .and_then(|l| l.split_whitespace().last())
+        .filter(|g| g.len() >= 32)
+        .map(String::from)
 }
 
 #[cfg(unix)]
@@ -177,6 +203,16 @@ impl SecretStore for VaultStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_windows_machine_guid() {
+        let out = "\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography\r\n    MachineGuid    REG_SZ    6f1e0c2b-9a3d-4c55-8e21-0b7d9f3a1c42\r\n\r\n";
+        assert_eq!(parse_machine_guid(out).as_deref(), Some("6f1e0c2b-9a3d-4c55-8e21-0b7d9f3a1c42"));
+        assert_eq!(
+            parse_machine_guid("ERROR: The system was unable to find the specified registry key"),
+            None
+        );
+    }
 
     fn dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("orbital-vault-{name}-{}", std::process::id()));

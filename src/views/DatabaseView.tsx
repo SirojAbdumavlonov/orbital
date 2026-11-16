@@ -55,7 +55,7 @@ function BackupDialog({ s, kind, db, onClose }: { s: SessionState; kind: DbKind;
     mongo: `mongorestore --gzip --archive=${db.name}.archive.gz`,
   }[kind];
   return (
-    <Modal title={`Back up ${db.name}`} subtitle="Orbital dumps the database on the server, downloads the file to this Mac, and deletes the copy on the server." onClose={busy ? undefined : onClose}
+    <Modal title={`Back up ${db.name}`} subtitle="Orbital dumps the database on the server, downloads the file to this computer, and deletes the copy on the server." onClose={busy ? undefined : onClose}
       footer={<><button className="btn" disabled={busy} onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={go}>{busy ? <><Loader2 size={13} className="spin" /> Backing up…</> : <><Download size={13} /> Choose where to save…</>}</button></>}>
       <div className="form">
         {kind === "postgres" && (
@@ -128,7 +128,7 @@ export function DatabaseView({ s, toolId }: { s: SessionState; toolId: string })
             </tbody>
           </table>
           {list.length === 0 && <div className="empty" style={{ flex: "none" }}><p>No databases yet{showSystem ? "" : " besides the system ones"}.</p></div>}
-          <p className="footnote">Backups are made on the server with {kind === "postgres" ? "pg_dump" : kind === "mysql" ? "mysqldump" : "mongodump"}, downloaded to this Mac, and removed from the server. Each one is recorded in the activity log.</p>
+          <p className="footnote">Backups are made on the server with {kind === "postgres" ? "pg_dump" : kind === "mysql" ? "mysqldump" : "mongodump"}, downloaded to this computer, and removed from the server. Each one is recorded in the activity log.</p>
         </div>
       )}
       {backup && <BackupDialog s={s} kind={kind} db={backup} onClose={() => setBackup(null)} />}

@@ -16,10 +16,32 @@ use std::time::Duration;
 pub const CLOUDFLARE_API: &str = "https://api.cloudflare.com/client/v4";
 
 /// Public resolvers asked when checking a name: (label, JSON DoH endpoint).
+/// By IP address, not name: the check must not depend on this Mac's own DNS
+/// (which may cache the old answer, or not resolve `dns.google` at all, as on
+/// some networks). Both certificates cover these IPs, so TLS still verifies.
 pub const RESOLVERS: &[(&str, &str)] = &[
-    ("Cloudflare 1.1.1.1", "https://cloudflare-dns.com/dns-query"),
-    ("Google 8.8.8.8", "https://dns.google/resolve"),
+    ("Cloudflare 1.1.1.1", "https://1.1.1.1/dns-query"),
+    ("Google 8.8.8.8", "https://8.8.8.8/resolve"),
 ];
+
+/// reqwest's message plus its causes ("… (Connect) <- operation timed out"),
+/// shortened to what a person can act on.
+pub fn net_error(e: &reqwest::Error) -> String {
+    let mut causes = Vec::new();
+    let mut src = std::error::Error::source(e);
+    while let Some(s) = src {
+        causes.push(s.to_string());
+        src = s.source();
+    }
+    let last = causes.last().cloned().unwrap_or_default().to_lowercase();
+    if e.is_timeout() || last.contains("timed out") {
+        "no answer (timed out); the network may block this resolver".into()
+    } else if e.is_connect() {
+        format!("couldn't connect: {}", causes.last().cloned().unwrap_or_else(|| e.to_string()))
+    } else {
+        causes.last().cloned().unwrap_or_else(|| e.to_string())
+    }
+}
 
 pub fn token_key(account_id: &str) -> String {
     format!("dns:{account_id}:token")
@@ -327,8 +349,8 @@ pub fn matches(rtype: RecordType, expected: &[String], values: &[String], all: b
 
 pub fn http_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(20))
+        .connect_timeout(Duration::from_secs(6))
+        .timeout(Duration::from_secs(12))
         .user_agent(concat!("Orbital/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| Error::Other(e.to_string()))
@@ -354,11 +376,11 @@ pub async fn check(
             .header("accept", "application/dns-json");
         async move {
             let r = async {
-                let resp = req.send().await.map_err(|e| Error::Other(e.to_string()))?;
+                let resp = req.send().await.map_err(|e| Error::Other(net_error(&e)))?;
                 if !resp.status().is_success() {
                     return Err(Error::Other(format!("HTTP {}", resp.status())));
                 }
-                let body = resp.bytes().await.map_err(|e| Error::Other(e.to_string()))?;
+                let body = resp.bytes().await.map_err(|e| Error::Other(net_error(&e)))?;
                 parse_doh(&body, rtype)
             }
             .await;
@@ -513,7 +535,7 @@ impl Cloudflare {
         let resp = req
             .send()
             .await
-            .map_err(|e| Error::Other(format!("couldn't reach Cloudflare: {e}")))?;
+            .map_err(|e| Error::Other(format!("couldn't reach Cloudflare: {}", net_error(&e))))?;
         let status = resp.status();
         let bytes = resp.bytes().await.map_err(|e| Error::Other(e.to_string()))?;
         let v: Value = serde_json::from_slice(&bytes)
@@ -786,5 +808,52 @@ mod tests {
         assert!(b.get("proxied").is_none());
         let a = validate(&input(RecordType::A, "x", "203.0.113.1"), "example.com").unwrap();
         assert_eq!(record_body(&a)["proxied"], false);
+    }
+}
+
+#[cfg(test)]
+mod real {
+    use super::*;
+
+    /// Against the real public resolvers: `cargo test -p orbital-core real_resolvers -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn real_resolvers() {
+        let http = http_client().unwrap();
+        for (label, url) in RESOLVERS {
+            let r = http
+                .get(*url)
+                .query(&[("name", "example.com"), ("type", "A")])
+                .header("accept", "application/dns-json")
+                .send()
+                .await;
+            match r {
+                Ok(resp) => println!(
+                    "{label}: HTTP {} {:?}",
+                    resp.status(),
+                    resp.bytes()
+                        .await
+                        .map(|b| String::from_utf8_lossy(&b).chars().take(120).collect::<String>())
+                ),
+                Err(e) => {
+                    let mut msg = e.to_string();
+                    let mut src = std::error::Error::source(&e);
+                    while let Some(s) = src {
+                        msg.push_str(&format!(" <- {s}"));
+                        src = s.source();
+                    }
+                    println!("{label}: ERROR {msg}");
+                }
+            }
+        }
+        let resolvers: Vec<(String, String)> = RESOLVERS.iter().map(|(l, u)| (l.to_string(), u.to_string())).collect();
+        for name in ["example.com", "devlabs.life"] {
+            let c = check(&http, &resolvers, name, RecordType::A, &[], true).await.unwrap();
+            println!(
+                "check {name}: verified={} {:?}",
+                c.verified,
+                c.answers.iter().map(|a| (&a.status, &a.values, &a.error)).collect::<Vec<_>>()
+            );
+        }
     }
 }

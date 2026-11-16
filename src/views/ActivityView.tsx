@@ -72,7 +72,7 @@ export function ActivityView({ profileId }: { profileId?: string }) {
                   <tr>
                     <td colSpan={profileId ? 5 : 6} style={{ background: "var(--slate-2)" }}>
                       <dl className="kv" style={{ padding: "4px 0" }}>
-                        <dt>Actor</dt><dd>{e.actor} (this Mac) as {e.server?.split("@")[0] ?? "—"}</dd>
+                        <dt>Actor</dt><dd>{e.actor} (this computer) as {e.server?.split("@")[0] ?? "—"}</dd>
                         {e.command && <><dt>Command sent</dt><dd className="mono">{e.command}</dd></>}
                         {e.details && <><dt>Details</dt><dd className="mono">{JSON.stringify(e.details, null, 1)}</dd></>}
                         <dt>Entry hash</dt><dd className="mono faint">{e.hash}</dd>

@@ -1,7 +1,7 @@
 name: Release
 
-# Push a tag like v1.0.0 to build the macOS app and attach it to a draft
-# GitHub Release. Review the draft, then publish it.
+# Push a tag like v1.0.0 to build the macOS app and the Windows installer and
+# attach them to a draft GitHub Release. Review the draft, then publish it.
 #
 # Signing and notarization run when these repository secrets are set
 # (Settings → Secrets and variables → Actions); without them the build is
@@ -40,6 +40,8 @@ jobs:
   macos:
     name: macOS universal build
     runs-on: macos-14
+    outputs:
+      release_id: ${{ steps.build.outputs.releaseId }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -76,6 +78,7 @@ jobs:
           [ -n "$notes" ] || notes="See CHANGELOG.md for what changed."
           { echo "notes<<NOTES_END"; echo "$notes"; echo "NOTES_END"; } >> "$GITHUB_OUTPUT"
       - uses: tauri-apps/tauri-action@v0
+        id: build
         env:
           GITHUB_TOKEN: ${{ vars.RELEASES_REPO && secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -96,3 +99,45 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           includeUpdaterJson: true
           args: --target universal-apple-darwin --config ${{ steps.prep.outputs.config }}
+
+  # Runs after macOS and adds to the same draft release, so the two builds
+  # never race to create it or to write latest.json (each adds its platforms).
+  windows:
+    name: Windows installer
+    needs: macos
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Update settings and destination
+        id: prep
+        shell: bash
+        env:
+          RELEASES_REPO: ${{ vars.RELEASES_REPO }}
+        run: |
+          dest="${RELEASES_REPO:-$GITHUB_REPOSITORY}"
+          echo "owner=${dest%%/*}" >> "$GITHUB_OUTPUT"
+          echo "repo=${dest#*/}" >> "$GITHUB_OUTPUT"
+          cat > "$RUNNER_TEMP/release.conf.json" <<JSON
+          {"bundle": {"createUpdaterArtifacts": true},
+           "plugins": {"updater": {"endpoints": ["https://github.com/$dest/releases/latest/download/latest.json"]}}}
+          JSON
+          echo "config=$RUNNER_TEMP/release.conf.json" >> "$GITHUB_OUTPUT"
+      # Unsigned for now: Windows SmartScreen warns on first run ("More info" →
+      # "Run anyway"). Code signing (e.g. Azure Trusted Signing) is configured in
+      # bundle.windows of tauri.windows.conf.json when there is a certificate.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ vars.RELEASES_REPO && secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.macos.outputs.release_id }}
+          owner: ${{ steps.prep.outputs.owner }}
+          repo: ${{ steps.prep.outputs.repo }}
+          includeUpdaterJson: true
+          args: --config ${{ steps.prep.outputs.config }}

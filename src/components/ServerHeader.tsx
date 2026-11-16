@@ -25,7 +25,7 @@ export const toolIcon = (t?: DetectedTool) => (t && CATEGORY_ICON[t.category]) |
 const BUILTIN: Record<string, { name: string; hint: string; icon: typeof Gauge }> = {
   deploy: { name: "Deploy", hint: "Pull, build and restart your app; roll back", icon: Rocket },
   logs: { name: "Logs", hint: "Follow log files, services and containers live", icon: ScrollText },
-  tunnels: { name: "Tunnels", hint: "Use the server's ports from this Mac", icon: ArrowLeftRight },
+  tunnels: { name: "Tunnels", hint: "Use the server's ports from this computer", icon: ArrowLeftRight },
   ports: { name: "Open ports", hint: "What listens where, and who can reach it", icon: Cable },
   users: { name: "Users", hint: "Accounts, groups, sudo and SSH keys", icon: UsersIcon },
 };

@@ -40,7 +40,7 @@ function load(): Settings {
   }
 }
 
-/** App preferences. They describe this Mac, not a server, so they live in local storage. */
+/** App preferences. They describe this computer, not a server, so they live in local storage. */
 export const useSettings = create<Settings & { set(p: Partial<Settings>): void; reset(): void }>((set, get) => ({
   ...load(),
   set(p) {

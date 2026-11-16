@@ -119,7 +119,7 @@ export function Prompts() {
       />
       <label className="check">
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-        <span>Remember on this Mac (encrypted)</span>
+        <span>Remember on this computer (encrypted)</span>
       </label>
     </Modal>
   );

@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { navKey } from "./platform";
 import { useStore } from "../store";
 
 /** Places where horizontal scrolling or the keys belong to the content, not to navigation. */
@@ -36,10 +37,11 @@ export function useNavigationGestures() {
       else if (sum > 140) { fired = true; useStore.getState().goForward(); }
     };
     const onKey = (e: KeyboardEvent) => {
-      if (!e.metaKey || (e.key !== "[" && e.key !== "]")) return;
+      const dir = navKey(e);
+      if (!dir) return;
       if ((e.target as Element).closest?.(OWN_INPUT)) return;
       e.preventDefault();
-      if (e.key === "[") useStore.getState().goBack();
+      if (dir < 0) useStore.getState().goBack();
       else useStore.getState().goForward();
     };
     const onMouse = (e: MouseEvent) => {

@@ -51,8 +51,8 @@ pub fn check(db: &Database, host: &str, port: u16, key: &PublicKey) -> Result<Ho
         });
     }
     // Fall back to the user's OpenSSH known_hosts.
-    if let Some(home) = std::env::var_os("HOME") {
-        let path = std::path::Path::new(&home).join(".ssh/known_hosts");
+    if let Some(home) = crate::ssh::home_dir() {
+        let path = home.join(".ssh").join("known_hosts");
         if path.exists() {
             match russh::keys::check_known_hosts_path(host, port, key, &path) {
                 Ok(true) => return Ok(HostKeyStatus::Trusted),
