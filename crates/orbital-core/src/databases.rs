@@ -462,6 +462,7 @@ mod tests {
         assert_eq!(leftovers(), before);
     }
 
+    #[cfg(unix)]
     fn whoami() -> String {
         String::from_utf8(std::process::Command::new("id").arg("-un").output().unwrap().stdout)
             .unwrap()
@@ -469,6 +470,7 @@ mod tests {
             .into()
     }
 
+    #[cfg(unix)]
     fn leftovers() -> usize {
         std::fs::read_dir("/tmp")
             .map(|d| {
