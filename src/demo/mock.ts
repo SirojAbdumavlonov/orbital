@@ -86,7 +86,16 @@ const metric = () => {
     hostname: "prod-web-01", osName: "Ubuntu 24.04.1 LTS", kernel: "Linux 6.8.0-45-generic x86_64",
     cpuModel: "AMD EPYC 7B13 64-Core Processor", cores: 8, load: [1.42 + Math.random() * 0.3, 1.21, 0.98],
     memTotal: 16_658_984_960, memAvailable: 7_100_000_000 - Math.random() * 2e8, memUsed: 9_558_984_960 + Math.random() * 2e8,
-    memCached: 4_900_000_000, swapTotal: 2_147_483_648, swapUsed: 182_000_000, uptimeSecs: 3_456_789 + (t % 1000),
+    memCached: 4_900_000_000, swapTotal: 2_147_483_648, swapUsed: 182_000_000,
+    memory: (() => {
+      const total = 16_658_984_960, free = 2_150_000_000 - Math.random() * 1e8, buffCache = 5_210_000_000;
+      return {
+        installed: 17_179_869_184, used: total - free - buffCache, buffCache, free, buffers: 310_000_000, pageCache: 4_590_000_000,
+        anon: 7_480_000_000, shared: 212_000_000, slabReclaimable: 310_000_000, slabUnreclaimable: 196_000_000, kernelStack: 24_000_000,
+        pageTables: 88_000_000, dirty: 3_400_000 + Math.random() * 2e6, committed: 11_900_000_000, commitLimit: 10_476_975_104,
+        active: 8_100_000_000, inactive: 5_300_000_000, swapCached: 21_000_000, hugePages: 0,
+      };
+    })(), uptimeSecs: 3_456_789 + (t % 1000),
     disks: [
       { filesystem: "/dev/nvme0n1p1", fsType: "ext4", mount: "/", totalBytes: 160e9, usedBytes: 61e9, availableBytes: 91e9, usedPercent: 40.1 },
       { filesystem: "/dev/nvme1n1", fsType: "xfs", mount: "/var/lib/docker", totalBytes: 500e9, usedBytes: 455e9, availableBytes: 45e9, usedPercent: 91.0 },

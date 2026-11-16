@@ -91,6 +91,25 @@ fn start_uptime(app: tauri::AppHandle, engine: &Arc<Engine>) {
     tauri::async_runtime::spawn(engine.clone().run_uptime());
 }
 
+/// Outside an .app bundle (`npm run tauri dev`), macOS has no icon for the
+/// process and shows a blank document in the Dock, ⌘Tab and Mission Control.
+/// Give it Orbital's icon. A bundled app already has it from icon.icns.
+#[cfg(target_os = "macos")]
+fn set_app_icon() {
+    use objc2::{AllocAnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+    let bundled = std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"));
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    if bundled {
+        return;
+    }
+    let data = NSData::with_bytes(include_bytes!("../icons/icon.png"));
+    if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
+        unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&image)) };
+    }
+}
+
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -105,6 +124,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(commands::UptimeWatch::default())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            set_app_icon();
             let dir = app.path().data_dir()?.join(DATA_DIR);
             if let Err(e) = move_old_data(&dir) {
                 tracing::error!("couldn't move data from the old folder: {e}");

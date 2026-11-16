@@ -245,6 +245,13 @@ async fn full_workflow_password_auth() {
     let m1 = engine.metrics(&sid).await.unwrap();
     assert!(m1.snapshot.cores >= 1);
     assert!(m1.snapshot.mem_total > 0);
+    let mem = &m1.snapshot.memory;
+    assert_eq!(
+        mem.used + mem.buff_cache + mem.free,
+        m1.snapshot.mem_total,
+        "the memory breakdown adds up"
+    );
+    assert!(mem.installed.is_none_or(|b| b >= m1.snapshot.mem_total));
     tokio::time::sleep(Duration::from_millis(500)).await;
     let m2 = engine.metrics(&sid).await.unwrap();
     assert!(m2.cpu_percent.is_some(), "second sample yields a CPU rate");

@@ -152,6 +152,30 @@ export interface Proc {
   command: string;
 }
 
+/** Where the memory goes (bytes); used + buffCache + free = memTotal, like `free`. */
+export interface MemoryDetail {
+  /** RAM in the machine, when the server's /sys says. */
+  installed: number | null;
+  used: number;
+  buffCache: number;
+  free: number;
+  buffers: number;
+  pageCache: number;
+  anon: number;
+  shared: number;
+  slabReclaimable: number;
+  slabUnreclaimable: number;
+  kernelStack: number;
+  pageTables: number;
+  dirty: number;
+  committed: number;
+  commitLimit: number;
+  active: number;
+  inactive: number;
+  swapCached: number;
+  hugePages: number;
+}
+
 export interface Metrics {
   hostname: string;
   osName: string;
@@ -165,6 +189,7 @@ export interface Metrics {
   memCached: number;
   swapTotal: number;
   swapUsed: number;
+  memory: MemoryDetail;
   uptimeSecs: number;
   disks: Disk[];
   net: { name: string; rxBytes: number; txBytes: number }[];

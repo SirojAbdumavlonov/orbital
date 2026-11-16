@@ -24,6 +24,8 @@
   --warn: #e8a23a;
   --idle: #6e7a91;
   --bad-soft: #e5645a2e;
+  --mem-cache: #8fb4ff;
+  --mem-free: #2f3a50;
   --warn-soft: #e8a23a59;
   --radius-s: 6px;
   --radius-m: 10px;
@@ -64,6 +66,8 @@
   --warn: #b97710;
   --idle: #8b95a8;
   --bad-soft: #cc423724;
+  --mem-cache: #6f95dd;
+  --mem-free: #d5dbe5;
   --warn-soft: #b9771052;
   --btn-hover: #e3e8ef;
   --btn-hover-line: #c3cbd8;
@@ -528,3 +532,17 @@ tr.dim td { opacity: .6; }
 .uptime-changes { list-style: none; margin: 0; padding: 0 14px 18px; font-size: 12px; }
 .uptime-changes li { padding: 6px 0; border-bottom: 1px solid var(--row-line); }
 .uptime-changes li .mono { margin: 2px 0 0 14px; }
+
+/* ---------- Monitor: memory details ---------- */
+.mem-head { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+.mem-stack { display: flex; height: 12px; border-radius: 4px; overflow: hidden; background: var(--mem-free); }
+.mem-stack i, .mem-legend i { display: block; height: 100%; }
+.mem-stack i.used, .mem-legend i.used { background: var(--amber); }
+.mem-stack i.cache, .mem-legend i.cache { background: var(--mem-cache); }
+.mem-stack i.free, .mem-legend i.free { background: var(--mem-free); }
+.mem-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 8px 0 4px; font-size: 12px; color: var(--ink-2); }
+.mem-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.mem-legend i { width: 9px; height: 9px; border-radius: 2px; }
+.mem-legend b { color: var(--ink); font-weight: 500; }
+.mem-details .kv dt { cursor: help; }
+@media (max-width: 900px) { .mem-head { grid-template-columns: 1fr; } }
