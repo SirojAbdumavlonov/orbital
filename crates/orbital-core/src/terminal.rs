@@ -5,7 +5,9 @@
 //! `sudo -i` (or `sudo -s` to stay in a chosen folder). With a saved sudo
 //! password, sudo asks with a marker prompt; the reader hides the marker and
 //! answers once with the password, which sudo reads with echo off, so it is
-//! never shown on screen, sent through the UI, or logged.
+//! never shown on screen, sent through the UI, or logged. Keys typed before
+//! sudo has accepted it are held back (`InputGate`): sudo would otherwise read
+//! them as the password, and the real password would then reach the shell.
 
 use crate::error::Result;
 use crate::profiles::SudoMode;
@@ -29,12 +31,17 @@ pub struct Terminal {
     /// The shell runs as root (through sudo).
     pub root: bool,
     writer: Arc<ChannelWriteHalf<Msg>>,
+    gate: Arc<tokio::sync::Mutex<InputGate>>,
     reader_task: JoinHandle<()>,
 }
 
 impl Terminal {
     pub async fn write(&self, data: &[u8]) -> Result<()> {
-        self.writer.data(data).await?;
+        // The lock is held while writing, so held keys always go out first.
+        let mut gate = self.gate.lock().await;
+        if let Some(now) = gate.push(data) {
+            self.writer.data(&now[..]).await?;
+        }
         Ok(())
     }
 
@@ -70,6 +77,85 @@ pub(crate) fn shell_command(cwd: Option<&str>, root: Option<SudoMode>) -> Option
              exec \"${{SHELL:-/bin/sh}}\" -l",
             cd.unwrap_or_default()
         )),
+    }
+}
+
+/// Keys typed while a root shell is still being set up. Most of the time it
+/// is open and passes everything through.
+pub(crate) struct InputGate {
+    held: Option<Vec<u8>>,
+}
+
+/// Type-ahead beyond this is dropped rather than kept without limit.
+const MAX_HELD: usize = 64 * 1024;
+
+impl InputGate {
+    pub(crate) fn new(hold: bool) -> Self {
+        Self { held: hold.then(Vec::new) }
+    }
+
+    /// What to send now: `None` while the gate is closed (the keys are kept).
+    pub(crate) fn push(&mut self, data: &[u8]) -> Option<Vec<u8>> {
+        match &mut self.held {
+            Some(buf) => {
+                if buf.len() + data.len() <= MAX_HELD {
+                    buf.extend_from_slice(data);
+                }
+                None
+            }
+            None => Some(data.to_vec()),
+        }
+    }
+
+    /// Open the gate and hand back what was typed meanwhile, to send.
+    pub(crate) fn open(&mut self) -> Vec<u8> {
+        self.held.take().unwrap_or_default()
+    }
+
+    /// Open the gate and forget what was typed: sudo now wants the password
+    /// from the user, and earlier keys would be taken as a wrong one.
+    pub(crate) fn open_discarding(&mut self) {
+        self.held = None;
+    }
+}
+
+/// Remove `secret` from terminal output: a last guard in case a terminal
+/// echoed the password after all.
+pub(crate) fn redact(data: &[u8], secret: &[u8]) -> Vec<u8> {
+    if secret.is_empty() || data.len() < secret.len() {
+        return data.to_vec();
+    }
+    let mut out = Vec::with_capacity(data.len());
+    let mut i = 0;
+    while i < data.len() {
+        if data[i..].starts_with(secret) {
+            i += secret.len();
+        } else {
+            out.push(data[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// After the password was sent: has sudo accepted it? Decided on the first
+/// output that isn't only line breaks.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    Undecided,
+    Accepted,
+    Refused,
+}
+
+pub(crate) fn verdict(out: &[u8]) -> Verdict {
+    if out.iter().all(|b| b.is_ascii_whitespace()) {
+        return Verdict::Undecided;
+    }
+    let text = String::from_utf8_lossy(out);
+    if text.contains(SUDO_MARKER) || text.contains("Sorry, try again") || text.contains("incorrect password") {
+        Verdict::Refused
+    } else {
+        Verdict::Accepted
     }
 }
 
@@ -163,37 +249,89 @@ impl SshSession {
         }
         let (mut read, writer) = ch.split();
         let writer = Arc::new(writer);
+        let gate = Arc::new(tokio::sync::Mutex::new(InputGate::new(root_mode == Some(SudoMode::Password))));
         let answer: Option<Secret> = match root_mode {
             Some(SudoMode::Password) => self.sudo_password.clone(),
             _ => None,
         };
         let mut filter = PromptFilter::new(root_mode == Some(SudoMode::Password));
         let w = writer.clone();
+        let g = gate.clone();
         let reader_task = tokio::spawn(async move {
+            // Send what was typed while the gate was closed, and open it.
+            let release = |keep: bool| {
+                let (g, w) = (g.clone(), w.clone());
+                async move {
+                    let mut gate = g.lock().await;
+                    if keep {
+                        let held = gate.open();
+                        if !held.is_empty() {
+                            let _ = w.data(&held[..]).await;
+                        }
+                    } else {
+                        gate.open_discarding();
+                    }
+                }
+            };
             let mut answer = answer;
+            // The password just sent, until sudo has accepted or refused it.
+            let mut sent: Option<Secret> = None;
+            // Whether typed keys may still be held back.
+            let mut gated = filter.waiting;
             let mut code = None;
             loop {
                 // While waiting for sudo's prompt, give up after a moment (cached
-                // credentials or a NOPASSWD rule mean there won't be one).
-                let msg = if filter.waiting {
-                    match tokio::time::timeout(Duration::from_secs(3), read.wait()).await {
+                // credentials or a NOPASSWD rule mean there won't be one). While
+                // waiting for its verdict, give up after longer (PAM delays).
+                let wait = if filter.waiting {
+                    Some(Duration::from_secs(3))
+                } else if sent.is_some() {
+                    Some(Duration::from_secs(10))
+                } else {
+                    None
+                };
+                let msg = match wait {
+                    Some(d) => match tokio::time::timeout(d, read.wait()).await {
                         Ok(m) => m,
                         Err(_) => {
                             let held = filter.flush();
                             if !held.is_empty() {
                                 sink(TermEvent::Data(held));
                             }
+                            sent = None;
+                            gated = false;
+                            release(true).await;
                             continue;
                         }
-                    }
-                } else {
-                    read.wait().await
+                    },
+                    None => read.wait().await,
                 };
                 let Some(msg) = msg else { break };
                 match msg {
                     ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => match filter.feed(&data) {
                         Filtered::Hold => {}
-                        Filtered::Show(out) => sink(TermEvent::Data(PromptFilter::relabel(&out))),
+                        Filtered::Show(out) => {
+                            let out = match &sent {
+                                Some(pw) => {
+                                    let out = redact(&out, pw.as_bytes());
+                                    match verdict(&out) {
+                                        Verdict::Undecided => {}
+                                        Verdict::Accepted => {
+                                            sent = None;
+                                            release(true).await;
+                                        }
+                                        // The user answers the next prompt; held keys would be read as the password.
+                                        Verdict::Refused => {
+                                            sent = None;
+                                            release(false).await;
+                                        }
+                                    }
+                                    out
+                                }
+                                None => out,
+                            };
+                            sink(TermEvent::Data(PromptFilter::relabel(&out)))
+                        }
                         Filtered::Answer(out) => {
                             if !out.is_empty() {
                                 sink(TermEvent::Data(out));
@@ -203,15 +341,27 @@ impl SshSession {
                                     let mut line = zeroize::Zeroizing::new(pw.as_bytes().to_vec());
                                     line.push(b'\n');
                                     let _ = w.data(&line[..]).await;
+                                    sent = Some(pw);
                                 }
-                                // No saved password: let the user type it.
-                                None => sink(TermEvent::Data(SUDO_PROMPT.as_bytes().to_vec())),
+                                // No saved password: let the user type it (earlier keys are dropped,
+                                // or sudo would take them as a wrong password).
+                                None => {
+                                    release(false).await;
+                                    sink(TermEvent::Data(SUDO_PROMPT.as_bytes().to_vec()));
+                                }
                             }
                         }
                     },
                     ChannelMsg::ExitStatus { exit_status } => code = Some(exit_status),
                     ChannelMsg::Close => break,
                     _ => {}
+                }
+                // No prompt to answer and no verdict pending (sudo needed no
+                // password, or the output wasn't a prompt): stop holding keys.
+                // `release` is idempotent, so the paths above may have done it.
+                if gated && !filter.waiting && sent.is_none() {
+                    gated = false;
+                    release(true).await;
                 }
             }
             sink(TermEvent::Exit(code));
@@ -221,6 +371,7 @@ impl SshSession {
             cwd,
             root,
             writer,
+            gate,
             reader_task,
         })
     }
@@ -272,5 +423,39 @@ mod tests {
         let mut held = PromptFilter::new(true);
         assert!(matches!(held.feed(b"root@web:~# "), Filtered::Hold));
         assert_eq!(held.flush(), b"root@web:~# ");
+    }
+
+    #[test]
+    fn input_gate_holds_type_ahead_until_opened() {
+        let mut open = InputGate::new(false);
+        assert_eq!(open.push(b"ls\n"), Some(b"ls\n".to_vec()));
+
+        let mut g = InputGate::new(true);
+        assert_eq!(g.push(b"echo "), None);
+        assert_eq!(g.push(b"hi\n"), None);
+        assert_eq!(g.open(), b"echo hi\n");
+        assert_eq!(g.push(b"x"), Some(b"x".to_vec()), "open after release");
+
+        let mut refused = InputGate::new(true);
+        refused.push(b"whoami\n");
+        refused.open_discarding();
+        assert_eq!(refused.open(), b"", "dropped keys never reach sudo");
+
+        let mut big = InputGate::new(true);
+        big.push(&vec![b'a'; MAX_HELD]);
+        big.push(b"more");
+        assert_eq!(big.open().len(), MAX_HELD);
+    }
+
+    #[test]
+    fn sudo_verdict_and_redaction() {
+        assert_eq!(verdict(b"\r\n"), Verdict::Undecided);
+        assert_eq!(verdict(b"\r\nroot@web:/tmp# "), Verdict::Accepted);
+        assert_eq!(verdict(b"Sorry, try again.\r\n"), Verdict::Refused);
+        assert_eq!(verdict(b"[orbital:sudo]"), Verdict::Refused);
+        assert_eq!(verdict(b"sudo: 3 incorrect password attempts\r\n"), Verdict::Refused);
+        assert_eq!(redact(b"s3cret-Pass\r\nSorry", b"s3cret-Pass"), b"\r\nSorry");
+        assert_eq!(redact(b"abc", b""), b"abc");
+        assert_eq!(redact(b"ab", b"abc"), b"ab");
     }
 }
