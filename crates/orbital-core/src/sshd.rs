@@ -373,6 +373,8 @@ root     tty1         2026-11-14 08:00
         assert_eq!(r.checks.len(), 1);
     }
 
+    // Runs the script meant for Linux servers through a local sh; Windows lacks the tools it reads.
+    #[cfg(unix)]
     #[test]
     fn script_runs_under_sh() {
         let out = std::process::Command::new("sh").arg("-c").arg(SCRIPT).output().unwrap();

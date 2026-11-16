@@ -495,6 +495,8 @@ timer=certbot.timer|ActiveState=active|LoadState=loaded|NextElapseUSecRealtime=S
             .starts_with("grep -rlF -- /etc/letsencrypt/live/shop.example.com/ /etc/nginx"));
     }
 
+    // Runs the script meant for Linux servers through a local sh; Windows lacks the tools it reads.
+    #[cfg(unix)]
     #[test]
     fn script_runs_under_sh() {
         let out = std::process::Command::new("sh").arg("-c").arg(STATUS_SCRIPT).output().unwrap();

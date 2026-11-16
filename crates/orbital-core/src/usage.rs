@@ -329,6 +329,8 @@ mod tests {
         );
     }
 
+    // Runs the script meant for Linux servers through a local sh; Windows lacks the tools it reads.
+    #[cfg(unix)]
     #[test]
     fn scripts_run_under_sh() {
         let out = std::process::Command::new("sh").arg("-c").arg(PROC_SCRIPT).output().unwrap();
