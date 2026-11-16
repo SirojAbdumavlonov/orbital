@@ -77,7 +77,7 @@ jobs:
           notes=$(awk -v v="$version" '$0 ~ "^## \\[?"v"[] ]" {on=1; next} on && /^## / {exit} on' CHANGELOG.md)
           [ -n "$notes" ] || notes="See CHANGELOG.md for what changed."
           { echo "notes<<NOTES_END"; echo "$notes"; echo "NOTES_END"; } >> "$GITHUB_OUTPUT"
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         id: build
         env:
           GITHUB_TOKEN: ${{ vars.RELEASES_REPO && secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
@@ -130,7 +130,7 @@ jobs:
       # Unsigned for now: Windows SmartScreen warns on first run ("More info" →
       # "Run anyway"). Code signing (e.g. Azure Trusted Signing) is configured in
       # bundle.windows of tauri.windows.conf.json when there is a certificate.
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ vars.RELEASES_REPO && secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
