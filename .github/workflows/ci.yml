@@ -73,7 +73,7 @@ jobs:
         run: npm run tauri build -- --target universal-apple-darwin
         # For signed + notarized releases add APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
         # APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID as repository secrets.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Orbital-macos
           path: target/universal-apple-darwin/release/bundle/dmg/*.dmg
@@ -96,7 +96,7 @@ jobs:
         run: cargo clippy -p orbital-core -p orbital --all-targets -- -D warnings
       - name: Build the installer
         run: npm run tauri build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Orbital-windows
           path: target/release/bundle/nsis/*.exe
