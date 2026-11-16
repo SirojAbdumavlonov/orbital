@@ -64,10 +64,12 @@ elif command -v lsof >/dev/null 2>&1; then
 else
   echo @@none
 fi
+# Without root, ufw refuses ("You need to be root"); the sections stay empty.
 if command -v ufw >/dev/null 2>&1; then
   echo @@verbose; ufw status verbose 2>/dev/null
   echo @@numbered; ufw status numbered 2>/dev/null
 fi
+true
 "#;
 
 static PROC_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\("([^"]+)",pid=(\d+)"#).unwrap());

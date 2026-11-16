@@ -71,8 +71,11 @@ echo @@status
 (getent passwd 2>/dev/null || cat /etc/passwd) | while IFS=: read -r n _ uid _ _ home _; do
   [ "$uid" -ge 1000 ] 2>/dev/null || [ "$uid" -eq 0 ] 2>/dev/null || continue
   passwd -S "$n" 2>/dev/null | head -1
-  [ -r "$home/.ssh/authorized_keys" ] && echo "@@keys $n $(grep -c '^[a-z]' "$home/.ssh/authorized_keys" 2>/dev/null)"
+  if [ -r "$home/.ssh/authorized_keys" ]; then
+    echo "@@keys $n $(grep -c '^[a-z]' "$home/.ssh/authorized_keys" 2>/dev/null)"
+  fi
 done
+true
 "#;
 
 fn admin_groups() -> [&'static str; 3] {
