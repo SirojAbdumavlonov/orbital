@@ -68,13 +68,29 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together and [S
 
 ## Download
 
-Builds for macOS (universal `.dmg`), Windows 10/11 (`…_x64-setup.exe`) and Linux (`.deb`, `.rpm` and `.AppImage`, x86_64) are attached to [GitHub Releases](../../releases).
+**The easy way, with no security warnings:** paste one line into a terminal. It downloads the latest release from GitHub, checks it against the published SHA-256 checksum, and installs it.
 
-- **macOS**: until the app is signed with a Developer ID, macOS warns the first time it opens: System Settings → Privacy & Security → Open Anyway.
-- **Windows**: the installer needs no admin rights. Until it is code-signed, SmartScreen warns once: "More info" → "Run anyway". For sign-in with an SSH agent, start the "OpenSSH Authentication Agent" service (or Pageant).
+macOS and Linux (Terminal):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SirojAbdumavlonov/orbital/main/install.sh | bash
+```
+
+Windows 10/11 (PowerShell, no admin rights needed):
+
+```powershell
+irm https://raw.githubusercontent.com/SirojAbdumavlonov/orbital/main/install.ps1 | iex
+```
+
+Run the same line again to update by hand; normally Orbital updates itself (below). Why this avoids the warnings: Orbital isn't yet signed with a paid Apple or Microsoft certificate, and macOS and Windows only check unsigned apps that a *browser* downloaded. The scripts are short; read [install.sh](install.sh) and [install.ps1](install.ps1) first if you like.
+
+**Or download the files** from [GitHub Releases](../../releases): macOS (universal `.dmg`), Windows 10/11 (`…_x64-setup.exe`) and Linux (`.deb`, `.rpm`, `.AppImage`, x86_64).
+
+- **macOS**: a `.dmg` from the browser is blocked at first ("Apple could not verify…"): open it once, then System Settings → Privacy & Security → Open Anyway. Or run `xattr -dr com.apple.quarantine /Applications/Orbital.app` once.
+- **Windows**: the installer needs no admin rights. SmartScreen warns once: "More info" → "Run anyway". For sign-in with an SSH agent, start the "OpenSSH Authentication Agent" service (or Pageant).
 - **Linux** (Ubuntu 22.04+, Debian 12+, Fedora 38+ or anything with WebKitGTK 4.1): `sudo apt install ./Orbital_…_amd64.deb`, `sudo dnf install ./Orbital-….x86_64.rpm`, or make the AppImage executable and run it. Data is in `~/.local/share/orbital`. The AppImage updates itself; a .deb or .rpm install asks for your password to update. The ssh agent is the one `SSH_AUTH_SOCK` names. If the window stays blank, start it with `WEBKIT_DISABLE_COMPOSITING_MODE=1 orbital`.
 
- After that Orbital updates itself: it checks for a new version at launch and every six hours, and Settings → Updates installs it with one click and a restart. How releases are made: [docs/RELEASING.md](docs/RELEASING.md).
+After that Orbital updates itself, without any warning: it checks for a new version at launch and every six hours, and Settings → Updates installs it with one click and a restart. How releases are made: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Getting started (macOS)
 

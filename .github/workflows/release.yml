@@ -248,3 +248,33 @@ jobs:
       # The packages that were just uploaded install and start on a clean system.
       - name: Install test
         run: bash scripts/linux-smoke.sh
+      # Last job, so latest.json (whose notes the app shows) is already written:
+      # only the release page gets the install lines.
+      - name: Install instructions on the release page
+        env:
+          GH_TOKEN: ${{ vars.RELEASES_REPO && secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
+          DEST: ${{ steps.prep.outputs.owner }}/${{ steps.prep.outputs.repo }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          body=$(gh release view "$TAG" --repo "$DEST" --json body -q .body)
+          case "$body" in *"## Install"*) exit 0 ;; esac
+          cat > "$RUNNER_TEMP/notes.md" <<EOF
+          $body
+
+          ## Install
+
+          No security warnings this way: the scripts download the latest release from GitHub and check its checksum.
+
+          **macOS and Linux** (Terminal):
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/install.sh | bash
+          \`\`\`
+
+          **Windows** (PowerShell):
+          \`\`\`powershell
+          irm https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/install.ps1 | iex
+          \`\`\`
+
+          Or download a file below. A browser download warns once (macOS: System Settings → Privacy & Security → Open Anyway; Windows: More info → Run anyway). Installed copies update themselves.
+          EOF
+          gh release edit "$TAG" --repo "$DEST" --notes-file "$RUNNER_TEMP/notes.md"

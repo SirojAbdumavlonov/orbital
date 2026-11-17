@@ -1,0 +1,80 @@
+name: Install scripts
+
+# Runs install.sh and install.ps1 the way users do, against the latest
+# published release, on every platform they support: when a script changes,
+# when a release is published, and on demand.
+
+on:
+  push:
+    branches: [main]
+    paths: [install.sh, install.ps1, .github/workflows/install-scripts.yml]
+  pull_request:
+    paths: [install.sh, install.ps1, .github/workflows/install-scripts.yml]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  macos:
+    name: macOS (.dmg → /Applications)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: bash install.sh
+      - name: Installed, not quarantined, and it starts
+        run: |
+          app=/Applications/Orbital.app
+          test -x "$app/Contents/MacOS/orbital"
+          ! xattr -p com.apple.quarantine "$app" 2>/dev/null
+          open -g "$app"
+          sleep 8
+          pgrep -f "$app/Contents/MacOS/orbital"
+          pkill -f "$app/Contents/MacOS/orbital"
+      - name: Running it again updates in place
+        run: bash install.sh
+
+  ubuntu:
+    name: Ubuntu (.deb)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: bash install.sh
+      - run: dpkg -s orbital | grep -E '^(Status|Version)' && command -v orbital
+
+  fedora:
+    name: Fedora (.rpm)
+    runs-on: ubuntu-24.04
+    container: fedora:41
+    steps:
+      - uses: actions/checkout@v5
+      - run: bash install.sh
+      - run: rpm -q orbital && command -v orbital
+
+  appimage:
+    name: Other Linux (AppImage → ~/.local/bin)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: ORBITAL_PACKAGE=appimage bash install.sh
+      - run: test -x "$HOME/.local/bin/orbital" && file "$HOME/.local/bin/orbital" | grep -q ELF
+
+  windows:
+    name: Windows (silent NSIS install)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the way users do (irm … | iex)
+        shell: pwsh
+        run: Get-Content -Raw install.ps1 | Invoke-Expression
+      - name: Installed, and it starts
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Orbital" -Filter *.exe | Where-Object { $_.Name -notmatch 'uninstall' } | Select-Object -First 1
+          if (-not $exe) { throw "no Orbital executable in $env:LOCALAPPDATA\Orbital" }
+          $p = Start-Process -FilePath $exe.FullName -PassThru
+          Start-Sleep -Seconds 10
+          if ($p.HasExited) { throw "Orbital exited with code $($p.ExitCode)" }
+          Stop-Process -Id $p.Id -Force
+      - name: Windows PowerShell 5.1 can run it too
+        shell: powershell
+        run: Get-Content -Raw install.ps1 | Invoke-Expression
