@@ -68,10 +68,11 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together and [S
 
 ## Download
 
-Builds for macOS (universal `.dmg`) and Windows 10/11 (`…_x64-setup.exe`) are attached to [GitHub Releases](../../releases).
+Builds for macOS (universal `.dmg`), Windows 10/11 (`…_x64-setup.exe`) and Linux (`.deb`, `.rpm` and `.AppImage`, x86_64) are attached to [GitHub Releases](../../releases).
 
 - **macOS**: until the app is signed with a Developer ID, macOS warns the first time it opens: System Settings → Privacy & Security → Open Anyway.
 - **Windows**: the installer needs no admin rights. Until it is code-signed, SmartScreen warns once: "More info" → "Run anyway". For sign-in with an SSH agent, start the "OpenSSH Authentication Agent" service (or Pageant).
+- **Linux** (Ubuntu 22.04+, Debian 12+, Fedora 38+ or anything with WebKitGTK 4.1): `sudo apt install ./Orbital_…_amd64.deb`, `sudo dnf install ./Orbital-….x86_64.rpm`, or make the AppImage executable and run it. Data is in `~/.local/share/orbital`. The AppImage updates itself; a .deb or .rpm install asks for your password to update. The ssh agent is the one `SSH_AUTH_SOCK` names. If the window stays blank, start it with `WEBKIT_DISABLE_COMPOSITING_MODE=1 orbital`.
 
  After that Orbital updates itself: it checks for a new version at launch and every six hours, and Settings → Updates installs it with one click and a restart. How releases are made: [docs/RELEASING.md](docs/RELEASING.md).
 
@@ -89,6 +90,17 @@ To work on the UI in a plain browser with a mocked backend:
 
 ```bash
 npm run demo            # http://localhost:1430
+```
+
+## Getting started (Linux)
+
+Requirements: Rust, Node 22+ and the WebKitGTK headers. On Debian/Ubuntu:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev patchelf build-essential
+npm install
+npm run tauri build     # .deb, .rpm and .AppImage into target/release/bundle/
+bash scripts/linux-smoke.sh   # install the .deb, start it headless (needs xvfb, dbus, desktop-file-utils), remove it
 ```
 
 ## Tests
@@ -116,7 +128,7 @@ cargo test -p orbital-core --test live_storage -- --test-threads=1
 bash scripts/it-storage.sh stop
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of this, including the firewall and fail2ban tests against real ufw and fail2ban on a disposable runner, and builds a universal macOS `.dmg`. Pushing a tag like `v1.0.0` runs `.github/workflows/release.yml`, which builds the app, signs the update and attaches both with `latest.json` to a draft GitHub Release; `npm run release -- minor` prepares the version bump and tag.
+CI (`.github/workflows/ci.yml`) runs all of this, including the firewall and fail2ban tests against real ufw and fail2ban on a disposable runner, builds a universal macOS `.dmg`, the Windows installer and the Linux packages, and installs and starts the `.deb` headless (`scripts/linux-smoke.sh`). Pushing a tag like `v1.0.0` runs `.github/workflows/release.yml`, which builds the app, signs the update and attaches both with `latest.json` to a draft GitHub Release; `npm run release -- minor` prepares the version bump and tag.
 
 ## Contributing
 

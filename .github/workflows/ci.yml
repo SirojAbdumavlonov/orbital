@@ -101,3 +101,41 @@ jobs:
         with:
           name: Orbital-windows
           path: target/release/bundle/nsis/*.exe
+
+  linux:
+    name: Linux packages (.deb, .rpm, AppImage) and install test
+    needs: [core, frontend]
+    # The oldest supported Ubuntu, so the packages run on its glibc and newer.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm }
+      - name: System libraries (WebKitGTK, bundling, headless test)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libssl-dev patchelf rpm file xvfb dbus dbus-x11 desktop-file-utils
+      - run: npm ci
+      - name: Clippy (app crate)
+        run: cargo clippy -p orbital --all-targets -- -D warnings
+      - name: App crate tests (data folder, migration)
+        run: cargo test -p orbital --lib
+      - name: Engine unit tests (incl. this machine's ID for the vault)
+        run: cargo test -p orbital-core --lib vault
+      - name: Build the packages
+        run: npm run tauri build
+        # linuxdeploy (for the AppImage) is itself an AppImage; this lets it run without FUSE.
+        env: { APPIMAGE_EXTRACT_AND_RUN: 1 }
+      - name: Install, start and remove the .deb (headless)
+        run: bash scripts/linux-smoke.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Orbital-linux
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
+            target/release/bundle/appimage/*.AppImage

@@ -13,16 +13,35 @@ use tauri::Manager;
 /// Orbital keeps its data in a hidden folder under Application Support
 /// (Finder doesn't show it): the database and the encrypted credentials vault.
 /// On Windows it is `%LOCALAPPDATA%\Orbital`: local, not the roaming profile,
-/// because the vault's key is tied to this computer.
-#[cfg_attr(windows, allow(dead_code))]
+/// because the vault's key is tied to this computer. On Linux it is
+/// `$XDG_DATA_HOME/orbital` (usually `~/.local/share/orbital`), where the
+/// folder is already out of sight and dot-folders are not the convention.
 const DATA_DIR: &str = ".orbital";
 
+/// The data folder for `os` (`std::env::consts::OS`), given the platform's
+/// per-user data folder (`data`) and its machine-local one (`local`).
+fn data_home(os: &str, data: &Path, local: &Path) -> std::path::PathBuf {
+    match os {
+        "windows" => local.join("Orbital"),
+        "linux" | "freebsd" | "openbsd" | "netbsd" => data.join("orbital"),
+        _ => data.join(DATA_DIR),
+    }
+}
+
 fn data_dir(app: &tauri::App) -> tauri::Result<std::path::PathBuf> {
-    #[cfg(windows)]
-    let dir = app.path().local_data_dir()?.join("Orbital");
-    #[cfg(not(windows))]
-    let dir = app.path().data_dir()?.join(DATA_DIR);
-    Ok(dir)
+    let path = app.path();
+    Ok(data_home(std::env::consts::OS, &path.data_dir()?, &path.local_data_dir()?))
+}
+
+/// WebKitGTK's DMA-BUF renderer draws a blank or flickering window on many
+/// Linux setups (NVIDIA drivers, some Wayland compositors, VMs). Turn it off
+/// unless the user chose otherwise; it costs nothing visible for this app.
+/// Must run before any thread starts, so `main` calls it first.
+pub fn prepare_platform() {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
 }
 
 /// Earlier homes of the database, newest first: Orbital's first data folder,
@@ -287,6 +306,16 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_folder_per_platform() {
+        let (data, local) = (Path::new("/data"), Path::new("/local"));
+        assert_eq!(data_home("macos", data, local), Path::new("/data/.orbital"));
+        assert_eq!(data_home("linux", data, local), Path::new("/data/orbital"));
+        assert_eq!(data_home("windows", data, local), Path::new("/local/Orbital"));
+        // The old Tauri folders sit beside it on every platform, so moving works there too.
+        assert_eq!(data_home("linux", data, local).parent(), Some(data));
+    }
 
     #[test]
     fn moves_the_newest_old_database_and_leaves_nothing_behind() {

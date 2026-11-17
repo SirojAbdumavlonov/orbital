@@ -62,7 +62,7 @@ function CheckDialog({ check, initial, onClose, onSaved }: { check: CheckStatus[
   }
 
   return (
-    <Modal title={check ? `Edit ${check.name}` : "Add an uptime check"} subtitle="Checks run from this Mac while Orbital is open. You get a notification when one goes down and when it's back."
+    <Modal title={check ? `Edit ${check.name}` : "Add an uptime check"} subtitle="Checks run from this computer while Orbital is open. You get a notification when one goes down and when it's back."
       onClose={busy ? undefined : onClose}
       footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !ok} onClick={save}>{check ? "Save" : "Add check"}</button></>}>
       <div className="form" onKeyDown={(e) => e.key === "Enter" && ok && !busy && (e.target as HTMLElement).tagName === "INPUT" && save()}>
@@ -183,7 +183,7 @@ function Detail({ s, onClose, onEdit }: { s: CheckStatus; onClose: () => void; o
   );
 }
 
-/** Global page: website and port checks run from this Mac, with alerts. */
+/** Global page: website and port checks run from this computer, with alerts. */
 export function UptimeView() {
   const toast = useStore((x) => x.toast);
   const [list, setList] = useState<CheckStatus[] | null>(null);
@@ -243,7 +243,7 @@ export function UptimeView() {
     <div className="view">
       <div className="toolbar">
         {list && list.length > 0 && <span className={down ? "badge bad" : "badge ok"}>{down ? `${down} down` : "All up"}</span>}
-        <span className="faint">{list ? `${list.length} check${list.length === 1 ? "" : "s"} · run from this Mac while Orbital is open` : "Loading…"}</span>
+        <span className="faint">{list ? `${list.length} check${list.length === 1 ? "" : "s"} · run from this computer while Orbital is open` : "Loading…"}</span>
         <span className="spacer" />
         <button className="btn" onClick={() => setEditing({ check: null, initial: blank("tcp") })}><Plus size={14} /> Port</button>
         <button className="btn primary" onClick={() => setEditing({ check: null })}><Plus size={14} /> Website</button>
@@ -264,7 +264,7 @@ export function UptimeView() {
               <div>
                 <Globe size={28} />
                 <h3>Know when a site goes down</h3>
-                <p>Add a website or a port. Orbital checks it every few minutes from this Mac and notifies you when it stops answering and when it's back.</p>
+                <p>Add a website or a port. Orbital checks it every few minutes from this computer and notifies you when it stops answering and when it's back.</p>
                 <button className="btn primary" onClick={() => setEditing({ check: null })}><Plus size={14} /> Add a website</button>
               </div>
             </div>

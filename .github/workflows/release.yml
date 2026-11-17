@@ -1,7 +1,7 @@
 name: Release
 
-# Push a tag like v1.0.0 to build the macOS app and the Windows installer and
-# attach them to a draft GitHub Release. Review the draft, then publish it.
+# Push a tag like v1.0.0 to build the macOS app, the Windows installer and the
+# Linux packages (.deb, .rpm, AppImage) and attach them to a draft GitHub Release. Review the draft, then publish it.
 #
 # Signing and notarization run when these repository secrets are set
 # (Settings → Secrets and variables → Actions); without them the build is
@@ -141,3 +141,52 @@ jobs:
           repo: ${{ steps.prep.outputs.repo }}
           includeUpdaterJson: true
           args: --config ${{ steps.prep.outputs.config }}
+
+  # After Windows, into the same draft: latest.json gains linux-x86_64 (the
+  # AppImage, which updates itself) and linux-x86_64-deb / -rpm entries
+  # (installed with pkexec, so the user is asked for their password).
+  linux:
+    name: Linux packages
+    needs: [macos, windows]
+    # The oldest supported Ubuntu, so the packages run on its glibc and newer.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm }
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libssl-dev patchelf rpm file xvfb dbus dbus-x11 desktop-file-utils
+      - run: npm ci
+      - name: Update settings and destination
+        id: prep
+        env:
+          RELEASES_REPO: ${{ vars.RELEASES_REPO }}
+        run: |
+          dest="${RELEASES_REPO:-$GITHUB_REPOSITORY}"
+          echo "owner=${dest%%/*}" >> "$GITHUB_OUTPUT"
+          echo "repo=${dest#*/}" >> "$GITHUB_OUTPUT"
+          cat > "$RUNNER_TEMP/release.conf.json" <<JSON
+          {"bundle": {"createUpdaterArtifacts": true},
+           "plugins": {"updater": {"endpoints": ["https://github.com/$dest/releases/latest/download/latest.json"]}}}
+          JSON
+          echo "config=$RUNNER_TEMP/release.conf.json" >> "$GITHUB_OUTPUT"
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ vars.RELEASES_REPO && secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        with:
+          releaseId: ${{ needs.macos.outputs.release_id }}
+          owner: ${{ steps.prep.outputs.owner }}
+          repo: ${{ steps.prep.outputs.repo }}
+          includeUpdaterJson: true
+          args: --config ${{ steps.prep.outputs.config }}
+      # The packages that were just uploaded install and start on a clean system.
+      - name: Install test
+        run: bash scripts/linux-smoke.sh

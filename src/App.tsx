@@ -49,7 +49,7 @@ import { TerminalView } from "./views/TerminalView";
 const GLOBAL_TITLES = {
   activity: ["Activity log", "Every change across all servers, hash-chained so tampering is detectable"],
   snippets: ["Snippets", "Saved commands, run on one server or many at once"],
-  uptime: ["Uptime", "Websites and ports checked from this Mac, with a notification when one goes down"],
+  uptime: ["Uptime", "Websites and ports checked from this computer, with a notification when one goes down"],
   knownHosts: ["Security", "Saved credentials and the host identities you've verified"],
   settings: ["Settings", "Preferences for Orbital on this computer"],
   domains: ["Domains", "DNS records at your provider, and whether the world sees them yet"],

@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.0.0-2 (2026-11-17)
+
 ### Added
 - **Import from `~/.ssh/config`** (Welcome screen, the sidebar's "+" menu, or ⌘K): every `Host` in the file and the files it includes, with its address, user, port, key and route shown before anything is saved. `ProxyJump` (including chains such as `bastion,admin@10.0.0.5:2200`) and the old `ProxyCommand ssh -W %h:%p` form become jump hosts, created first and reused when they are already saved. Hosts already saved (same host, port and user) are marked and skipped. `Match` blocks, unsupported `ProxyCommand`s, loops and routes with more than three jump hosts are pointed out instead of guessed at. Only the config files are read; keys stay where they are and nothing secret is copied.
 - **Uptime monitoring** (sidebar → Uptime, or ⌘K): add websites (HTTP or HTTPS, with the status code to expect and optionally text the page must contain) and ports (TCP `host:port`), checked every 1, 5 or 15 minutes from this Mac while Orbital is open. Each check shows its state, the last 30 results, a latency sparkline, uptime over 24 hours and 7 days and the last error; pause, edit, delete or check now. When a check goes down or comes back, macOS shows a notification, the app a toast, and the activity log records it (new "Uptime" category). A failure is retried once a few seconds later before it counts, and restarting Orbital doesn't repeat an alert. HTTPS checks warn when the certificate expires within 14 days. With a server connected, its nginx sites' domains are offered as one-click checks. Results are kept for 7 days, up/down changes for 90.
@@ -13,7 +15,10 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 - **Earlier versions of config files**: the editor's history button lists the backups safe save keeps (the last 5), compares one with the editor side by side, and restores it through safe save, so it's checked and the current version is kept.
 - **New website** (nginx tab, or ⌘K → New website): one domain from nothing to HTTPS in four steps. Orbital creates the A records in Cloudflare when an account there has the domain (or shows the records to add elsewhere), waits until public resolvers answer with the server's address, writes an nginx server block from a template (a folder of static files, or a reverse proxy to a local port) through safe save, enables it on Debian-style layouts, runs `nginx -t` and removes it again if the test fails, reloads nginx, then requests the Let's Encrypt certificate through certbot's nginx plugin. Refuses domains nginx already serves, existing files, system folders and ports 22/80/443. Every step is in the activity log (`website.create`).
 
+- **Linux**: `.deb`, `.rpm` and AppImage packages for x86_64 (WebKitGTK 4.1: Ubuntu 22.04+, Debian 12+, Fedora 38+). Data lives in `~/.local/share/orbital`; the vault is tied to the machine-id. The AppImage updates itself, .deb and .rpm installs update after asking for your password. CI and releases build them, and an install test installs the .deb, starts Orbital headless, checks its data folder and private vault, and removes it again.
+
 ### Fixed
+- On Linux the vault no longer accepts an empty or "uninitialized" machine-id, which would have given every such machine the same key; WebKitGTK's DMA-BUF renderer is off by default, because it shows a blank window with NVIDIA drivers and in many VMs.
 - Running Orbital from a development build showed a blank document as its icon in the Dock, ⌘Tab and Mission Control; it now shows Orbital's icon.
 
 ## 1.0.0 (2026-11-17)

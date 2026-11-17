@@ -63,12 +63,21 @@ pub fn machine_id() -> String {
             }
         }
     }
+    // Linux (and the BSDs with dbus): systemd's machine-id, then dbus's copy.
     for f in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
-        if let Ok(id) = std::fs::read_to_string(f) {
-            return id.trim().to_string();
+        if let Some(id) = std::fs::read_to_string(f).ok().as_deref().and_then(parse_machine_id) {
+            return id;
         }
     }
     String::new()
+}
+
+/// The contents of a machine-id file → the ID. An empty file or systemd's
+/// "uninitialized" placeholder (first boot, some containers) is no ID: using
+/// it would give every such machine the same vault key.
+fn parse_machine_id(text: &str) -> Option<String> {
+    let id = text.trim();
+    (id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).then(|| id.to_ascii_lowercase())
 }
 
 /// `reg query … /v MachineGuid` output → the GUID.
@@ -205,6 +214,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reads_the_linux_machine_id() {
+        assert_eq!(
+            parse_machine_id("4C4C4544004E3510804BB4C04F563232\n").as_deref(),
+            Some("4c4c4544004e3510804bb4c04f563232")
+        );
+        assert_eq!(parse_machine_id(""), None);
+        assert_eq!(parse_machine_id("uninitialized\n"), None);
+        assert_eq!(parse_machine_id("not-a-machine-id-but-32-chars-xx"), None);
+    }
+
+    #[test]
     fn reads_the_windows_machine_guid() {
         let out = "\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography\r\n    MachineGuid    REG_SZ    6f1e0c2b-9a3d-4c55-8e21-0b7d9f3a1c42\r\n\r\n";
         assert_eq!(parse_machine_guid(out).as_deref(), Some("6f1e0c2b-9a3d-4c55-8e21-0b7d9f3a1c42"));
@@ -258,8 +278,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// Every supported desktop has an ID to bind the vault to (CI runs this on
+    /// macOS, Windows and Linux).
     #[test]
     fn has_a_machine_id() {
-        assert!(!machine_id().is_empty());
+        assert!(
+            !machine_id().is_empty(),
+            "no machine ID: the vault key would not be tied to this computer"
+        );
     }
 }

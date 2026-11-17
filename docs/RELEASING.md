@@ -66,7 +66,10 @@ app to anyone.
 4. Check the draft: it has `Orbital_1.1.0_universal.dmg`, `Orbital.app.tar.gz`
    and its `.sig` (macOS), `Orbital_1.1.0_x64-setup.exe` and its `.sig`
    (Windows; the Windows job runs after the macOS one and adds to the same
-   draft), and `latest.json` with both platforms. Publish it. Installed copies see it at their
+   draft), `Orbital_1.1.0_amd64.deb`, `Orbital-1.1.0-1.x86_64.rpm`,
+   `Orbital_1.1.0_amd64.AppImage` and their `.sig` files (Linux; after
+   Windows, then the job installs and starts the .deb), and `latest.json`
+   with all three platforms. Publish it. Installed copies see it at their
    next check (launch, or within six hours); Settings → Check for updates
    finds it at once.
 
