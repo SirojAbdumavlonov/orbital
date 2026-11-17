@@ -1,4 +1,5 @@
 import { PROTOCOL_NAMES } from "./ProfileDialog";
+import { JobsMenu } from "./JobsMenu";
 import { Activity, HeartPulse, SquareCode, ChevronLeft, ChevronRight, FileInput, Globe, KeyRound, Loader2, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sun, Unplug } from "lucide-react";
 import { isMac, KEYS } from "../lib/platform";
 import { useResolvedTheme, useSettings } from "../lib/settings";
@@ -81,6 +82,7 @@ export function Sidebar() {
         ))}
       </div>
       <div className="sidebar-foot">
+        <JobsMenu />
         <button className={`nav-item ${globalView === "domains" ? "on" : ""}`} onClick={() => setGlobalView("domains")}>
           <Globe size={15} /> Domains
         </button>

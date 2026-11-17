@@ -2,6 +2,8 @@ import { CheckCircle2, CircleDashed, FlaskConical, Globe, Lock, Plus, RefreshCw,
 import { useEffect, useMemo, useState } from "react";
 import { confirm, Modal } from "../components/ui";
 import { api, asApiError, Certificate, CertbotStatus, CertMethod, DnsCheck, ExecOutput, IssueRequest } from "../lib/api";
+import { runJob, useRunningJob } from "../lib/jobs";
+import { JobProgress } from "../components/JobProgress";
 import { useRemote, withSafetyOverride } from "../lib/remote";
 import { SessionState, useStore } from "../store";
 
@@ -98,15 +100,21 @@ function IssueDialog({ s, status, initialDomains, onClose, onDone }: { s: Sessio
 
   const list = domains.split(/[\s,]+/).map((d) => d.trim()).filter(Boolean);
   const add = (d: string) => !list.includes(d) && setDomains([...list, d].join(" "));
+  const job = useRunningJob(`certbot:${sid}`);
   async function issue() {
     setBusy(true);
     const req: IssueRequest = { domains: list, email: email.trim() || null, method, webroot: method === "webroot" ? webroot : null, redirect, staging, agreeTos: agree };
     try {
-      const out = await api.certbotIssue(sid, req);
+      const out = await runJob((p) => api.certbotIssue(sid, req, p), {
+        key: `certbot:${sid}`,
+        title: `Certificate for ${list[0]}`,
+        sid,
+        done: (o) => (o.exitCode === 0 ? "Certificate issued" : { failed: "Let's Encrypt didn't issue it; open the certificates tab for its output" }),
+      });
       onDone(out, out.exitCode === 0 ? `Certificate issued for ${list[0]}` : "Let's Encrypt didn't issue the certificate");
       if (out.exitCode === 0) onClose();
     } catch (e) {
-      useStore.getState().toast({ kind: "error", title: "Couldn't request the certificate", body: asApiError(e).message });
+      // The job reports the error.
     } finally {
       setBusy(false);
     }
@@ -114,8 +122,9 @@ function IssueDialog({ s, status, initialDomains, onClose, onDone }: { s: Sessio
   const m = METHODS.find((x) => x.id === method)!;
   return (
     <Modal title="New HTTPS certificate" wide subtitle="Free certificates from Let's Encrypt, valid for 90 days and renewed automatically." onClose={onClose}
-      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !agree || list.length === 0} onClick={issue}>{busy ? "Requesting… this can take a minute" : "Request certificate"}</button></>}>
+      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !agree || list.length === 0} onClick={issue}>{busy ? "Requesting…" : "Request certificate"}</button></>}>
       <div className="form">
+        {job && <JobProgress job={job} />}
         <div className="notice" style={{ margin: 0 }}>
           Before you start: each domain's DNS record (A or AAAA) must already point at this server, and port 80 must be reachable from the internet. Let's Encrypt connects to the domain to check it.
         </div>
@@ -154,7 +163,7 @@ function IssueDialog({ s, status, initialDomains, onClose, onDone }: { s: Sessio
 
 /** Let's Encrypt certificates on this server: expiry, renewal, and new ones for your domains. */
 export function CertbotView({ s }: { s: SessionState }) {
-  const { toast, patch } = useStore();
+  const { patch } = useStore();
   const sid = s.info.id;
   const { data: st, error, loading, reload } = useRemote(() => api.certbotStatus(sid), [sid]);
   const [sel, setSel] = useState<string | null>(null);
@@ -184,12 +193,18 @@ export function CertbotView({ s }: { s: SessionState }) {
       if (!ok) return;
     }
     setBusy(true);
+    const dry = mode === "dryRun";
     try {
-      const out = await api.certbotRenew(sid, name, mode);
+      const out = await runJob((p) => api.certbotRenew(sid, name, mode, p), {
+        key: `certbot:${sid}`,
+        title: dry ? `Renewal test of ${name ?? "all certificates"}` : `Renewing ${name}`,
+        sid,
+        done: (o) => (o.exitCode === 0 ? (dry ? "Renewal test passed" : `${name} renewed`) : { failed: dry ? "Renewal test failed" : "Renewal failed" }),
+      });
       const ok = out.exitCode === 0;
       show(out, mode === "dryRun" ? (ok ? "Renewal test passed" : "Renewal test failed") : ok ? `${name} renewed` : "Renewal failed");
     } catch (e) {
-      toast({ kind: "error", title: "Couldn't run certbot", body: asApiError(e).message });
+      // The job reports the error.
     } finally {
       setBusy(false);
     }
@@ -200,16 +215,21 @@ export function CertbotView({ s }: { s: SessionState }) {
     if (!ok) return;
     setBusy(true);
     try {
-      const out = await withSafetyOverride((force) => api.certbotDelete(sid, c.name, force), "a site still uses it");
+      const out = await withSafetyOverride(
+        (force) => runJob((p) => api.certbotDelete(sid, c.name, force, p), { key: `certbot:${sid}`, title: `Deleting ${c.name}`, sid, done: (o) => (o.exitCode === 0 ? `${c.name} deleted` : { failed: "Delete failed" }) }),
+        "a site still uses it",
+      );
       if (out) show(out, out.exitCode === 0 ? `${c.name} deleted` : "Delete failed");
     } catch (e) {
-      toast({ kind: "error", title: "Couldn't delete the certificate", body: asApiError(e).message });
+      // The job reports the error.
     } finally {
       setBusy(false);
     }
   }
 
   const ar = st?.autoRenew;
+  const job = useRunningJob(`certbot:${sid}`);
+  const working = busy || !!job;
   return (
     <div className="view">
       <div className="toolbar">
@@ -219,10 +239,11 @@ export function CertbotView({ s }: { s: SessionState }) {
           : <span className="badge bad">No automatic renewal set up</span>)}
         {st?.version && <span className="faint">certbot {st.version}</span>}
         <span className="spacer" />
-        {st && <button className="btn" disabled={busy || st.certificates.length === 0} title="Rehearse renewing every certificate against the test servers. Nothing changes." onClick={() => renew(null, "dryRun")}><FlaskConical size={13} /> Test renewal</button>}
-        {st && <button className="btn primary" disabled={busy} onClick={() => setIssuing([])}><Plus size={13} /> New certificate</button>}
+        {st && <button className="btn" disabled={working || st.certificates.length === 0} title="Rehearse renewing every certificate against the test servers. Nothing changes." onClick={() => renew(null, "dryRun")}><FlaskConical size={13} /> Test renewal</button>}
+        {st && <button className="btn primary" disabled={working} onClick={() => setIssuing([])}><Plus size={13} /> New certificate</button>}
         <button className="icon-btn" aria-label="Refresh" onClick={reload}><RefreshCw size={14} className={loading ? "spin" : ""} /></button>
       </div>
+      {job && !issuing && <div className="job-bar"><JobProgress job={job} /></div>}
       {error && <div className="empty"><div><h3>Couldn't read certificates</h3><p>{error.message}</p><button className="btn" onClick={reload}>Try again</button></div></div>}
       {st?.error && <div className="notice">{st.error}</div>}
       {st && !st.error && st.certificates.length === 0 && (
@@ -255,9 +276,9 @@ export function CertbotView({ s }: { s: SessionState }) {
               <>
                 <div className="drawer-head"><h3 className="mono" style={{ wordBreak: "break-all" }}>{cur.name}</h3><div className="muted">{cur.status || "—"}</div></div>
                 <div className="actions">
-                  <button className="btn" disabled={busy} onClick={() => renew(cur.name, "dryRun")}><FlaskConical size={13} /> Test renewal</button>
-                  <button className="btn" disabled={busy} onClick={() => renew(cur.name, "force")}><RotateCw size={13} /> Renew now</button>
-                  <button className="btn danger" disabled={busy} onClick={() => remove(cur)}><Trash2 size={13} /> Delete</button>
+                  <button className="btn" disabled={working} onClick={() => renew(cur.name, "dryRun")}><FlaskConical size={13} /> Test renewal</button>
+                  <button className="btn" disabled={working} onClick={() => renew(cur.name, "force")}><RotateCw size={13} /> Renew now</button>
+                  <button className="btn danger" disabled={working} onClick={() => remove(cur)}><Trash2 size={13} /> Delete</button>
                 </div>
                 <dl className="kv">
                   <dt>Covers</dt><dd className="mono">{cur.domains.join("\n")}</dd>

@@ -310,6 +310,8 @@ pub fn run() {
             commands::audit_verify,
             commands::audit_export,
             commands::uptime_watch,
+            commands::notify,
+            commands::shell_history,
             commands::list_uptime,
             commands::save_uptime_check,
             commands::set_uptime_paused,

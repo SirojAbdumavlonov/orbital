@@ -42,6 +42,23 @@ impl Context {
         self.home.join(".ssh").join("config")
     }
 
+    /// The config file to read: `path` as the user gave it (`~/…`, absolute,
+    /// or relative to the home folder), or `~/.ssh/config` when none is given.
+    /// Includes inside it still resolve against `~/.ssh`, as ssh does.
+    pub fn config_path(&self, path: Option<&str>) -> PathBuf {
+        match path.map(str::trim).filter(|p| !p.is_empty()) {
+            None => self.default_config(),
+            Some(p) => {
+                let p = self.expand_tilde(p);
+                if p.is_absolute() {
+                    p
+                } else {
+                    self.home.join(p)
+                }
+            }
+        }
+    }
+
     /// `/Users/me/.ssh/x` → `~/.ssh/x`, for display and for stored key paths.
     fn tilde(&self, p: &Path) -> String {
         match p.strip_prefix(&self.home) {
@@ -1087,6 +1104,29 @@ Host *
         assert!(x.notes.iter().any(|n| n.text.contains("isn't a port")));
         assert!(x.notes.iter().any(|n| n.text.contains("%l")));
         assert!(p.notes.iter().any(|n| n.text.contains("unbalanced quotes")));
+    }
+
+    #[test]
+    fn another_config_file_can_be_chosen() {
+        let ctx = Context {
+            home: PathBuf::from("/home/me"),
+            user: "me".into(),
+        };
+        assert_eq!(ctx.config_path(None), Path::new("/home/me/.ssh/config"));
+        assert_eq!(ctx.config_path(Some("  ")), Path::new("/home/me/.ssh/config"));
+        assert_eq!(ctx.config_path(Some("~/work/ssh_config")), Path::new("/home/me/work/ssh_config"));
+        assert_eq!(ctx.config_path(Some("/etc/ssh/ssh_config")), Path::new("/etc/ssh/ssh_config"));
+        assert_eq!(ctx.config_path(Some("dotfiles/ssh")), Path::new("/home/me/dotfiles/ssh"));
+
+        // A chosen file is read like the default one, Includes still relative to ~/.ssh.
+        let (dir, ctx) = setup(&[("conf.d/a", "Host a\n  HostName a.example\n")]);
+        let other = dir.path().join("work-config");
+        std::fs::write(&other, "Include conf.d/*\nHost b\n  HostName b.example\n").unwrap();
+        let p = preview(&ctx.config_path(Some(other.to_str().unwrap())), &ctx);
+        assert!(p.found);
+        let mut names: Vec<_> = p.candidates.iter().map(|c| c.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["a", "b"]);
     }
 
     #[test]

@@ -358,6 +358,16 @@ const certs = () => ({
     { name: "grafana.example.com", domains: ["grafana.example.com"], expires: days(12), daysLeft: 12, valid: true, keyType: "RSA", certificatePath: "/etc/letsencrypt/live/grafana.example.com/fullchain.pem", privateKeyPath: "/etc/letsencrypt/live/grafana.example.com/privkey.pem", status: "VALID: 12 days" },
   ],
 });
+/** Play a job's progress (steps, output lines, transfers) on its channel, then return. */
+async function progress(ch: any, events: ([number, any] | [number, "step" | "line", string])[]) {
+  for (const [ms, a, b] of events as any[]) {
+    await new Promise((r) => setTimeout(r, ms));
+    ch?.onmessage?.(typeof a === "string" ? { type: a, text: b } : a);
+  }
+}
+const transferEvents = (files: number, total: number, names: string[], ms: number) =>
+  Array.from({ length: 12 }, (_, i) => [ms / 12, { type: "transfer", files: Math.round(((i + 1) / 12) * files), bytes: Math.round(((i + 1) / 12) * total), current: names[i % names.length] }] as [number, any]);
+
 const certbotOut = (title: string) => ({ stdout: `Saving debug log to /var/log/letsencrypt/letsencrypt.log\n${title}\n`, stderr: "", exitCode: 0, durationMs: 8200 });
 const ports = {
   source: "ss", complete: true, firewallActive: true,
@@ -653,7 +663,7 @@ export function install() {
   mockIPC(async (cmd, args: any) => {
     switch (cmd) {
       case "list_profiles": return profiles.map((p) => ({ ...p }));
-      case "ssh_config_preview": return sshImport();
+      case "ssh_config_preview": return args.path ? { ...sshImport(), path: args.path.replace(/^\/Users\/[^/]+/, "~"), candidates: sshImport().candidates.slice(0, 2) } : sshImport();
       case "import_ssh_config": return importSsh(args.keys);
       case "update_profile": {
         const i = profiles.findIndex((p) => p.id === args.id);
@@ -739,7 +749,15 @@ export function install() {
       case "detect_tools": return tools;
       case "nginx_config": return structuredClone(nginxConfig);
       case "website_plan": await new Promise((r) => setTimeout(r, 250)); return websitePlan(structuredClone(args.input));
-      case "create_website": await new Promise((r) => setTimeout(r, 900)); return createWebsite(structuredClone(args.input));
+      case "create_website":
+        await progress(args.progress, [
+          [0, "step", `Checking nginx's sites for ${args.input.domain} …`],
+          [700, "step", `Creating /var/www/${args.input.domain} …`],
+          [600, "step", `Writing /etc/nginx/sites-available/${args.input.domain} and testing it with nginx -t …`],
+          [1100, "step", "Reloading nginx …"],
+          [500, "line", ""],
+        ]);
+        return createWebsite(structuredClone(args.input));
       case "listening_ports": return ports;
       case "cron_report": return cron();
       case "cron_preview": return /^(@reboot|[0-9*/,\-a-z]+( [0-9*/,\-a-z]+){4})$/i.test(args.schedule.trim()) ? { description: describe(args.schedule), nextRuns: [inMin(60), inMin(24 * 60)], error: null } : { description: "", nextRuns: [], error: "a schedule has five fields: minute hour day-of-month month day-of-week (for example 0 3 * * *)" };
@@ -757,7 +775,14 @@ export function install() {
       }
       case "process_usage": return processUsage();
       case "list_databases": return dbs[args.kind] ?? { version: "7.0.12", connections: 4, maxConnections: 838860, error: null, databases: [{ name: "admin", sizeBytes: 40960, connections: null, tables: 1, system: true }, { name: "app", sizeBytes: 220 * MB, connections: null, tables: 14, system: false }] };
-      case "backup_database": return new Promise((r) => setTimeout(() => r(Math.round(dbs[args.kind]?.databases.find((d: any) => d.name === args.name)?.sizeBytes / 6 || 4 * MB)), 1200));
+      case "backup_database": {
+        const n = Math.round(dbs[args.kind]?.databases.find((d: any) => d.name === args.name)?.sizeBytes / 6 || 4 * MB);
+        await progress(args.progress, [[0, "step", `Dumping ${args.name} on the server (large databases take a while) …`], [2600, "step", "Downloading the dump to this computer …"], ...transferEvents(1, n, [`/tmp/orbital-backup/${args.name}.dump`], 1800)]);
+        return n;
+      }
+      case "notify": return null;
+      case "shell_history":
+        return ["docker compose logs -f --tail=100", "sudo systemctl restart nginx", "sudo nginx -t", "git pull", "tail -f /var/log/nginx/error.log", "systemctl status shop", "df -h", "cd /srv/shop", "ls -la", "htop", "sudo journalctl -u shop -n 50 --no-pager", "npm ci", "docker ps"];
       case "redis_info": return redis();
       case "redis_action": if (args.action === "flushAll") redisKeys = []; else if (args.action?.flushDb !== undefined) redisKeys = redisKeys.filter((k) => k.db !== args.action.flushDb); return redis();
       case "apache_status": return apache();
@@ -819,13 +844,42 @@ export function install() {
         if (args.ip === "203.0.113.9") throw { ...lockout, data: { check: "SSH access", output: "203.0.113.9 is the address this connection comes from; banning it would lock you out." } };
         banned[args.jail] = [...banned[args.jail], args.ip]; return f2b();
       case "certbot_status": return certs();
-      case "certbot_issue": addHttps(args.request.domains); return certbotOut(`Requesting a certificate for ${args.request.domains.join(" and ")}\n\nSuccessfully received certificate.\nCertificate is saved at: /etc/letsencrypt/live/${args.request.domains[0]}/fullchain.pem\nSuccessfully deployed certificate for ${args.request.domains[0]} to ${nginxConfig.sites.find((x) => x.serverNames.includes(args.request.domains[0]))?.file ?? "/etc/nginx/sites-enabled/blog"}`);
-      case "certbot_renew": return certbotOut(args.mode === "dryRun" ? "Processing /etc/letsencrypt/renewal/shop.example.com.conf\nSimulating renewal of an existing certificate for shop.example.com\n\nCongratulations, all simulated renewals succeeded" : `Renewing an existing certificate for ${args.name}`);
+      case "certbot_issue":
+        await progress(args.progress, [
+          [0, "step", `Asking Let's Encrypt for a certificate for ${args.request.domains.join(", ")} …`],
+          [600, "line", "Saving debug log to /var/log/letsencrypt/letsencrypt.log"],
+          [900, "line", `Requesting a certificate for ${args.request.domains.join(" and ")}`],
+          [1800, "line", "Performing the following challenges:"],
+          [400, "line", `http-01 challenge for ${args.request.domains[0]}`],
+          [1500, "line", "Waiting for verification..."],
+          [2200, "line", "Cleaning up challenges"],
+          [700, "line", "Successfully received certificate."],
+        ]);
+        addHttps(args.request.domains); return certbotOut(`Requesting a certificate for ${args.request.domains.join(" and ")}\n\nSuccessfully received certificate.\nCertificate is saved at: /etc/letsencrypt/live/${args.request.domains[0]}/fullchain.pem\nSuccessfully deployed certificate for ${args.request.domains[0]} to ${nginxConfig.sites.find((x) => x.serverNames.includes(args.request.domains[0]))?.file ?? "/etc/nginx/sites-enabled/blog"}`);
+      case "certbot_renew":
+        await progress(args.progress, [
+          [0, "step", args.mode === "dryRun" ? `Testing renewal of ${args.name ?? "all certificates"} against Let's Encrypt's staging servers …` : `Renewing ${args.name} with Let's Encrypt …`],
+          [500, "line", "Saving debug log to /var/log/letsencrypt/letsencrypt.log"],
+          [800, "line", `Processing /etc/letsencrypt/renewal/${args.name ?? "shop.example.com"}.conf`],
+          [1200, "line", args.mode === "dryRun" ? `Simulating renewal of an existing certificate for ${args.name ?? "shop.example.com"}` : `Renewing an existing certificate for ${args.name}`],
+          [1600, "line", "Performing the following challenges:"],
+          [300, "line", `http-01 challenge for ${args.name ?? "shop.example.com"}`],
+          [2400, "line", "Waiting for verification..."],
+          [1800, "line", "Cleaning up challenges"],
+        ]);
+        return certbotOut(args.mode === "dryRun" ? "Processing /etc/letsencrypt/renewal/shop.example.com.conf\nSimulating renewal of an existing certificate for shop.example.com\n\nCongratulations, all simulated renewals succeeded" : `Renewing an existing certificate for ${args.name}`);
       case "certbot_delete":
         if (!args.force) throw { kind: "PreflightFailed", message: "Pre-flight check failed", data: { check: "web server config", output: `These files still use this certificate, so the web server would fail to start without it:\n/etc/nginx/sites-enabled/${args.name.split(".")[0]}` } };
         return certbotOut(`Deleted all files relating to certificate ${args.name}.`);
-      case "copy_between": return { files: 12, dirs: 3, bytes: 482113, skipped: 0 };
-      case "service_action": return { command: `systemctl ${args.action} -- ${args.unit}`, preflight: args.unit.startsWith("nginx") ? ["nginx -t", "syntax is ok"] : null, output: { stdout: "", stderr: "", exitCode: 0, durationMs: 120 } };
+      case "copy_between":
+        await progress(args.progress, [[0, "step", `Copying ${args.srcPath} …`], ...transferEvents(12, 48_211_300, ["app.js", "vendor.js", "logo.png", "index.html"], 5000)]);
+        return { files: 12, dirs: 3, bytes: 48_211_300, skipped: 0 };
+      case "upload":
+        await progress(args.progress, transferEvents(1, 18_400_000, [args.remotePath], 3000));
+        return 18_400_000;
+      case "service_action":
+        await progress(args.progress, [[0, "step", `Running systemctl ${args.action} ${args.unit} …`], ...(args.unit.startsWith("nginx") ? [[400, "line", "nginx: the configuration file /etc/nginx/nginx.conf syntax is ok"], [200, "line", "nginx: configuration file /etc/nginx/nginx.conf test is successful"]] as [number, "line", string][] : []), [900, "line", ""]]);
+        return { command: `systemctl ${args.action} -- ${args.unit}`, preflight: args.unit.startsWith("nginx") ? ["nginx -t", "syntax is ok"] : null, output: { stdout: "", stderr: "", exitCode: 0, durationMs: 120 } };
       case "list_services": return services;
       case "service_detail": return {
         unit: args.unit,
@@ -840,7 +894,14 @@ export function install() {
         const labels = c?.composeProject ? { "com.docker.compose.project": c.composeProject, "com.docker.compose.service": c.names.replace(`${c.composeProject}-`, "").replace(/-\d+$/, ""), "com.docker.compose.project.config_files": `/srv/${c.composeProject}/docker-compose.yml`, "com.docker.compose.project.working_dir": `/srv/${c.composeProject}` } : {};
         return { Id: args.id, Config: { Image: c?.image ?? "nginx:1.27-alpine", Env: ["TZ=Asia/Tashkent"], Labels: labels }, State: { Status: "running", Health: { Status: "healthy" } } };
       }
-      case "compose_action": return { stdout: "", stderr: args.action === "pull" ? ` ✔ web Pulled\n ✔ api Pulled\n` : ` ✔ Container ${args.target.project}-${args.target.service ?? "web"}-1  ${args.action === "up" ? "Running" : "Started"}\n`, exitCode: 0, durationMs: 2400 };
+      case "compose_action":
+        await progress(args.progress, [
+          [0, "step", `docker compose ${args.action} for ${args.target.project} …`],
+          ...(args.action === "pull"
+            ? ([[500, "line", " web Pulling"], [600, "line", " api Pulling"], [900, "line", " 3f4ca6 Downloading  12.4MB/48.1MB"], [900, "line", " 3f4ca6 Downloading  39.9MB/48.1MB"], [800, "line", " 3f4ca6 Pull complete"], [500, "line", " ✔ web Pulled"], [400, "line", " ✔ api Pulled"]] as [number, "line", string][])
+            : ([[700, "line", ` Container ${args.target.project}-web-1  Recreate`], [1500, "line", ` Container ${args.target.project}-web-1  Recreated`], [700, "line", ` Container ${args.target.project}-web-1  Starting`], [900, "line", ` Container ${args.target.project}-web-1  Started`]] as [number, "line", string][])),
+        ]);
+        return { stdout: "", stderr: args.action === "pull" ? ` ✔ web Pulled\n ✔ api Pulled\n` : ` ✔ Container ${args.target.project}-${args.target.service ?? "web"}-1  ${args.action === "up" ? "Running" : "Started"}\n`, exitCode: 0, durationMs: 2400 };
       case "uptime_watch": {
         const first = !uptimeCh;
         uptimeCh = args.onEvent;
@@ -966,6 +1027,8 @@ export function install() {
       }
       case "plugin:event|listen": return 1;
       case "plugin:dialog|save": return `/Users/demo/Downloads/${args.options?.defaultPath ?? "download"}`;
+      // Picking an SSH config file in the import dialog.
+      case "plugin:dialog|open": return args.options?.title?.includes("SSH config") ? "/Users/demo/work/ssh_config" : null;
       // Updates: a newer version is always on offer; the download takes a few seconds.
       case "plugin:app|version": return "1.0.0";
       case "plugin:updater|check":

@@ -3,6 +3,8 @@ import { Camera, Database, Download, Eraser, Loader2, RefreshCw, Server } from "
 import { ReactNode, useState } from "react";
 import { confirm, LiveNumber, Modal } from "../components/ui";
 import { api, asApiError, BackupFormat, DbInfo, DbKind, RedisAction } from "../lib/api";
+import { runJob, useRunningJob } from "../lib/jobs";
+import { JobProgress } from "../components/JobProgress";
 import { bytes, duration } from "../lib/format";
 import { useRemote } from "../lib/remote";
 import { SessionState, useStore } from "../store";
@@ -29,23 +31,26 @@ export function WithServicePane({ s, toolId, label, children }: { s: SessionStat
 const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "").replace(/^(\d{8})/, "$1-");
 
 function BackupDialog({ s, kind, db, onClose }: { s: SessionState; kind: DbKind; db: DbInfo; onClose: () => void }) {
-  const toast = useStore((x) => x.toast);
   const [format, setFormat] = useState<BackupFormat>(kind === "mysql" ? "sqlGz" : "native");
-  const [busy, setBusy] = useState(false);
+  const key = `backup:${s.info.id}:${db.name}`;
+  const job = useRunningJob(key);
+  const busy = !!job;
   const ext = kind === "mongo" ? "archive.gz" : kind === "postgres" && format === "native" ? "dump" : "sql.gz";
 
   async function go() {
     const local = await saveDialog({ title: `Back up ${db.name}`, defaultPath: `${db.name}-${stamp()}.${ext}` });
     if (!local) return;
-    setBusy(true);
     try {
-      const n = await api.backupDatabase(s.info.id, kind, db.name, format, local);
-      toast({ kind: "success", title: `${db.name} backed up`, body: `${bytes(n)} saved to ${local}` });
+      await runJob((p) => api.backupDatabase(s.info.id, kind, db.name, format, local, p), {
+        key,
+        title: `Backup of ${db.name}`,
+        sid: s.info.id,
+        quietHere: false,
+        done: (n) => `${db.name} backed up: ${bytes(n)} saved to ${local}`,
+      });
       onClose();
-    } catch (e) {
-      toast({ kind: "error", title: `Backup of ${db.name} failed`, body: asApiError(e).message });
-    } finally {
-      setBusy(false);
+    } catch {
+      // The job reports the error.
     }
   }
 
@@ -55,9 +60,10 @@ function BackupDialog({ s, kind, db, onClose }: { s: SessionState; kind: DbKind;
     mongo: `mongorestore --gzip --archive=${db.name}.archive.gz`,
   }[kind];
   return (
-    <Modal title={`Back up ${db.name}`} subtitle="Orbital dumps the database on the server, downloads the file to this computer, and deletes the copy on the server." onClose={busy ? undefined : onClose}
-      footer={<><button className="btn" disabled={busy} onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={go}>{busy ? <><Loader2 size={13} className="spin" /> Backing up…</> : <><Download size={13} /> Choose where to save…</>}</button></>}>
+    <Modal title={`Back up ${db.name}`} subtitle="Orbital dumps the database on the server, downloads the file to this computer, and deletes the copy on the server." onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>{busy ? "Continue in the background" : "Cancel"}</button><button className="btn primary" disabled={busy} onClick={go}>{busy ? <><Loader2 size={13} className="spin" /> Backing up…</> : <><Download size={13} /> Choose where to save…</>}</button></>}>
       <div className="form">
+        {job && <JobProgress job={job} />}
         {kind === "postgres" && (
           <div className="field"><span>Format</span>
             <div className="segmented">

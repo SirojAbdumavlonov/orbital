@@ -2,6 +2,8 @@ import { Check, CheckCircle2, Cloud, Copy, FileText, Globe, Lock, Server } from 
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../components/ui";
 import { api, asApiError, CertbotStatus, DnsAccount, DnsRecord, DnsZone, ExecOutput, SiteKind, WebsiteInput, WebsitePlan, WebsiteReport } from "../lib/api";
+import { runJob, useRunningJob } from "../lib/jobs";
+import { JobProgress } from "../components/JobProgress";
 import { useStore } from "../store";
 import { DnsReadiness } from "./CertbotView";
 import { CheckPanel } from "./DomainsView";
@@ -150,10 +152,11 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
     return () => { alive = false; clearTimeout(t); };
   }, [step, inputKey, report]);
 
+  const job = useRunningJob(`website:${sid}`);
   async function createSite() {
     setCreating(true);
     try {
-      const rep = await api.createWebsite(sid, input);
+      const rep = await runJob((p) => api.createWebsite(sid, input, p), { key: `website:${sid}`, title: `New website ${domain}`, sid, done: (r) => (r.reloaded ? `${domain} is set up in nginx` : { failed: "Saved, but nginx didn't reload" }) });
       setReport(rep);
       finish(2);
       useStore.setState((x) => ({ websiteRev: x.websiteRev + 1 }));
@@ -185,15 +188,18 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
   async function issue() {
     setIssuing(true);
     try {
-      const out = await api.certbotIssue(sid, { domains: names, email: email.trim() || null, method: "nginx", webroot: null, redirect, staging, agreeTos: agree });
+      const out = await runJob(
+        (p) => api.certbotIssue(sid, { domains: names, email: email.trim() || null, method: "nginx", webroot: null, redirect, staging, agreeTos: agree }, p),
+        { key: `website:${sid}`, title: `Certificate for ${domain}`, sid, done: (o) => (o.exitCode === 0 ? `https://${domain} is live` : { failed: "Let's Encrypt didn't issue the certificate" }) },
+      );
       setCertOut(out);
       if (out.exitCode === 0) {
         finish(3);
         useStore.setState((x) => ({ websiteRev: x.websiteRev + 1 }));
         toast({ kind: "success", title: `https://${domain} is live`, body: staging ? "Test certificate from the staging servers; browsers won't trust it." : undefined });
       }
-    } catch (e) {
-      toast({ kind: "error", title: "Couldn't request the certificate", body: asApiError(e).message });
+    } catch {
+      // The job reports the error.
     } finally {
       setIssuing(false);
     }
@@ -231,7 +237,7 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
     return <><span className="spacer" />
       {done.has(3) || !hasCertbot || !certbot?.plugins.includes("nginx")
         ? <button className="btn primary" onClick={close}>Done</button>
-        : <><button className="btn" onClick={close}>Skip HTTPS</button><button className="btn primary" disabled={issuing || !agree} onClick={issue}>{issuing ? "Requesting… this can take a minute" : "Request certificate"}</button></>}
+        : <><button className="btn" onClick={close}>Skip HTTPS</button><button className="btn primary" disabled={issuing || !agree} onClick={issue}>{issuing ? "Requesting…" : "Request certificate"}</button></>}
     </>;
   })();
 
@@ -245,6 +251,7 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
           </li>
         ))}
       </ol>
+      {job && <div style={{ marginBottom: 12 }}><JobProgress job={job} /></div>}
 
       {step === 0 && (
         <div className="form">

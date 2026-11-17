@@ -16,6 +16,10 @@ export interface Settings {
   terminalAsRoot: boolean;
   /** Look for a new version of Orbital at launch and every few hours. */
   autoUpdates: boolean;
+  /** The SSH config "Import from ~/.ssh/config" reads; empty means ~/.ssh/config. */
+  sshConfigPath: string;
+  /** Suggest commands under the terminal (from the server's shell history and common next steps). */
+  terminalSuggestions: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -28,6 +32,8 @@ const DEFAULTS: Settings = {
   sidebarHidden: false,
   terminalAsRoot: true,
   autoUpdates: true,
+  sshConfigPath: "",
+  terminalSuggestions: true,
 };
 
 const KEY = "orbital.settings";

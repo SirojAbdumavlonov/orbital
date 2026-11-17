@@ -876,13 +876,32 @@ export interface DnsCheck { name: string; type: DnsType; expected: string[]; ans
 
 export type TermMessage = { type: "data"; data: string } | { type: "exit"; code: number | null };
 
+// ---------- job progress (orbital_core::progress) ----------
+
+/** What a long operation reports while it runs. */
+export type ProgressEvent =
+  | { type: "step"; text: string }
+  | { type: "line"; text: string }
+  | { type: "transfer"; files: number; bytes: number; current: string };
+export type OnProgress = (e: ProgressEvent) => void;
+
+/** Long commands always take a progress channel; it is only listened to when someone wants it. */
+function progressChannel(onProgress?: OnProgress) {
+  const ch = new Channel<ProgressEvent>();
+  if (onProgress) ch.onmessage = onProgress;
+  return ch;
+}
+
 export const api = {
+  /** A system notification (for jobs that finish while Orbital is in the background). */
+  notify: (title: string, body: string) => invoke<void>("notify", { title, body }),
   listProfiles: () => invoke<Profile[]>("list_profiles"),
   createProfile: (input: ProfileInput) => invoke<Profile>("create_profile", { input }),
   updateProfile: (id: string, input: ProfileInput) => invoke<Profile>("update_profile", { id, input }),
   deleteProfile: (id: string) => invoke<void>("delete_profile", { id }),
-  sshConfigPreview: () => invoke<SshImportPreview>("ssh_config_preview"),
-  importSshConfig: (keys: string[]) => invoke<SshImportReport>("import_ssh_config", { keys }),
+  /** Hosts in `path` (`~/…` works), or in ~/.ssh/config when it's null. */
+  sshConfigPreview: (path: string | null = null) => invoke<SshImportPreview>("ssh_config_preview", { path }),
+  importSshConfig: (path: string | null, keys: string[]) => invoke<SshImportReport>("import_ssh_config", { path, keys }),
   setSecret: (profileId: string, kind: SecretKind, value: string | null) =>
     invoke<void>("set_secret", { profileId, kind, value }),
   hasSecret: (profileId: string, kind: SecretKind) => invoke<boolean>("has_secret", { profileId, kind }),
@@ -912,17 +931,19 @@ export const api = {
   rename: (sessionId: string, from: string, to: string) => invoke<void>("rename", { sessionId, from, to }),
   remove: (sessionId: string, path: string, recursive: boolean) => invoke<void>("remove", { sessionId, path, recursive }),
   chmod: (sessionId: string, path: string, mode: number) => invoke<void>("chmod", { sessionId, path, mode }),
-  upload: (sessionId: string, localPath: string, remotePath: string) => invoke<number>("upload", { sessionId, localPath, remotePath }),
+  upload: (sessionId: string, localPath: string, remotePath: string, onProgress?: OnProgress) =>
+    invoke<number>("upload", { sessionId, localPath, remotePath, progress: progressChannel(onProgress) }),
   download: (sessionId: string, remotePath: string, localPath: string) => invoke<number>("download", { sessionId, remotePath, localPath }),
 
   /** Copy a file or folder from one connected server to another (streamed through this computer). */
-  copyBetween: (a: { srcSessionId: string; srcPath: string; dstSessionId: string; dstPath: string; overwrite: boolean }) =>
-    invoke<TransferReport>("copy_between", a),
+  copyBetween: (a: { srcSessionId: string; srcPath: string; dstSessionId: string; dstPath: string; overwrite: boolean }, onProgress?: OnProgress) =>
+    invoke<TransferReport>("copy_between", { ...a, progress: progressChannel(onProgress) }),
 
   detectTools: (sessionId: string) => invoke<DetectedTool[]>("detect_tools", { sessionId }),
   nginxConfig: (sessionId: string) => invoke<NginxConfig>("nginx_config", { sessionId }),
   websitePlan: (sessionId: string, input: WebsiteInput) => invoke<WebsitePlan>("website_plan", { sessionId, input }),
-  createWebsite: (sessionId: string, input: WebsiteInput) => invoke<WebsiteReport>("create_website", { sessionId, input }),
+  createWebsite: (sessionId: string, input: WebsiteInput, onProgress?: OnProgress) =>
+    invoke<WebsiteReport>("create_website", { sessionId, input, progress: progressChannel(onProgress) }),
   listeningPorts: (sessionId: string) => invoke<PortsReport>("listening_ports", { sessionId }),
   sshdReport: (sessionId: string) => invoke<SshdReport>("sshd_report", { sessionId }),
 
@@ -940,9 +961,12 @@ export const api = {
   fail2banBan: (sessionId: string, jail: string, ip: string) => invoke<Fail2banStatus>("fail2ban_ban", { sessionId, jail, ip }),
 
   certbotStatus: (sessionId: string) => invoke<CertbotStatus>("certbot_status", { sessionId }),
-  certbotIssue: (sessionId: string, request: IssueRequest) => invoke<ExecOutput>("certbot_issue", { sessionId, request }),
-  certbotRenew: (sessionId: string, name: string | null, mode: RenewMode) => invoke<ExecOutput>("certbot_renew", { sessionId, name, mode }),
-  certbotDelete: (sessionId: string, name: string, force = false) => invoke<ExecOutput>("certbot_delete", { sessionId, name, force }),
+  certbotIssue: (sessionId: string, request: IssueRequest, onProgress?: OnProgress) =>
+    invoke<ExecOutput>("certbot_issue", { sessionId, request, progress: progressChannel(onProgress) }),
+  certbotRenew: (sessionId: string, name: string | null, mode: RenewMode, onProgress?: OnProgress) =>
+    invoke<ExecOutput>("certbot_renew", { sessionId, name, mode, progress: progressChannel(onProgress) }),
+  certbotDelete: (sessionId: string, name: string, force = false, onProgress?: OnProgress) =>
+    invoke<ExecOutput>("certbot_delete", { sessionId, name, force, progress: progressChannel(onProgress) }),
 
   /** Forward 127.0.0.1:localPort on this computer to remoteHost:remotePort as the server sees it. */
   openTunnel: (sessionId: string, remoteHost: string, remotePort: number, localPort: number | null, label: string | null) =>
@@ -987,25 +1011,27 @@ export const api = {
     invoke<HaproxyStatus>("haproxy_server_state", { sessionId, backend, server, state }),
   listDatabases: (sessionId: string, kind: DbKind) => invoke<DbServer>("list_databases", { sessionId, kind }),
   /** Dump on the server, download to `localPath`, remove the server copy. Returns bytes downloaded. */
-  backupDatabase: (sessionId: string, kind: DbKind, name: string, format: BackupFormat, localPath: string) =>
-    invoke<number>("backup_database", { sessionId, kind, name, format, localPath }),
+  backupDatabase: (sessionId: string, kind: DbKind, name: string, format: BackupFormat, localPath: string, onProgress?: OnProgress) =>
+    invoke<number>("backup_database", { sessionId, kind, name, format, localPath, progress: progressChannel(onProgress) }),
   redisInfo: (sessionId: string) => invoke<RedisInfo>("redis_info", { sessionId }),
   redisAction: (sessionId: string, action: RedisAction) => invoke<RedisInfo>("redis_action", { sessionId, action }),
   systemInfo: (sessionId: string) => invoke<SystemInfo>("system_info", { sessionId }),
   metrics: (sessionId: string) => invoke<Metrics>("metrics", { sessionId }),
   listServices: (sessionId: string) => invoke<Service[]>("list_services", { sessionId }),
   serviceDetail: (sessionId: string, unit: string) => invoke<ServiceDetail>("service_detail", { sessionId, unit }),
-  serviceAction: (sessionId: string, unit: string, action: ServiceAction) =>
-    invoke<ActionReport>("service_action", { sessionId, unit, action }),
+  serviceAction: (sessionId: string, unit: string, action: ServiceAction, onProgress?: OnProgress) =>
+    invoke<ActionReport>("service_action", { sessionId, unit, action, progress: progressChannel(onProgress) }),
   listContainers: (sessionId: string) => invoke<Container[]>("list_containers", { sessionId }),
   containerStats: (sessionId: string) => invoke<ContainerStats[]>("container_stats", { sessionId }),
   inspectContainer: (sessionId: string, id: string) => invoke<any>("inspect_container", { sessionId, id }),
   containerLogs: (sessionId: string, id: string, tail = 500) => invoke<string>("container_logs", { sessionId, id, tail }),
-  containerAction: (sessionId: string, id: string, action: ContainerAction) =>
-    invoke<ExecOutput>("container_action", { sessionId, id, action }),
+  containerAction: (sessionId: string, id: string, action: ContainerAction, onProgress?: OnProgress) =>
+    invoke<ExecOutput>("container_action", { sessionId, id, action, progress: progressChannel(onProgress) }),
   /** docker compose up -d / restart / pull for a project or one service; returns Compose's output. */
-  composeAction: (sessionId: string, target: ComposeTarget, action: ComposeAction) =>
-    invoke<ExecOutput>("compose_action", { sessionId, target, action }),
+  composeAction: (sessionId: string, target: ComposeTarget, action: ComposeAction, onProgress?: OnProgress) =>
+    invoke<ExecOutput>("compose_action", { sessionId, target, action, progress: progressChannel(onProgress) }),
+  /** The server's shell history, newest first (root's for root terminals), for terminal suggestions. */
+  shellHistory: (sessionId: string, root: boolean) => invoke<string[]>("shell_history", { sessionId, root }),
   runCommand: (sessionId: string, command: string, privileged: boolean) =>
     invoke<ExecOutput>("run_command", { sessionId, command, privileged }),
 

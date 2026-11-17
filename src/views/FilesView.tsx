@@ -8,6 +8,8 @@ import Editor, { DiffEditor, DiffOnMount, OnMount } from "@monaco-editor/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { confirm, Modal } from "../components/ui";
 import { api, asApiError, FileEntry, SafeWriteReport } from "../lib/api";
+import { runJob, useRunningJob } from "../lib/jobs";
+import { JobProgress } from "../components/JobProgress";
 import { baseName, breadcrumbs, bytes, joinPath, octal, parentPath, relativeTime } from "../lib/format";
 import { languageFor } from "../lib/language";
 import "../lib/monaco";
@@ -38,6 +40,8 @@ function Browser({ s }: { s: SessionState }) {
   const [chmodOf, setChmodOf] = useState<FileEntry | null>(null);
   const [newItem, setNewItem] = useState<"file" | "folder" | null>(null);
   const [copyOf, setCopyOf] = useState<FileEntry | null>(null);
+  const uploadJob = useRunningJob(`upload:${sid}`);
+  const copyJob = useRunningJob(`copy:${sid}`);
 
   const load = useCallback(async (path = s.cwd) => {
     setLoading(true);
@@ -93,12 +97,12 @@ function Browser({ s }: { s: SessionState }) {
   async function uploadPaths(paths: string[]) {
     for (const p of paths) {
       const name = p.split(/[\\/]/).pop()!;
+      const to = joinPath(s.cwd, name);
       try {
-        const n = await api.upload(sid, p, joinPath(s.cwd, name));
-        toast({ kind: "success", title: `Uploaded ${name}`, body: bytes(n) });
+        await runJob((pr) => api.upload(sid, p, to, pr), { key: `upload:${sid}`, title: `Uploading ${name}`, sid, quietHere: false, done: (n) => `Uploaded ${name} (${bytes(n)})` });
         load();
-      } catch (err) {
-        toast({ kind: "error", title: `Upload of ${name} failed`, body: asApiError(err).message });
+      } catch {
+        // The job reports the error.
       }
     }
     load();
@@ -156,6 +160,12 @@ function Browser({ s }: { s: SessionState }) {
         <button className="icon-btn" title="Upload a folder from this computer" aria-label="Upload folder" onClick={pickUploadFolder}><FolderUp size={15} /></button>
         {ssh && <button className="icon-btn" title="Open terminal in this folder" aria-label="Open terminal here" onClick={() => openTerminal(sid, s.cwd)}><SquareTerminal size={15} /></button>}
       </div>
+      {(uploadJob || copyJob) && (
+        <div className="job-stack">
+          {uploadJob && <JobProgress job={uploadJob} compact />}
+          {copyJob && !copyOf && <JobProgress job={copyJob} compact />}
+        </div>
+      )}
       <div className="list" role="listbox" tabIndex={0} onKeyDown={(e) => {
         if (e.key === "Enter" && selected) openEntry(selected);
         if (((e.key === "Backspace" && mod(e)) || (!isMac && e.key === "Delete")) && selected) remove(selected);
@@ -184,7 +194,7 @@ function Browser({ s }: { s: SessionState }) {
           {ssh ? <span className="mono faint" title="Permissions">{selected.mode}</span> : <span className="mono faint">{selected.kind === "dir" ? "Folder" : bytes(selected.size)}</span>}
           <span className="spacer" />
           {selected.kind !== "dir" && <button className="icon-btn" title="Download" aria-label="Download" onClick={() => download(selected)}><Download size={14} /></button>}
-          {ssh && <button className="icon-btn" title="Copy to another server" aria-label="Copy to another server" onClick={() => setCopyOf(selected)}><ArrowRightLeft size={14} /></button>}
+          {ssh && <button className="btn" title="Copy this to another server" onClick={() => setCopyOf(selected)}><ArrowRightLeft size={13} /> Send to server…</button>}
           <button className="icon-btn" title="Rename" aria-label="Rename" onClick={() => setRename(selected)}><Pencil size={14} /></button>
           {ssh && <button className="icon-btn" title="Permissions" aria-label="Permissions" onClick={() => setChmodOf(selected)}><Lock size={14} /></button>}
           <button className="icon-btn" title="Delete" aria-label="Delete" onClick={() => remove(selected)}><Trash2 size={14} /></button>
@@ -245,69 +255,128 @@ function NameDialog(p: { title: string; initial: string; action: string; onClose
   );
 }
 
-/** Copy a file or folder to another server that is connected right now. */
+/**
+ * Send a file or folder to another server: any saved SSH server, connected
+ * here on the spot if it isn't yet. The copy is a job: it shows files and
+ * bytes as they go, and keeps going if the dialog is closed.
+ */
 function CopyDialog({ s, entry, onClose }: { s: SessionState; entry: FileEntry; onClose: () => void }) {
-  const toast = useStore((x) => x.toast);
-  const sessions = useStore((x) => x.sessions);
-  const order = useStore((x) => x.order);
-  const others = order.map((id) => sessions[id]).filter((o) => o && o.info.id !== s.info.id && !o.lost);
-  const [target, setTarget] = useState(others[0]?.info.id ?? "");
-  const [dir, setDir] = useState(others[0]?.cwd ?? "");
+  const { sessions, profiles, connecting } = useStore();
+  const key = `copy:${s.info.id}`;
+  const job = useRunningJob(key);
+  // Saved SSH servers other than this one; a connected one is used as it is.
+  const candidates = profiles.filter((p) => (p.protocol ?? "sftp") === "sftp" && p.id !== s.profile.id);
+  const sessionOf = (pid: string) => Object.values(sessions).find((o) => o.profile.id === pid && !o.lost);
+  const firstConnected = candidates.find((p) => sessionOf(p.id));
+  const [pid, setPid] = useState(firstConnected?.id ?? candidates[0]?.id ?? "");
+  const dst = pid ? sessionOf(pid) : undefined;
+  const [dir, setDir] = useState(dst?.cwd ?? "");
+  const [folders, setFolders] = useState<string[] | null>(null);
   const [overwrite, setOverwrite] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const dst = sessions[target];
   const valid = !!dst && dir.startsWith("/");
 
-  async function go() {
-    if (!valid) return;
-    setBusy(true);
+  // The destination's folders, to click through instead of typing a path.
+  useEffect(() => {
+    if (!dst || !dir.startsWith("/")) return setFolders(null);
+    let alive = true;
+    const t = setTimeout(() => {
+      api.listDir(dst.info.id, dir).then(
+        (l) => alive && setFolders(l.filter((f) => f.kind === "dir").map((f) => f.name).sort()),
+        () => alive && setFolders(null),
+      );
+    }, 250);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [dst?.info.id, dir]);
+
+  async function connectTarget() {
     setErr(null);
+    const here = s.info.id;
+    await useStore.getState().connect(pid);
+    // Connecting switches to the new server; stay here, in this dialog.
+    useStore.setState({ active: here, globalView: null });
+    const o = sessionOf(pid) ?? Object.values(useStore.getState().sessions).find((x) => x.profile.id === pid && !x.lost);
+    if (o) setDir(o.cwd);
+  }
+
+  async function go() {
+    if (!valid || !dst) return;
+    setErr(null);
+    const target = dst.info.id;
+    const to = joinPath(dir, entry.name);
     try {
-      const rep = await api.copyBetween({ srcSessionId: s.info.id, srcPath: entry.path, dstSessionId: target, dstPath: joinPath(dir, entry.name), overwrite });
-      toast({
-        kind: "success",
-        title: `Copied ${entry.name} to ${dst.profile.name}`,
-        body: [`${rep.files} ${rep.files === 1 ? "file" : "files"}, ${bytes(rep.bytes)}`, rep.skipped ? `${rep.skipped} links or special files skipped` : ""].filter(Boolean).join("\n"),
-      });
-      // Make the other server's file list show the new item next time it is looked at.
+      await runJob(
+        (p) => api.copyBetween({ srcSessionId: s.info.id, srcPath: entry.path, dstSessionId: target, dstPath: to, overwrite }, p),
+        {
+          key,
+          title: `Sending ${entry.name} to ${dst.profile.name}`,
+          sid: s.info.id,
+          quietHere: false,
+          done: (rep) => `${entry.name} sent to ${dst.profile.name}: ${rep.files} ${rep.files === 1 ? "file" : "files"}, ${bytes(rep.bytes)}${rep.skipped ? `, ${rep.skipped} links or special files skipped` : ""}`,
+        },
+      );
+      // The other server's file list shows the new item the next time it's opened.
       useStore.getState().patch(target, { cwd: dir });
       onClose();
     } catch (e) {
       setErr(asApiError(e).message);
-    } finally {
-      setBusy(false);
     }
   }
 
+  const up = dir.replace(/\/[^/]+\/?$/, "") || "/";
   return (
     <Modal
-      title={`Copy ${entry.name} to another server`}
+      title={`Send ${entry.name} to another server`}
       subtitle={<>From <b>{s.profile.name}</b> <span className="mono">{entry.path}</span></>}
       onClose={onClose}
-      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!valid || busy} onClick={go}>{busy ? "Copying…" : "Copy"}</button></>}
+      footer={<>
+        <button className="btn" onClick={onClose}>{job ? "Continue in the background" : "Cancel"}</button>
+        <button className="btn primary" disabled={!valid || !!job} onClick={go}>{job ? "Sending…" : "Send"}</button>
+      </>}
     >
       {err && <div className="alert">{err}</div>}
-      {others.length === 0 ? (
-        <p className="note">Connect to the server you want to copy to first (click it in the sidebar), then come back here.</p>
+      {job && <div style={{ marginBottom: 12 }}><JobProgress job={job} /></div>}
+      {candidates.length === 0 ? (
+        <p className="note">Add the other server first (the "+" in the sidebar), then come back here.</p>
       ) : (
-        <>
+        <div className="form">
           <label className="field">
             <span>To server</span>
-            <select className="input" value={target} onChange={(e) => { setTarget(e.target.value); setDir(sessions[e.target.value]?.cwd ?? ""); }}>
-              {others.map((o) => <option key={o.info.id} value={o.info.id}>{o.profile.name} ({o.info.label})</option>)}
+            <select className="input" value={pid} disabled={!!job} onChange={(e) => { setPid(e.target.value); setDir(sessionOf(e.target.value)?.cwd ?? ""); }}>
+              {candidates.map((p) => <option key={p.id} value={p.id}>{p.name}{sessionOf(p.id) ? "" : " (not connected)"}</option>)}
             </select>
           </label>
-          <label className="field">
-            <span>Into folder</span>
-            <input className="input mono" value={dir} onChange={(e) => setDir(e.target.value)} />
-            <span className="hint">Will be created as <span className="mono">{valid ? joinPath(dir, entry.name) : "…"}</span>. Files travel through this computer; the two servers don't connect to each other.</span>
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
-            <span>Replace it if it already exists there</span>
-          </label>
-        </>
+          {!dst ? (
+            <div className="notice" style={{ margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ flex: 1 }}>Orbital connects to it to send the file; you stay here.</span>
+              <button className="btn primary" disabled={!!connecting[pid]} onClick={connectTarget}>{connecting[pid] ? "Connecting…" : "Connect"}</button>
+            </div>
+          ) : (
+            <>
+              <label className="field">
+                <span>Into folder</span>
+                <input className="input mono" value={dir} disabled={!!job} onChange={(e) => setDir(e.target.value)} />
+              </label>
+              {folders && !job && (
+                <div className="folder-pick">
+                  {dir !== "/" && <button className="folder-row" onClick={() => setDir(up)}><FolderUp size={13} /> ..</button>}
+                  {folders.map((f) => (
+                    <button key={f} className="folder-row" onClick={() => setDir(joinPath(dir, f))}><Folder size={13} /> {f}</button>
+                  ))}
+                  {folders.length === 0 && <div className="faint" style={{ padding: "6px 8px" }}>No folders here</div>}
+                </div>
+              )}
+              <span className="hint">Arrives as <span className="mono">{valid ? joinPath(dir, entry.name) : "…"}</span>. Files travel through this computer; the two servers don't connect to each other, and no keys or passwords are sent to either.</span>
+              <label className="check">
+                <input type="checkbox" checked={overwrite} disabled={!!job} onChange={(e) => setOverwrite(e.target.checked)} />
+                <span>Replace it if it already exists there</span>
+              </label>
+            </>
+          )}
+        </div>
       )}
     </Modal>
   );

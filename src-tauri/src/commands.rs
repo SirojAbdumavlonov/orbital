@@ -16,6 +16,7 @@ use orbital_core::metrics::Metrics;
 use orbital_core::nginx::NginxConfig;
 use orbital_core::ports::PortsReport;
 use orbital_core::profiles::{Profile, ProfileInput};
+use orbital_core::progress::{self, ProgressEvent};
 use orbital_core::secrets::SecretKind;
 use orbital_core::services::{ActionReport, Service, ServiceAction, ServiceDetail};
 use orbital_core::sftp::{FileContent, FileEntry, TransferReport};
@@ -40,6 +41,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::ipc::Channel;
+
+/// A job's progress channel as the engine's sink (see `orbital_core::progress`).
+/// The UI passes one for every long operation and shows it when it wants to.
+fn sink(ch: Channel<ProgressEvent>) -> Option<progress::Sink> {
+    Some(std::sync::Arc::new(move |ev| {
+        let _ = ch.send(ev);
+    }))
+}
 use tauri::State;
 
 type Eng<'a> = State<'a, Arc<Engine>>;
@@ -86,13 +95,13 @@ pub fn delete_profile(engine: Eng, id: String) -> R<()> {
 }
 
 #[tauri::command]
-pub fn ssh_config_preview(engine: Eng) -> R<Preview> {
-    engine.ssh_config_preview()
+pub fn ssh_config_preview(engine: Eng, path: Option<String>) -> R<Preview> {
+    engine.ssh_config_preview(path.as_deref())
 }
 
 #[tauri::command]
-pub fn import_ssh_config(engine: Eng, keys: Vec<String>) -> R<ImportReport> {
-    engine.import_ssh_config(&keys)
+pub fn import_ssh_config(engine: Eng, path: Option<String>, keys: Vec<String>) -> R<ImportReport> {
+    engine.import_ssh_config(path.as_deref(), &keys)
 }
 
 #[tauri::command]
@@ -241,8 +250,14 @@ pub async fn chmod(engine: Eng<'_>, session_id: String, path: String, mode: u32)
 }
 
 #[tauri::command]
-pub async fn upload(engine: Eng<'_>, session_id: String, local_path: String, remote_path: String) -> R<u64> {
-    engine.upload(&session_id, &PathBuf::from(local_path), &remote_path).await
+pub async fn upload(
+    engine: Eng<'_>,
+    session_id: String,
+    local_path: String,
+    remote_path: String,
+    progress: Channel<ProgressEvent>,
+) -> R<u64> {
+    progress::scope(sink(progress), engine.upload(&session_id, &PathBuf::from(local_path), &remote_path)).await
 }
 
 #[tauri::command]
@@ -258,10 +273,13 @@ pub async fn copy_between(
     dst_session_id: String,
     dst_path: String,
     overwrite: bool,
+    progress: Channel<ProgressEvent>,
 ) -> R<TransferReport> {
-    engine
-        .copy_between(&src_session_id, &src_path, &dst_session_id, &dst_path, overwrite)
-        .await
+    progress::scope(
+        sink(progress),
+        engine.copy_between(&src_session_id, &src_path, &dst_session_id, &dst_path, overwrite),
+    )
+    .await
 }
 
 // ---------- monitoring / services / docker ----------
@@ -282,13 +300,24 @@ pub async fn website_plan(engine: Eng<'_>, session_id: String, input: WebsiteInp
 }
 
 #[tauri::command]
-pub async fn create_website(engine: Eng<'_>, session_id: String, input: WebsiteInput) -> R<WebsiteReport> {
-    engine.create_website(&session_id, &input).await
+pub async fn create_website(
+    engine: Eng<'_>,
+    session_id: String,
+    input: WebsiteInput,
+    progress: Channel<ProgressEvent>,
+) -> R<WebsiteReport> {
+    progress::scope(sink(progress), engine.create_website(&session_id, &input)).await
 }
 
 #[tauri::command]
-pub async fn compose_action(engine: Eng<'_>, session_id: String, target: ComposeTarget, action: ComposeAction) -> R<ExecOutput> {
-    engine.compose_action(&session_id, target, action).await
+pub async fn compose_action(
+    engine: Eng<'_>,
+    session_id: String,
+    target: ComposeTarget,
+    action: ComposeAction,
+    progress: Channel<ProgressEvent>,
+) -> R<ExecOutput> {
+    progress::scope(sink(progress), engine.compose_action(&session_id, target, action)).await
 }
 
 #[tauri::command]
@@ -388,10 +417,13 @@ pub async fn backup_database(
     name: String,
     format: BackupFormat,
     local_path: String,
+    progress: Channel<ProgressEvent>,
 ) -> R<u64> {
-    engine
-        .backup_database(&session_id, kind, &name, format, &PathBuf::from(local_path))
-        .await
+    progress::scope(
+        sink(progress),
+        engine.backup_database(&session_id, kind, &name, format, &PathBuf::from(local_path)),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -462,18 +494,30 @@ pub async fn certbot_status(engine: Eng<'_>, session_id: String) -> R<CertbotSta
 }
 
 #[tauri::command]
-pub async fn certbot_issue(engine: Eng<'_>, session_id: String, request: IssueRequest) -> R<ExecOutput> {
-    engine.certbot_issue(&session_id, request).await
+pub async fn certbot_issue(engine: Eng<'_>, session_id: String, request: IssueRequest, progress: Channel<ProgressEvent>) -> R<ExecOutput> {
+    progress::scope(sink(progress), engine.certbot_issue(&session_id, request)).await
 }
 
 #[tauri::command]
-pub async fn certbot_renew(engine: Eng<'_>, session_id: String, name: Option<String>, mode: RenewMode) -> R<ExecOutput> {
-    engine.certbot_renew(&session_id, name.as_deref(), mode).await
+pub async fn certbot_renew(
+    engine: Eng<'_>,
+    session_id: String,
+    name: Option<String>,
+    mode: RenewMode,
+    progress: Channel<ProgressEvent>,
+) -> R<ExecOutput> {
+    progress::scope(sink(progress), engine.certbot_renew(&session_id, name.as_deref(), mode)).await
 }
 
 #[tauri::command]
-pub async fn certbot_delete(engine: Eng<'_>, session_id: String, name: String, force: bool) -> R<ExecOutput> {
-    engine.certbot_delete(&session_id, &name, force).await
+pub async fn certbot_delete(
+    engine: Eng<'_>,
+    session_id: String,
+    name: String,
+    force: bool,
+    progress: Channel<ProgressEvent>,
+) -> R<ExecOutput> {
+    progress::scope(sink(progress), engine.certbot_delete(&session_id, &name, force)).await
 }
 
 #[tauri::command]
@@ -492,8 +536,14 @@ pub async fn service_detail(engine: Eng<'_>, session_id: String, unit: String) -
 }
 
 #[tauri::command]
-pub async fn service_action(engine: Eng<'_>, session_id: String, unit: String, action: ServiceAction) -> R<ActionReport> {
-    engine.service_action(&session_id, &unit, action).await
+pub async fn service_action(
+    engine: Eng<'_>,
+    session_id: String,
+    unit: String,
+    action: ServiceAction,
+    progress: Channel<ProgressEvent>,
+) -> R<ActionReport> {
+    progress::scope(sink(progress), engine.service_action(&session_id, &unit, action)).await
 }
 
 #[tauri::command]
@@ -517,8 +567,14 @@ pub async fn container_logs(engine: Eng<'_>, session_id: String, id: String, tai
 }
 
 #[tauri::command]
-pub async fn container_action(engine: Eng<'_>, session_id: String, id: String, action: ContainerAction) -> R<ExecOutput> {
-    engine.container_action(&session_id, &id, action).await
+pub async fn container_action(
+    engine: Eng<'_>,
+    session_id: String,
+    id: String,
+    action: ContainerAction,
+    progress: Channel<ProgressEvent>,
+) -> R<ExecOutput> {
+    progress::scope(sink(progress), engine.container_action(&session_id, &id, action)).await
 }
 
 #[tauri::command]
@@ -860,4 +916,19 @@ pub fn add_example_snippets(engine: Eng) -> R<Vec<Snippet>> {
 #[tauri::command]
 pub async fn run_snippet(engine: Eng<'_>, id: String, session_ids: Vec<String>, values: HashMap<String, String>) -> R<Vec<SnippetRun>> {
     engine.run_snippet(&id, &session_ids, &values).await
+}
+
+/// A system notification for a job that finished while Orbital was in the
+/// background. Text only: the UI never puts command output or secrets in it.
+#[tauri::command]
+pub fn notify(app: tauri::AppHandle, title: String, body: String) {
+    use tauri_plugin_notification::NotificationExt;
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
+        tracing::warn!("couldn't show a notification: {e}");
+    }
+}
+
+#[tauri::command]
+pub async fn shell_history(engine: Eng<'_>, session_id: String, root: bool) -> R<Vec<String>> {
+    engine.shell_history(&session_id, root).await
 }

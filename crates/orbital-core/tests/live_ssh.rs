@@ -1676,3 +1676,103 @@ async fn config_backups_are_listed_read_and_restored() {
     engine.remove(&s.id, &dir, true).await.unwrap();
     engine.disconnect(&s.id).await.unwrap();
 }
+
+/// A job sees its progress: the lines a command prints (inside
+/// `with_output`), nothing from commands outside it, and a transfer's files
+/// and bytes.
+#[tokio::test]
+async fn job_progress_streams_lines_and_transfers() {
+    use orbital_core::progress::{self, ProgressEvent};
+    use std::sync::{Arc, Mutex};
+    let Some(e) = env() else { return };
+    let Some(key) = e.key.clone() else { return };
+    let engine = engine();
+    let p = engine.create_profile(profile(&e, AuthMethod::Key, Some(key))).unwrap();
+    let a = connect(&engine, &p.id, None).await;
+    let b = engine.connect(&p.id, ConnectOptions::default()).await.unwrap();
+
+    let seen = Arc::new(Mutex::new(Vec::<ProgressEvent>::new()));
+    let sink: progress::Sink = {
+        let seen = seen.clone();
+        Arc::new(move |ev| seen.lock().unwrap().push(ev))
+    };
+    let lines = |seen: &Mutex<Vec<ProgressEvent>>| {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                ProgressEvent::Line { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // Lines arrive as printed, from stdout and stderr, with escapes removed.
+    progress::scope(Some(sink.clone()), async {
+        engine.run_command(&a.id, "echo quiet", false).await.unwrap();
+        progress::with_output(engine.run_command(&a.id, "printf 'one\\n'; printf '\\033[1mtwo\\033[0m\\n' >&2; printf 'three'", false))
+            .await
+            .unwrap();
+    })
+    .await;
+    assert_eq!(lines(&seen), ["one", "two", "three"], "only the command inside with_output streams");
+
+    // A server-to-server copy reports a step and its files and bytes.
+    seen.lock().unwrap().clear();
+    let src = format!("{}/orbital-it-job-{}", a.home, std::process::id());
+    let dst = format!("{}/orbital-it-job-copy-{}", b.home, std::process::id());
+    engine
+        .run_command(
+            &a.id,
+            &format!("mkdir -p {src} && head -c 700000 /dev/zero > {src}/a.bin && echo hi > {src}/b.txt"),
+            false,
+        )
+        .await
+        .unwrap();
+    let rep = progress::scope(Some(sink), engine.copy_between(&a.id, &src, &b.id, &dst, false))
+        .await
+        .unwrap();
+    assert_eq!((rep.files, rep.bytes), (2, 700_003));
+    let ev = seen.lock().unwrap().clone();
+    assert!(matches!(ev.first(), Some(ProgressEvent::Step { text }) if text.starts_with("Copying ")));
+    match ev.iter().rev().find(|e| matches!(e, ProgressEvent::Transfer { .. })) {
+        Some(ProgressEvent::Transfer { files, bytes, .. }) => assert_eq!((*files, *bytes), (2, 700_003), "the last report is the total"),
+        _ => panic!("no transfer progress: {ev:?}"),
+    }
+    engine.run_command(&a.id, &format!("rm -rf {src} {dst}"), false).await.unwrap();
+}
+
+/// The terminal's suggestions read the server's shell history: newest first,
+/// once each, secrets left out. Writes history only for CI's own test user.
+#[tokio::test]
+async fn shell_history_for_suggestions() {
+    let Some(e) = env() else { return };
+    let Some(key) = e.key.clone() else { return };
+    let engine = engine();
+    let p = engine.create_profile(profile(&e, AuthMethod::Key, Some(key))).unwrap();
+    let a = connect(&engine, &p.id, None).await;
+    // Whatever is there parses (possibly nothing).
+    engine.shell_history(&a.id, false).await.unwrap();
+    if e.user != "orbital" {
+        return; // don't touch a real user's history
+    }
+    engine
+        .run_command(
+            &a.id,
+            "cp -p ~/.bash_history /tmp/orbital-it-hist 2>/dev/null; printf 'ls -la\\nexport APP_PASSWORD=x\\nsystemctl status nginx\\nls -la\\n' >> ~/.bash_history",
+            false,
+        )
+        .await
+        .unwrap();
+    let h = engine.shell_history(&a.id, false).await.unwrap();
+    assert_eq!(&h[..2], ["ls -la", "systemctl status nginx"]);
+    assert!(!h.iter().any(|c| c.contains("PASSWORD")));
+    engine
+        .run_command(
+            &a.id,
+            "if [ -f /tmp/orbital-it-hist ]; then mv /tmp/orbital-it-hist ~/.bash_history; else rm -f ~/.bash_history; fi",
+            false,
+        )
+        .await
+        .unwrap();
+}

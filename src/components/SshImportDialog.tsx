@@ -1,7 +1,9 @@
-import { AlertTriangle, ArrowRight, Info, KeyRound } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { AlertTriangle, ArrowRight, FileCog, Info, KeyRound, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, asApiError, SshImportCandidate, SshImportPreview } from "../lib/api";
 import { useStore } from "../store";
+import { useSettings } from "../lib/settings";
 import { Modal } from "./ui";
 
 const addr = (c: SshImportCandidate) => `${c.username}@${c.host}${c.port !== 22 ? `:${c.port}` : ""}`;
@@ -10,23 +12,33 @@ const hasWarning = (c: SshImportCandidate) => c.notes.some((n) => n.level === "w
 /** Checked by default: new, importable, a Host entry, and nothing to review. */
 const preselect = (cs: SshImportCandidate[]) => new Set(cs.filter((c) => c.importable && !c.existingId && !c.jumpOnly && !hasWarning(c)).map((c) => c.key));
 
-/** Import from ~/.ssh/config: preview every host, pick which to save. */
+/** Import from ~/.ssh/config (or another config file the user picks): preview every host, pick which to save. */
 export function SshImportDialog() {
   const { importingSsh, setImportingSsh, loadProfiles, toast } = useStore();
   const [preview, setPreview] = useState<SshImportPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  // The file to read: ~/.ssh/config unless the user chose another (remembered).
+  const configPath = useSettings((x) => x.sshConfigPath);
+  const setSettings = useSettings((x) => x.set);
+  const path = configPath.trim() || null;
 
   useEffect(() => {
     if (!importingSsh) return;
     setPreview(null);
     setError(null);
-    api.sshConfigPreview().then((p) => {
+    api.sshConfigPreview(path).then((p) => {
       setPreview(p);
       setChecked(preselect(p.candidates));
     }, (e) => setError(asApiError(e).message));
-  }, [importingSsh]);
+  }, [importingSsh, path]);
+
+  async function chooseFile() {
+    const home = preview?.path.startsWith("~") ? undefined : preview?.path;
+    const picked = await openDialog({ title: "Choose an SSH config file", multiple: false, directory: false, defaultPath: home });
+    if (typeof picked === "string") setSettings({ sshConfigPath: picked });
+  }
 
   const byKey = useMemo(() => new Map((preview?.candidates ?? []).map((c) => [c.key, c])), [preview]);
   const route = (c: SshImportCandidate) => {
@@ -60,7 +72,7 @@ export function SshImportDialog() {
   const run = async () => {
     setBusy(true);
     try {
-      const r = await api.importSshConfig([...checked]);
+      const r = await api.importSshConfig(path, [...checked]);
       await loadProfiles();
       const n = r.created.length;
       if (n) toast({ kind: r.failed.length ? "info" : "success", title: `Imported ${n} server${n === 1 ? "" : "s"}`, body: r.failed.length ? `Not imported: ${r.failed.map((f) => `${f.name} (${f.error})`).join("; ")}` : undefined });
@@ -76,7 +88,7 @@ export function SshImportDialog() {
   return (
     <Modal
       wide
-      title={`Import from ${preview?.path ?? "~/.ssh/config"}`}
+      title={`Import from ${preview?.path ?? path ?? "~/.ssh/config"}`}
       subtitle="Orbital reads only this file and the files it includes. Keys stay where they are: imported servers point to them by path, and nothing secret is copied."
       onClose={close}
       footer={
@@ -94,6 +106,13 @@ export function SshImportDialog() {
         </>
       }
     >
+      <div className="import-source">
+        <FileCog size={14} className="faint" />
+        <span className="mono">{preview?.path ?? path ?? "~/.ssh/config"}</span>
+        <span className="spacer" />
+        {path && <button className="btn ghost" disabled={busy} onClick={() => setSettings({ sshConfigPath: "" })} title="Read ~/.ssh/config again"><RotateCcw size={13} /> Use ~/.ssh/config</button>}
+        <button className="btn" disabled={busy} onClick={chooseFile}>Choose file…</button>
+      </div>
       {error && <div className="note bad">{error}</div>}
       {!preview && !error && <p className="faint">Reading the config…</p>}
       {preview && !preview.found && <div className="note">There's no SSH config at <span className="mono">{preview.path}</span>. Hosts you add with <span className="mono">Host</span> lines there can be imported here.</div>}

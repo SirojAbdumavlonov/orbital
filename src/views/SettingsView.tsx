@@ -128,6 +128,9 @@ export function SettingsView() {
             <input type="checkbox" className="switch" checked={st.terminalAsRoot} onChange={(e) => st.set({ terminalAsRoot: e.target.checked })} />
           </Row>
           <Row title="Font size"><Stepper value={st.terminalFontSize} min={10} max={22} unit="pt" onChange={(v) => st.set({ terminalFontSize: v })} /></Row>
+          <Row title="Suggest commands" hint="Under the terminal: commands from the server's shell history that start with what you typed, and common next steps (after nginx -t, reload nginx). → or a click types one; Enter is always yours. History lines that look like they hold a password are left out.">
+            <input type="checkbox" className="switch" checked={st.terminalSuggestions} onChange={(e) => st.set({ terminalSuggestions: e.target.checked })} />
+          </Row>
 
           <h3 className="settings-title">Monitoring</h3>
           <Row title="Refresh every" hint="How often CPU, memory and network are sampled for the server in view. Servers in the background refresh every 10 seconds.">
@@ -146,6 +149,9 @@ export function SettingsView() {
           <Row title={isMac ? "Touch ID, trusted hosts" : "Trusted hosts"} hint={isMac ? "Touch ID before saved passwords are used, and the host keys you have trusted." : "The host keys you have trusted."}>
             <button className="btn" onClick={() => setGlobalView("knownHosts")}>Open Security</button>
           </Row>
+          <Row title="SSH config to import from" hint={st.sshConfigPath ? `Import from SSH config reads ${st.sshConfigPath}. Its Include lines still look in ~/.ssh.` : "Import from SSH config reads ~/.ssh/config and the files it includes. Choose another file in the import dialog."}>
+            {st.sshConfigPath ? <button className="btn" onClick={() => st.set({ sshConfigPath: "" })}>Use ~/.ssh/config</button> : <button className="btn" onClick={() => useStore.getState().setImportingSsh(true)}>Import…</button>}
+          </Row>
 
           <h3 className="settings-title">Reset</h3>
           <Row title="Remembered tabs" hint="Which tool tabs each server opens with.">
@@ -156,7 +162,7 @@ export function SettingsView() {
           </Row>
 
           <h3 className="settings-title">About</h3>
-          <Row title={`Orbital ${version}`} hint={`Servers, trusted host keys, the activity log and saved passwords (encrypted, readable only on this computer) are kept in ${isWindows ? "%LOCALAPPDATA%\\Orbital" : isMac ? "a hidden folder: ~/Library/Application Support/.orbital" : "~/.local/share/.orbital"}`}>
+          <Row title={`Orbital ${version}`} hint={`Servers, trusted host keys, the activity log and saved passwords (encrypted, readable only on this computer) are kept in ${isWindows ? "%LOCALAPPDATA%\\Orbital" : isMac ? "a hidden folder: ~/Library/Application Support/.orbital" : "~/.local/share/orbital"}`}>
             <span className="faint">{KEYS.commandMenu} command menu · {KEYS.back} back · {KEYS.forward} forward</span>
           </Row>
         </div>

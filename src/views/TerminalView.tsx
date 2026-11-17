@@ -1,11 +1,12 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
-import { Plus, ShieldAlert, SquareTerminal, User, X } from "lucide-react";
+import { CornerDownLeft, Plus, ShieldAlert, Sparkles, SquareTerminal, User, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, asApiError } from "../lib/api";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { SessionState, TermTab, useStore } from "../store";
+import { LineTracker, suggest } from "../lib/suggest";
 
 export function TerminalView({ s }: { s: SessionState }) {
   const { openTerminal, closeTerminal, patch, renameTerminal } = useStore();
@@ -102,6 +103,35 @@ function decode(b64: string): Uint8Array {
   return out;
 }
 
+/** The server's shell history, read once per server and user (kept in memory only). */
+const histories = new Map<string, Promise<string[]>>();
+function historyFor(sid: string, root: boolean): Promise<string[]> {
+  const key = `${sid}:${root}`;
+  let h = histories.get(key);
+  if (!h) {
+    h = api.shellHistory(sid, root).catch(() => []);
+    histories.set(key, h);
+  }
+  return h;
+}
+
+/** The text on the cursor's line before the cursor (with wrapped rows), and after it. */
+function cursorText(term: Terminal): { before: string; after: string } {
+  const b = term.buffer.active;
+  let y = b.baseY + b.cursorY;
+  let line = b.getLine(y);
+  let before = (line?.translateToString(false) ?? "").slice(0, b.cursorX);
+  const after = (line?.translateToString(true) ?? "").slice(b.cursorX);
+  while (line?.isWrapped && y > 0) {
+    line = b.getLine(--y);
+    before = (line?.translateToString(false) ?? "") + before;
+  }
+  return { before, after };
+}
+
+/** The line ends like a shell prompt ($, #, %, >, ❯), so a command can be typed. */
+const atPrompt = (before: string) => /[$#%>❯]\s*$/.test(before);
+
 function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visible: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon>();
@@ -110,6 +140,47 @@ function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visibl
   const toast = useStore((x) => x.toast);
   const theme = useResolvedTheme();
   const fontSize = useSettings((x) => x.terminalFontSize);
+  const suggestOn = useSettings((x) => x.terminalSuggestions);
+  const suggestOnRef = useRef(suggestOn);
+  suggestOnRef.current = suggestOn;
+  const [sugg, setSugg] = useState<string[]>([]);
+  const suggRef = useRef<string[]>([]);
+  const tracker = useRef(new LineTracker());
+  const typed = useRef<string[]>([]);
+  const history = useRef<string[]>([]);
+
+  /** Work out what to suggest from what's typed and what's on screen. */
+  const refresh = useRef(() => {});
+  refresh.current = () => {
+    const term = termRef.current;
+    const t = tracker.current;
+    let next: string[] = [];
+    if (term && suggestOnRef.current && term.buffer.active.type === "normal" && t.known) {
+      const { before, after } = cursorText(term);
+      // Only at the end of a line the shell echoed: never while a password is
+      // typed (no echo), in a full-screen program, or after edits we can't see.
+      if (!after.trim() && before.endsWith(t.line) && (t.line || atPrompt(before))) {
+        next = suggest(t.line, { session: typed.current, history: history.current });
+      }
+    }
+    if (next.join("\n") !== suggRef.current.join("\n")) {
+      suggRef.current = next;
+      setSugg(next);
+    }
+  };
+
+  /** Type the rest of a suggestion at the prompt. Enter stays the user's. */
+  const accept = (cmd: string) => {
+    const tid = tidRef.current;
+    const t = tracker.current;
+    if (!tid || !cmd.startsWith(t.line)) return;
+    const rest = cmd.slice(t.line.length);
+    if (rest) {
+      api.terminalWrite(tid, rest);
+      t.feed(rest);
+    }
+    termRef.current?.focus();
+  };
 
   // Theme and font size follow the settings without restarting the shell.
   useEffect(() => {
@@ -155,7 +226,33 @@ function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visibl
         toast({ kind: "error", title: "Terminal failed", body: asApiError(e).message });
       });
 
-    const input = term.onData((d) => tidRef.current && api.terminalWrite(tidRef.current, d));
+    void historyFor(sid, tab.root).then((h) => {
+      history.current = h;
+    });
+    let frame = 0;
+    const later = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => refresh.current());
+    };
+    const input = term.onData((d) => {
+      if (!tidRef.current) return;
+      // A command counts as typed only if the shell showed it (a password isn't echoed).
+      const t = tracker.current;
+      const shown = !!t.line && cursorText(term).before.endsWith(t.line);
+      const done = t.feed(d);
+      if (done && shown) typed.current = [...typed.current.filter((c) => c !== done), done].slice(-200);
+      api.terminalWrite(tidRef.current, d);
+      later();
+    });
+    const parsed = term.onWriteParsed(later);
+    // → at the end of the line takes the first suggestion, as in fish.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type === "keydown" && e.key === "ArrowRight" && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && suggRef.current.length > 0) {
+        accept(suggRef.current[0]);
+        return false;
+      }
+      return true;
+    });
     const resize = term.onResize(({ cols, rows }) => tidRef.current && api.terminalResize(tidRef.current, cols, rows));
     const ro = new ResizeObserver(() => {
       if (!disposed && host.current && host.current.offsetWidth > 0) try { fit.fit(); } catch { /* ignore */ }
@@ -166,6 +263,8 @@ function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visibl
       disposed = true;
       ro.disconnect();
       input.dispose();
+      parsed.dispose();
+      cancelAnimationFrame(frame);
       resize.dispose();
       if (tidRef.current) api.terminalClose(tidRef.current);
       term.dispose();
@@ -181,5 +280,28 @@ function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visibl
     }
   }, [visible]);
 
-  return <div className="term-pane" ref={host} style={{ visibility: visible ? "visible" : "hidden" }} />;
+  useEffect(() => refresh.current(), [suggestOn]);
+
+  return (
+    <div className="term-pane" style={{ visibility: visible ? "visible" : "hidden" }}>
+      <div className="term-xterm" ref={host} />
+      {suggestOn && (
+        <div className="term-suggest" aria-label="Suggested commands">
+          {sugg.length > 0 ? (
+            <>
+              <Sparkles size={12} className="faint" />
+              {sugg.map((c, i) => (
+                <button key={c} className={`term-chip mono ${i === 0 ? "first" : ""}`} title={i === 0 ? "→ or click to type it (Enter runs it)" : "Click to type it (Enter runs it)"} onMouseDown={(e) => e.preventDefault()} onClick={() => accept(c)}>
+                  {c}
+                </button>
+              ))}
+              <span className="faint term-suggest-hint"><kbd>→</kbd> types the first · <CornerDownLeft size={11} /> runs it</span>
+            </>
+          ) : (
+            <span className="faint">Suggestions from this server's history and common next steps appear here as you type.</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }

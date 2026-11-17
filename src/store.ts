@@ -178,7 +178,7 @@ export const useStore = create<State>((set, get) => ({
       if (!reachable(navBack[i])) continue;
       const here = currentLoc(get());
       navigating = true;
-      apply(navBack[i]);
+      goTo(navBack[i]);
       navigating = false;
       set({ navBack: navBack.slice(0, i), navFwd: [...navFwd, here] });
       return;
@@ -191,7 +191,7 @@ export const useStore = create<State>((set, get) => ({
       if (!reachable(navFwd[i])) continue;
       const here = currentLoc(get());
       navigating = true;
-      apply(navFwd[i]);
+      goTo(navFwd[i]);
       navigating = false;
       set({ navFwd: navFwd.slice(0, i), navBack: [...navBack, here] });
       return;
@@ -422,23 +422,24 @@ export const useStore = create<State>((set, get) => ({
 
 let navigating = false;
 
-function currentLoc(st: State): Loc {
+export function currentLoc(st: State = useStore.getState()): Loc {
   if (st.globalView) return { global: st.globalView };
   if (st.active && st.sessions[st.active]) return { sid: st.active, tab: st.sessions[st.active].tab };
   return null;
 }
 
-const sameLoc = (a: Loc, b: Loc) => JSON.stringify(a) === JSON.stringify(b);
+export const sameLoc = (a: Loc, b: Loc) => JSON.stringify(a) === JSON.stringify(b);
 
 /** A place can be returned to while its server is still connected. */
-function reachable(l: Loc): boolean {
+export function reachable(l: Loc): boolean {
   if (!l || "global" in l) return true;
   const s = useStore.getState().sessions[l.sid];
   // A closed tool tab is gone too.
   return !!s && (!l.tab.startsWith("tool:") || s.toolTabs.includes(l.tab.slice(5)));
 }
 
-function apply(l: Loc) {
+/** Go to a place (a server's tab or a global page). */
+export function goTo(l: Loc) {
   const st = useStore.getState();
   if (!l) useStore.setState({ globalView: null, active: null });
   else if ("global" in l) useStore.setState({ globalView: l.global });

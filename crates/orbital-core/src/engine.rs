@@ -21,6 +21,7 @@ use crate::nginx::NginxConfig;
 use crate::ports::PortsReport;
 use crate::presence::{Unavailable, UserPresence};
 use crate::profiles::{self, AuthMethod, Profile, ProfileInput, Protocol};
+use crate::progress;
 use crate::secrets::{secret_key, GatedStore, SecretKind, SecretStore, Unlock};
 use crate::services::{ActionReport, Service, ServiceAction, ServiceDetail};
 use crate::sftp::{FileContent, FileEntry, TransferReport};
@@ -460,9 +461,10 @@ impl Engine {
     // ---------- ~/.ssh/config import ----------
 
     /// Describe the hosts in `~/.ssh/config` and which of them are already saved.
-    pub fn ssh_config_preview(&self) -> Result<ssh_config::Preview> {
+    /// Preview the hosts in `path` (`~/…` allowed), or in `~/.ssh/config`.
+    pub fn ssh_config_preview(&self, path: Option<&str>) -> Result<ssh_config::Preview> {
         let ctx = ssh_config::Context::from_env();
-        self.ssh_config_preview_at(&ctx.default_config(), &ctx)
+        self.ssh_config_preview_at(&ctx.config_path(path), &ctx)
     }
 
     pub fn ssh_config_preview_at(&self, path: &Path, ctx: &ssh_config::Context) -> Result<ssh_config::Preview> {
@@ -483,9 +485,9 @@ impl Engine {
     /// Create profiles for the chosen candidates (by key), jump hosts first.
     /// The config is read again here: the UI only says which keys it wants.
     /// A chosen host's jump hosts are created too unless already saved.
-    pub fn import_ssh_config(&self, keys: &[String]) -> Result<ImportReport> {
+    pub fn import_ssh_config(&self, path: Option<&str>, keys: &[String]) -> Result<ImportReport> {
         let ctx = ssh_config::Context::from_env();
-        self.import_ssh_config_at(&ctx.default_config(), &ctx, keys)
+        self.import_ssh_config_at(&ctx.config_path(path), &ctx, keys)
     }
 
     pub fn import_ssh_config_at(&self, path: &Path, ctx: &ssh_config::Context, keys: &[String]) -> Result<ImportReport> {
@@ -1081,6 +1083,7 @@ impl Engine {
         let r = if src_sid == dst_sid {
             Err(Error::InvalidInput("choose a different server to copy to".into()))
         } else {
+            progress::step(format!("Copying {src_path} from {} to {} …", src.label(), dst.label()));
             src.copy_to(src_path, &dst, dst_path, overwrite).await
         };
         let from = format!("{}:{}", src.label(), src_path);
@@ -1148,17 +1151,21 @@ impl Engine {
         let target = input.domain.trim().to_ascii_lowercase();
         let t = Instant::now();
         let r = async {
+            progress::step(format!("Checking nginx's sites for {target} …"));
             let plan = s.website_plan(input).await?;
             if !plan.blockers.is_empty() {
                 return Err(Error::InvalidInput(plan.blockers.join("\n")));
             }
             let mut root_created = false;
             if let (Some(root), false) = (&plan.root, plan.root_exists) {
+                progress::step(format!("Creating {root} …"));
                 s.create_site_root(root, &plan.domain).await?;
                 root_created = true;
             }
+            progress::step(format!("Writing {} and testing it with nginx -t …", plan.file));
             let write = s.install_site(&plan.file, plan.enabled_link.as_deref(), &plan.content).await?;
-            let (reloaded, reload_output) = s.reload_nginx().await?;
+            progress::step("Reloading nginx …");
+            let (reloaded, reload_output) = progress::with_output(s.reload_nginx()).await?;
             Ok(WebsiteReport {
                 plan,
                 write,
@@ -1213,7 +1220,8 @@ impl Engine {
     /// Run a root command for a security tool and record it, success or failure.
     async fn security_exec(&self, s: &SshSession, action: &str, target: &str, cmd: &str) -> Result<ExecOutput> {
         let sent = s.privileged_command(cmd);
-        match s.exec_privileged(cmd).await {
+        // In a job, the tool's own output (certbot, ufw, …) is what the user sees happen.
+        match progress::with_output(s.exec_privileged(cmd)).await {
             Ok(o) => {
                 self.record_exec(s, Category::Security, action, target, &sent, &o);
                 Ok(o)
@@ -1437,6 +1445,7 @@ impl Engine {
         const ACTION: &str = "certificate.issue";
         let target = req.domains.join(", ");
         let cmd = certbot::issue_command(&req).map_err(|e| self.refused(&s, ACTION, &target, e))?;
+        progress::step(format!("Asking Let's Encrypt for a certificate for {target} …"));
         self.security_exec(&s, ACTION, &target, &cmd).await
     }
 
@@ -1449,6 +1458,11 @@ impl Engine {
         };
         let target = name.unwrap_or("all certificates");
         let cmd = certbot::renew_command(name, mode).map_err(|e| self.refused(&s, action, target, e))?;
+        progress::step(if mode == RenewMode::DryRun {
+            format!("Testing renewal of {target} against Let's Encrypt's staging servers …")
+        } else {
+            format!("Renewing {target} with Let's Encrypt …")
+        });
         self.security_exec(&s, action, target, &cmd).await
     }
 
@@ -1459,6 +1473,7 @@ impl Engine {
         const ACTION: &str = "certificate.delete";
         let check = certbot::usage_check_command(name).map_err(|e| self.refused(&s, ACTION, name, e))?;
         if !force {
+            progress::step("Checking that no web-server config still uses it …");
             let (o, _) = s.exec_inspect(&check).await?;
             let users: Vec<&str> = o.stdout.lines().filter(|l| l.starts_with('/')).collect();
             if !users.is_empty() {
@@ -2085,12 +2100,14 @@ impl Engine {
             .map_err(|e| self.refused_as(&s, Category::Command, action, &target, e))?;
         let t = Instant::now();
         let r = async {
+            progress::step(format!("Dumping {target} on the server (large databases take a while) …"));
             let out = s
                 .exec_privileged_with(&script, None, std::time::Duration::from_secs(3600))
                 .await?
                 .check()?;
             let remote = databases::parse_backup_path(&out.stdout)
                 .ok_or_else(|| Error::Other("the dump finished but its file wasn't reported".into()))?;
+            progress::step("Downloading the dump to this computer …");
             let got = s.download(&remote, local).await;
             // The dump is sensitive: never leave it on the server, even if the download failed.
             let _ = s.exec_privileged(&format!("rm -f -- {}", crate::shell::quote(&remote))).await;
@@ -2185,7 +2202,8 @@ impl Engine {
     pub async fn service_action(&self, sid: &str, unit: &str, action: ServiceAction) -> Result<ActionReport> {
         let s = self.session(sid).await?;
         let name = format!("service.{}", action.verb());
-        match s.service_action(unit, action).await {
+        progress::step(format!("Running systemctl {} {unit} …", action.verb()));
+        match progress::with_output(s.service_action(unit, action)).await {
             Ok(rep) => {
                 self.record_exec(&s, Category::Service, &name, unit, &rep.command, &rep.output);
                 Ok(rep)
@@ -2219,7 +2237,8 @@ impl Engine {
     pub async fn container_action(&self, sid: &str, id: &str, action: ContainerAction) -> Result<ExecOutput> {
         let s = self.session(sid).await?;
         let name = format!("docker.{}", action.args().replace(' ', ""));
-        let (cmd, out) = match s.container_action(id, action).await {
+        progress::step(format!("docker {} …", action.args()));
+        let (cmd, out) = match progress::with_output(s.container_action(id, action)).await {
             Ok(v) => v,
             Err(e) => {
                 self.record_error(&s, Category::Docker, &name, id, None, &e);
@@ -2239,7 +2258,8 @@ impl Engine {
             Some(svc) => format!("{}/{svc}", target.project),
             None => target.project.clone(),
         };
-        match s.compose(&target, action).await {
+        progress::step(format!("docker compose {} for {label} …", action.verb()));
+        match progress::with_output(s.compose(&target, action)).await {
             Ok((cmd, out)) => {
                 self.record_exec(&s, Category::Docker, &name, &label, &cmd, &out);
                 Ok(out)
@@ -2252,6 +2272,12 @@ impl Engine {
     }
 
     // ---------- commands & terminals ----------
+
+    /// The server's shell history (newest first, likely secrets left out), for
+    /// the terminal's suggestions. Root's history for root terminals. Read-only.
+    pub async fn shell_history(&self, sid: &str, root: bool) -> Result<Vec<String>> {
+        self.session(sid).await?.shell_history(root).await
+    }
 
     pub async fn run_command(&self, sid: &str, command: &str, privileged: bool) -> Result<ExecOutput> {
         let s = self.session(sid).await?;

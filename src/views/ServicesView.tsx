@@ -2,6 +2,8 @@ import { Play, RefreshCw, RotateCw, Search, Square, ToggleLeft, ToggleRight, Zap
 import { useEffect, useMemo, useState } from "react";
 import { confirm, StateDot, DrawerClose } from "../components/ui";
 import { api, asApiError, Service, ServiceAction, ServiceDetail } from "../lib/api";
+import { runJob, useRunningJob } from "../lib/jobs";
+import { JobProgress } from "../components/JobProgress";
 import { bytes } from "../lib/format";
 import { SessionState, useStore } from "../store";
 
@@ -17,6 +19,7 @@ export function ServicesView({ s }: { s: SessionState }) {
   const [sel, setSel] = useState<string | null>(null);
   const [detail, setDetail] = useState<ServiceDetail | null>(null);
   const [busy, setBusy] = useState<ServiceAction | null>(null);
+  const job = useRunningJob(`service:${sid}`);
 
   const load = async () => {
     setLoading(true);
@@ -70,16 +73,17 @@ export function ServicesView({ s }: { s: SessionState }) {
     }
     setBusy(action);
     try {
-      const rep = await api.serviceAction(sid, cur.unit, action);
-      if (rep.output.exitCode === 0) {
-        toast({ kind: "success", title: `${name}: ${action} done`, body: rep.preflight ? `${rep.preflight[0]} passed` : undefined });
-      } else {
-        toast({ kind: "error", title: `${name}: ${action} failed`, body: rep.output.stderr || rep.output.stdout });
-      }
+      await runJob((p) => api.serviceAction(sid, cur.unit, action, p), {
+        key: `service:${sid}`,
+        title: `${name}: ${action}`,
+        sid,
+        quietHere: false,
+        done: (r) => (r.output.exitCode === 0 ? `${name}: ${action} done${r.preflight ? ` (${r.preflight[0]} passed)` : ""}` : { failed: (r.output.stderr || r.output.stdout).trim() || `exit code ${r.output.exitCode}` }),
+      });
     } catch (e) {
       const err = asApiError(e);
+      // Other errors are reported by the job; a failed check shows what it found.
       if (err.kind === "PreflightFailed") toast({ kind: "error", title: `Not ${action}ed: ${err.data.check} found errors`, body: err.data.output });
-      else toast({ kind: "error", title: `${name}: ${action} failed`, body: err.message });
     } finally {
       setBusy(null);
       load();
@@ -130,14 +134,15 @@ export function ServicesView({ s }: { s: SessionState }) {
                 <div className="muted">{cur.description}</div>
               </div>
               <div className="actions">
-                {cur.active !== "active" && <button className="btn primary" disabled={!!busy} onClick={() => act("start")}><Play size={13} /> Start</button>}
-                {cur.active === "active" && <button className="btn" disabled={!!busy} onClick={() => act("reload")} title="Reload configuration without dropping connections"><Zap size={13} /> Reload</button>}
-                <button className="btn" disabled={!!busy} onClick={() => act("restart")}><RotateCw size={13} className={busy === "restart" ? "spin" : ""} /> Restart</button>
-                {cur.active === "active" && <button className="btn danger" disabled={!!busy} onClick={() => act("stop")}><Square size={13} /> Stop</button>}
+                {cur.active !== "active" && <button className="btn primary" disabled={!!busy || !!job} onClick={() => act("start")}><Play size={13} /> Start</button>}
+                {cur.active === "active" && <button className="btn" disabled={!!busy || !!job} onClick={() => act("reload")} title="Reload configuration without dropping connections"><Zap size={13} /> Reload</button>}
+                <button className="btn" disabled={!!busy || !!job} onClick={() => act("restart")}><RotateCw size={13} className={busy === "restart" ? "spin" : ""} /> Restart</button>
+                {cur.active === "active" && <button className="btn danger" disabled={!!busy || !!job} onClick={() => act("stop")}><Square size={13} /> Stop</button>}
                 {cur.unitFileState === "enabled"
-                  ? <button className="btn ghost" disabled={!!busy} onClick={() => act("disable")}><ToggleRight size={14} /> Don't start at boot</button>
-                  : cur.unitFileState === "disabled" && <button className="btn ghost" disabled={!!busy} onClick={() => act("enable")}><ToggleLeft size={14} /> Start at boot</button>}
+                  ? <button className="btn ghost" disabled={!!busy || !!job} onClick={() => act("disable")}><ToggleRight size={14} /> Don't start at boot</button>
+                  : cur.unitFileState === "disabled" && <button className="btn ghost" disabled={!!busy || !!job} onClick={() => act("enable")}><ToggleLeft size={14} /> Start at boot</button>}
               </div>
+              {job && <JobProgress job={job} compact />}
               <dl className="kv">
                 <dt>Main PID</dt><dd>{p.MainPID && p.MainPID !== "0" ? p.MainPID : "—"}</dd>
                 <dt>Running since</dt><dd>{p.ActiveEnterTimestamp || "—"}</dd>

@@ -306,6 +306,8 @@ impl SshSession {
             report.files = 1;
             return Ok(report);
         }
+        let mut meter = Meter::default();
+        crate::progress::step(format!("Uploading {} …", local.display()));
         let sftp = self.sftp().await?;
         let mut stack = vec![(local.to_path_buf(), remote.to_string())];
         while let Some((src_dir, dst_dir)) = stack.pop() {
@@ -329,7 +331,7 @@ impl SshSession {
                     // New files get the local permission bits (scripts stay
                     // executable); a file that is overwritten keeps its own.
                     let is_new = !sftp.try_exists(&dst).await?;
-                    report.bytes += self.upload(&entry.path(), &dst).await?;
+                    report.bytes += self.upload_metered(&entry.path(), &dst, &mut meter).await?;
                     if is_new {
                         set_mode(&sftp, &dst, local_mode(&entry.metadata().await?)).await;
                     }
@@ -339,6 +341,7 @@ impl SshSession {
                 }
             }
         }
+        meter.finish(remote);
         Ok(report)
     }
 
@@ -360,10 +363,14 @@ impl SshSession {
         // Follows a symlink given as the source itself (the user picked it).
         let top = from.metadata(src_path).await?;
         if !top.is_dir() {
-            report.bytes = copy_file(&from, src_path, &to, dst_path, top.permissions).await?;
+            let mut meter = Meter::default();
+            report.bytes = copy_file(&from, src_path, &to, dst_path, top.permissions, &mut meter).await?;
             report.files = 1;
+            meter.finish(src_path);
             return Ok(report);
         }
+        let mut meter = Meter::default();
+        crate::progress::step(format!("Copying {src_path} to {} …", dst.label()));
         let mut stack = vec![(src_path.to_string(), dst_path.to_string(), top.permissions)];
         while let Some((src_dir, dst_dir, perm)) = stack.pop() {
             ensure_dir(&to, &dst_dir).await?;
@@ -387,18 +394,26 @@ impl SshSession {
                 match kind_of(&a) {
                     EntryKind::Dir => stack.push((src, dst_child, a.permissions)),
                     EntryKind::File => {
-                        report.bytes += copy_file(&from, &src, &to, &dst_child, a.permissions).await?;
+                        report.bytes += copy_file(&from, &src, &to, &dst_child, a.permissions, &mut meter).await?;
                         report.files += 1;
                     }
                     _ => report.skipped += 1,
                 }
             }
         }
+        meter.finish(src_path);
         Ok(report)
     }
 
     /// Stream a local file to the server. Returns bytes copied.
     pub async fn upload(&self, local: &std::path::Path, remote: &str) -> Result<u64> {
+        let mut meter = Meter::default();
+        let n = self.upload_metered(local, remote, &mut meter).await?;
+        meter.finish(remote);
+        Ok(n)
+    }
+
+    async fn upload_metered(&self, local: &std::path::Path, remote: &str, meter: &mut Meter) -> Result<u64> {
         validate_path(remote)?;
         let mut src = tokio::fs::File::open(local).await?;
         let mut dst = self
@@ -415,8 +430,10 @@ impl SshSession {
             }
             dst.write_all(&buf[..n]).await?;
             total += n as u64;
+            meter.add(n as u64, remote);
         }
         dst.shutdown().await?;
+        meter.file_done(remote);
         Ok(total)
     }
 }
@@ -450,7 +467,7 @@ async fn set_mode(sftp: &SftpSession, path: &str, perm: Option<u32>) {
     }
 }
 
-async fn copy_file(from: &SftpSession, src: &str, to: &SftpSession, dst: &str, perm: Option<u32>) -> Result<u64> {
+async fn copy_file(from: &SftpSession, src: &str, to: &SftpSession, dst: &str, perm: Option<u32>, meter: &mut Meter) -> Result<u64> {
     let mut reader = from.open(src).await?;
     let mut writer = to
         .open_with_flags(dst, OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE)
@@ -464,10 +481,52 @@ async fn copy_file(from: &SftpSession, src: &str, to: &SftpSession, dst: &str, p
         }
         writer.write_all(&buf[..n]).await?;
         total += n as u64;
+        meter.add(n as u64, src);
     }
     writer.shutdown().await?;
     set_mode(to, dst, perm).await;
+    meter.file_done(src);
     Ok(total)
+}
+
+/// A transfer's progress for the job that runs it (see `progress`): files
+/// and bytes so far, reported at most four times a second.
+#[derive(Default)]
+struct Meter {
+    files: u64,
+    bytes: u64,
+    last: Option<std::time::Instant>,
+}
+
+impl Meter {
+    fn add(&mut self, n: u64, path: &str) {
+        self.bytes += n;
+        self.tick(path, false);
+    }
+
+    fn file_done(&mut self, path: &str) {
+        self.files += 1;
+        self.tick(path, false);
+    }
+
+    fn finish(&mut self, path: &str) {
+        self.tick(path, true);
+    }
+
+    fn tick(&mut self, path: &str, force: bool) {
+        if !crate::progress::active() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if force
+            || self
+                .last
+                .is_none_or(|t| now.duration_since(t) >= std::time::Duration::from_millis(250))
+        {
+            self.last = Some(now);
+            crate::progress::transfer(self.files, self.bytes, path);
+        }
+    }
 }
 
 #[cfg(test)]

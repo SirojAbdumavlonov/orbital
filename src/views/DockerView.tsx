@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { confirm, StateDot, DrawerClose } from "../components/ui";
 import { Modal } from "../components/ui";
 import { api, asApiError, ComposeAction, ComposeTarget, Container, ContainerAction, ContainerStats, ExecOutput } from "../lib/api";
+import { runJob, useRunningJob } from "../lib/jobs";
+import { JobProgress } from "../components/JobProgress";
 import { SessionState, useStore } from "../store";
 
 type StateFilter = "all" | "running" | "stopped" | "paused";
@@ -22,8 +24,9 @@ function composeOf(inspect: any): ComposeTarget | null {
 }
 
 function ComposePane({ s, inspect }: { s: SessionState; inspect: any }) {
-  const { toast, openFile } = useStore();
+  const { openFile } = useStore();
   const sid = s.info.id;
+  const job = useRunningJob(`compose:${sid}`);
   const target = composeOf(inspect);
   const file = target?.files[0] ?? null;
   const [text, setText] = useState<string | null>(null);
@@ -50,11 +53,16 @@ function ComposePane({ s, inspect }: { s: SessionState; inspect: any }) {
     }
     setBusy(action);
     try {
-      const o = await api.composeAction(sid, t, action);
       const what = `${action === "up" ? "Apply" : action === "restart" ? "Restart" : "Pull"} ${t.service ?? t.project}`;
+      const o = await runJob((p) => api.composeAction(sid, t, action, p), {
+        key: `compose:${sid}`,
+        title: what,
+        sid,
+        done: (r) => (r.exitCode === 0 ? `${what}: done` : { failed: "Compose reported an error" }),
+      });
       setOut({ title: o.exitCode === 0 ? `${what}: done` : `${what}: failed`, o });
-    } catch (e) {
-      toast({ kind: "error", title: "Compose failed", body: asApiError(e).message });
+    } catch {
+      // The job reports the error.
     } finally {
       setBusy(null);
     }
@@ -74,6 +82,7 @@ function ComposePane({ s, inspect }: { s: SessionState; inspect: any }) {
         {target.service && <button className="btn" disabled={!!busy} onClick={() => run("restart", "service")}><RotateCw size={13} className={busy === "restart" ? "spin" : ""} /> Restart {target.service}</button>}
         <button className="btn" disabled={!!busy} onClick={() => run("pull", "project")} title="Download newer images; apply to use them"><Download size={13} className={busy === "pull" ? "spin" : ""} /> Pull images</button>
       </div>
+      {job && <JobProgress job={job} compact />}
       <pre className="logs">{file ? text ?? "Loading…" : "Docker didn't record which file this project came from."}</pre>
       {out && (
         <Modal title={out.title} wide onClose={() => setOut(null)} footer={<button className="btn primary" onClick={() => setOut(null)}>Close</button>}>
@@ -85,8 +94,8 @@ function ComposePane({ s, inspect }: { s: SessionState; inspect: any }) {
 }
 
 export function DockerView({ s }: { s: SessionState }) {
-  const toast = useStore((x) => x.toast);
   const sid = s.info.id;
+  const job = useRunningJob(`container:${sid}`);
   const [list, setList] = useState<Container[]>([]);
   const [stats, setStats] = useState<ContainerStats[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -176,11 +185,16 @@ export function DockerView({ s }: { s: SessionState }) {
     }
     setBusy(true);
     try {
-      await api.containerAction(sid, cur.id, action);
-      toast({ kind: "success", title: `${cur.names}: ${action === "forceRemove" ? "removed" : action} done` });
+      await runJob((p) => api.containerAction(sid, cur.id, action, p), {
+        key: `container:${sid}`,
+        title: `${cur.names}: ${action === "forceRemove" ? "remove" : action}`,
+        sid,
+        quietHere: false,
+        done: () => `${cur.names}: ${action === "forceRemove" ? "removed" : action} done`,
+      });
       if (action === "remove" || action === "forceRemove") setSel(null);
-    } catch (e) {
-      toast({ kind: "error", title: `${cur.names}: ${action} failed`, body: asApiError(e).message });
+    } catch {
+      // The job reports the error.
     } finally {
       setBusy(false);
       load();
@@ -257,6 +271,7 @@ export function DockerView({ s }: { s: SessionState }) {
                 {cur.state === "running" && <button className="btn danger" disabled={busy} onClick={() => act("stop")}><Square size={13} /> Stop</button>}
                 <button className="btn danger" disabled={busy} onClick={() => act(cur.state === "running" ? "forceRemove" : "remove")}><Trash2 size={13} /> Remove</button>
               </div>
+              {job && <JobProgress job={job} compact />}
               <div className="toolbar">
                 <div className="segmented">
                   <button className={pane === "logs" ? "on" : ""} onClick={() => setPane("logs")}><ScrollText size={12} /> Logs</button>
