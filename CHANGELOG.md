@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.1.1 (2026-11-17)
+
 ### Added
 - **Stop a running job.** Running jobs have **Stop** (in their progress bar and in the sidebar's Jobs list). It ends the command on the server (SIGTERM, passed on by sudo) or the transfer between chunks; the job shows "Stopped" and the activity log records it.
 - **Updates** tab on every server: the packages that can be upgraded (security updates first), **Check for updates** (`apt-get update` / `dnf makecache`), **Install updates** as a job with live output (configuration files you changed are kept), and **Reboot** when the server needs one (type the server's name to confirm). apt, dnf and yum.
