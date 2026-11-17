@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.1.0 (2026-11-17)
+
 ### Added
 - **See what's happening during long operations.** Renewing or requesting a certificate, copying between servers, uploads, database backups, `docker compose pull`/`up`, container and service actions and the New website wizard now show what Orbital is doing in words ("Asking Let's Encrypt for a certificate for example.com …"), the latest line the tool printed (certbot's "Waiting for verification…"), files and bytes for transfers, and the time so far, with "Details" for everything it printed.
 - **Jobs keep running when you move on, and tell you when they're done.** Leave the tab (or the server) while a job runs: when it finishes, a notification says how it went, with **Show** to go back to it; when Orbital is in the background the system notification appears too. The new **Jobs** list in the sidebar shows what is running and what finished on every server, with its current step and time.
