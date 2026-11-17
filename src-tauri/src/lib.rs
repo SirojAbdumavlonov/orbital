@@ -18,19 +18,31 @@ use tauri::Manager;
 /// folder is already out of sight and dot-folders are not the convention.
 const DATA_DIR: &str = ".orbital";
 
+/// Development builds (`npm run tauri dev`, debug) keep their data beside the
+/// installed app's, in a folder of their own (`.orbital-dev`, `orbital-dev`,
+/// `Orbital-dev`), so servers added while testing never show up in the real
+/// app and the installed app's data is never touched by a test build.
+const DEV_BUILD: bool = cfg!(debug_assertions);
+
 /// The data folder for `os` (`std::env::consts::OS`), given the platform's
 /// per-user data folder (`data`) and its machine-local one (`local`).
-fn data_home(os: &str, data: &Path, local: &Path) -> std::path::PathBuf {
+fn data_home(os: &str, data: &Path, local: &Path, dev: bool) -> std::path::PathBuf {
+    let suffix = if dev { "-dev" } else { "" };
     match os {
-        "windows" => local.join("Orbital"),
-        "linux" | "freebsd" | "openbsd" | "netbsd" => data.join("orbital"),
-        _ => data.join(DATA_DIR),
+        "windows" => local.join(format!("Orbital{suffix}")),
+        "linux" | "freebsd" | "openbsd" | "netbsd" => data.join(format!("orbital{suffix}")),
+        _ => data.join(format!("{DATA_DIR}{suffix}")),
     }
 }
 
 fn data_dir(app: &tauri::App) -> tauri::Result<std::path::PathBuf> {
     let path = app.path();
-    Ok(data_home(std::env::consts::OS, &path.data_dir()?, &path.local_data_dir()?))
+    Ok(data_home(
+        std::env::consts::OS,
+        &path.data_dir()?,
+        &path.local_data_dir()?,
+        DEV_BUILD,
+    ))
 }
 
 /// WebKitGTK's DMA-BUF renderer draws a blank or flickering window on many
@@ -157,8 +169,13 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             set_app_icon();
             let dir = data_dir(app)?;
-            if let Err(e) = move_old_data(&dir) {
-                tracing::error!("couldn't move data from the old folder: {e}");
+            tracing::info!("data folder: {}", dir.display());
+            // Only the installed app takes over data from earlier folders; a
+            // development build starts with its own, empty one.
+            if !DEV_BUILD {
+                if let Err(e) = move_old_data(&dir) {
+                    tracing::error!("couldn't move data from the old folder: {e}");
+                }
             }
             // Saved credentials live in Orbital's own encrypted vault, not the
             // Keychain, so the app never asks for Keychain access.
@@ -310,11 +327,22 @@ mod tests {
     #[test]
     fn data_folder_per_platform() {
         let (data, local) = (Path::new("/data"), Path::new("/local"));
-        assert_eq!(data_home("macos", data, local), Path::new("/data/.orbital"));
-        assert_eq!(data_home("linux", data, local), Path::new("/data/orbital"));
-        assert_eq!(data_home("windows", data, local), Path::new("/local/Orbital"));
+        assert_eq!(data_home("macos", data, local, false), Path::new("/data/.orbital"));
+        assert_eq!(data_home("linux", data, local, false), Path::new("/data/orbital"));
+        assert_eq!(data_home("windows", data, local, false), Path::new("/local/Orbital"));
         // The old Tauri folders sit beside it on every platform, so moving works there too.
-        assert_eq!(data_home("linux", data, local).parent(), Some(data));
+        assert_eq!(data_home("linux", data, local, false).parent(), Some(data));
+    }
+
+    #[test]
+    fn development_builds_have_their_own_data_folder() {
+        let (data, local) = (Path::new("/data"), Path::new("/local"));
+        assert_eq!(data_home("macos", data, local, true), Path::new("/data/.orbital-dev"));
+        assert_eq!(data_home("linux", data, local, true), Path::new("/data/orbital-dev"));
+        assert_eq!(data_home("windows", data, local, true), Path::new("/local/Orbital-dev"));
+        for os in ["macos", "linux", "windows"] {
+            assert_ne!(data_home(os, data, local, true), data_home(os, data, local, false));
+        }
     }
 
     #[test]

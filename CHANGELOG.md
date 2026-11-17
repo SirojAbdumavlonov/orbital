@@ -7,6 +7,9 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 ### Added
 - **One-line install scripts** with no security warnings: `install.sh` (macOS: the .dmg into /Applications; Linux: the .deb, .rpm or AppImage, whichever fits) and `install.ps1` (Windows: a silent per-user install). Both download the latest release from GitHub and check its SHA-256 checksum first. macOS and Windows only warn about unsigned apps a browser downloaded, so these open normally. The README and every release page show the commands; `.github/workflows/install-scripts.yml` runs them on macOS, Ubuntu, Fedora, AppImage and Windows.
 
+### Fixed
+- Development builds (`npm run tauri dev`) used the installed app's data folder, so servers added while testing appeared in the installed app. They now keep their own (`.orbital-dev` beside `.orbital`; `orbital-dev` on Linux, `Orbital-dev` on Windows); the installed app's data stays as it is.
+
 ## 1.0.1 (2026-11-17)
 
 ### Added
