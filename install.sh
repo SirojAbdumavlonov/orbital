@@ -138,6 +138,9 @@ install_linux() {
     deb)
       file=$(fetch 'Orbital_[^/]*_amd64\.deb' "Orbital_${version}_amd64.deb")
       say "Installing the .deb (asks for your password)"
+      # An out-of-date package list points at versions the mirrors no longer
+      # have (404 while fetching WebKit's dependencies), so refresh it first.
+      as_root apt-get update -qq || say "Couldn't refresh the package list; trying anyway"
       as_root apt-get install -y "$file"
       ;;
     rpm)
