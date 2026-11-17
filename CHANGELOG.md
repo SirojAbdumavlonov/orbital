@@ -4,18 +4,14 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.0.0 (2026-11-17)
+
+The first release, for macOS and Windows.
+
 ### Added
 - **Domains page** (sidebar, or ⌘K → Domains and DNS): connect Cloudflare with an API token and manage the DNS records of your domains: add, change and delete A, AAAA, CNAME, TXT and MX records, proxied or DNS only, with the connected servers' public addresses one click away. Saved records are checked against public resolvers (Cloudflare and Google, over HTTPS) every 10 seconds until they are live. "Check a domain" checks any name at any provider. Tokens go to the vault, behind the Touch ID gate; every change is in the activity log under DNS.
 - **Windows**: a per-user installer (`Orbital_x.y.z_x64-setup.exe`, no admin rights needed) built by the release workflow next to the Mac app, with the same in-app updates. Data lives in `%LOCALAPPDATA%\Orbital`; the vault key uses the Windows machine GUID; SSH-agent sign-in uses the Windows OpenSSH agent or Pageant; shortcuts use Ctrl (Ctrl+K, Ctrl+N, Ctrl+Shift+S) and Alt+← / Alt+→ for back and forward. Touch ID is macOS-only.
 - The HTTPS certificate dialog checks that each name already points at the server before asking Let's Encrypt, and links to Domains when one doesn't.
-
-### Fixed
-- DNS checks ask Cloudflare and Google at 1.1.1.1 and 8.8.8.8 directly: on some networks `dns.google` couldn't be reached by name, so Google's answer always failed. The check shows "Checking…" until the answers arrive (it said "Not live yet" first), says when a name doesn't exist in DNS at all, and network errors are shorter.
-- Text fields no longer capitalise the first letter, autocorrect or spell-check what you type (macOS did this to user names, hosts and paths, so connections failed).
-
-## 1.0.0 (2026-11-15)
-
-### Added
 - **Updates inside the app**: Orbital looks for a new version at launch and every six hours (Settings → Updates, or ⌘K → Check for updates). Click Update to download it, Restart to use it; servers, passwords and settings stay. Updates are checked against Orbital's signing key before they are installed. `npm run release -- patch|minor|major|beta` bumps the version everywhere, dates this file, commits and tags.
 - **More kinds of connection**: FTP, FTPS (explicit TLS), WebDAV over HTTP or HTTPS (Nextcloud, ownCloud and others) and S3 with S3-compatible storage (Amazon S3, Backblaze B2, Cloudflare R2, Google Cloud Storage with HMAC keys, Wasabi, DigitalOcean Spaces, MinIO). Pick one in the server dialog; presets fill in endpoints and regions. These connections have the Files tab (browse, edit, upload files and folders, download, rename, delete) and the activity log; server tools stay SSH-only. Passwords and S3 secret keys go to the vault like the others.
 - **Deploy tab**: register an app (folder, branch, build command, how to restart: service, Compose or a command), then deploy in one click: fetch, fast-forward only, build, restart, with each step's output live. Refuses when tracked files were changed on the server. Roll back to any recent commit; history with full logs.
