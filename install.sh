@@ -7,7 +7,7 @@
 # macOS then refuses an app that isn't notarized by Apple. A download made with
 # curl carries no such mark, so Orbital opens normally. The script only fetches
 # files from this repository's releases and checks each one against the SHA-256
-# checksum GitHub publishes for it before using it.
+# checksum GitHub publishes for it (when GitHub's API answers) before using it.
 #
 # Settings (environment variables):
 #   ORBITAL_VERSION=1.0.1        a specific release instead of the latest
@@ -15,6 +15,7 @@
 #                                or ~/Applications if /Applications isn't writable)
 #                                Linux AppImage: where `orbital` goes (default ~/.local/bin)
 #   ORBITAL_PACKAGE=deb|rpm|appimage   Linux: force a package type
+#   GITHUB_TOKEN=…               optional; lifts GitHub's API limit of 60 requests an hour
 set -euo pipefail
 
 REPO="SirojAbdumavlonov/orbital"
@@ -26,15 +27,34 @@ need curl
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
+# The GitHub API gives each file's SHA-256, but allows only 60 requests an
+# hour per address without a token (shared networks and CI runners hit that).
+# Without it, the version comes from the releases page and files by their name.
+auth=()
+[ -n "${GITHUB_TOKEN:-}" ] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
 if [ -n "${ORBITAL_VERSION:-}" ]; then
   api="https://api.github.com/repos/$REPO/releases/tags/v${ORBITAL_VERSION#v}"
 else
   api="https://api.github.com/repos/$REPO/releases/latest"
 fi
-curl -fsSL -H "Accept: application/vnd.github+json" "$api" -o "$tmp/release.json" \
-  || die "couldn't read the release from GitHub ($api)"
-version=$(sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' "$tmp/release.json" | head -n1)
-[ -n "$version" ] || die "the release has no version"
+version=""
+if [ -z "${ORBITAL_NO_API:-}" ] && curl -fsSL -H "Accept: application/vnd.github+json" ${auth[@]+"${auth[@]}"} "$api" -o "$tmp/release.json" 2>/dev/null; then
+  version=$(sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' "$tmp/release.json" | head -n1)
+fi
+if [ -z "$version" ]; then
+  : > "$tmp/release.json"
+  if [ -n "${ORBITAL_VERSION:-}" ]; then
+    version=${ORBITAL_VERSION#v}
+  else
+    # https://github.com/OWNER/REPO/releases/latest redirects to …/releases/tag/vX.Y.Z
+    latest=$(curl -fsSI -o /dev/null -w '%{redirect_url}' "https://github.com/$REPO/releases/latest") \
+      || die "couldn't reach GitHub to find the latest release"
+    version=${latest##*/tag/}
+    version=${version#v}
+    case "$version" in ""|http*) die "no published release found at https://github.com/$REPO/releases" ;; esac
+  fi
+  say "GitHub's API isn't available right now; downloading by file name (no checksum check)" >&2
+fi
 
 # "url sha256" for every file of the release (sha256 is empty if GitHub has none).
 assets() {
@@ -45,13 +65,19 @@ assets() {
   ' "$tmp/release.json"
 }
 
-# Download the release file whose name matches the regex $1 into $tmp; prints its path.
+# Download the release file whose name matches the regex $1 (or, without the
+# API, is called $2) into $tmp; prints its path.
 fetch() {
   local line url sum file got
-  line=$(assets | grep -E "/$1 " | head -n1 || true)
-  [ -n "$line" ] || die "Orbital $version has no file matching $1"
-  url=${line%% *}
-  sum=${line#* }
+  if [ -s "$tmp/release.json" ]; then
+    line=$(assets | grep -E "/$1 " | head -n1 || true)
+    [ -n "$line" ] || die "Orbital $version has no file matching $1"
+    url=${line%% *}
+    sum=${line#* }
+  else
+    url="https://github.com/$REPO/releases/download/v$version/$2"
+    sum=""
+  fi
   file="$tmp/$(basename "$url")"
   say "Downloading $(basename "$url")" >&2
   curl -fL --progress-bar "$url" -o "$file" || die "download failed: $url"
@@ -72,7 +98,7 @@ as_root() {
 install_macos() {
   need hdiutil
   local dmg mnt dest app
-  dmg=$(fetch 'Orbital_[^/]*_universal\.dmg')
+  dmg=$(fetch 'Orbital_[^/]*_universal\.dmg' "Orbital_${version}_universal.dmg")
   if [ -n "${ORBITAL_INSTALL_DIR:-}" ]; then dest=$ORBITAL_INSTALL_DIR
   elif [ -w /Applications ]; then dest=/Applications
   else dest="$HOME/Applications"; fi
@@ -110,25 +136,26 @@ install_linux() {
   fi
   case "$pkg" in
     deb)
-      file=$(fetch 'Orbital_[^/]*_amd64\.deb')
+      file=$(fetch 'Orbital_[^/]*_amd64\.deb' "Orbital_${version}_amd64.deb")
       say "Installing the .deb (asks for your password)"
       as_root apt-get install -y "$file"
       ;;
     rpm)
       # Pre-release versions (with a "-") are published without an .rpm.
-      if ! assets | grep -qE '/Orbital-[^/]*\.x86_64\.rpm '; then
+      if { [ -s "$tmp/release.json" ] && ! assets | grep -qE '/Orbital-[^/]*\.x86_64\.rpm '; } \
+        || { [ ! -s "$tmp/release.json" ] && [ "${version#*-}" != "$version" ]; }; then
         say "Orbital $version has no .rpm; using the AppImage"
         ORBITAL_PACKAGE=appimage install_linux
         return
       fi
-      file=$(fetch 'Orbital-[^/]*\.x86_64\.rpm')
+      file=$(fetch 'Orbital-[^/]*\.x86_64\.rpm' "Orbital-${version}-1.x86_64.rpm")
       say "Installing the .rpm (asks for your password)"
       if command -v dnf >/dev/null 2>&1; then as_root dnf install -y "$file"
       elif command -v zypper >/dev/null 2>&1; then as_root zypper --non-interactive install --allow-unsigned-rpm "$file"
       else as_root yum install -y "$file"; fi
       ;;
     appimage)
-      file=$(fetch 'Orbital_[^/]*_amd64\.AppImage')
+      file=$(fetch 'Orbital_[^/]*_amd64\.AppImage' "Orbital_${version}_amd64.AppImage")
       dest=${ORBITAL_INSTALL_DIR:-$HOME/.local/bin}
       mkdir -p "$dest"
       install -m 755 "$file" "$dest/orbital"

@@ -14,6 +14,12 @@ on:
     types: [published]
   workflow_dispatch:
 
+# The first install in each job goes through the API (with this run's token,
+# so the shared runner address isn't rate-limited) and checks the checksum;
+# a second one forces the fallback that users without API access get.
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
 jobs:
   macos:
     name: macOS (.dmg → /Applications)
@@ -30,8 +36,8 @@ jobs:
           sleep 8
           pgrep -f "$app/Contents/MacOS/orbital"
           pkill -f "$app/Contents/MacOS/orbital"
-      - name: Running it again updates in place
-        run: bash install.sh
+      - name: Without GitHub's API (rate-limited networks), running it again updates in place
+        run: ORBITAL_NO_API=1 bash install.sh
 
   ubuntu:
     name: Ubuntu (.deb)
@@ -40,6 +46,8 @@ jobs:
       - uses: actions/checkout@v5
       - run: bash install.sh
       - run: dpkg -s orbital | grep -E '^(Status|Version)' && command -v orbital
+      - name: Without GitHub's API
+        run: ORBITAL_NO_API=1 bash install.sh
 
   fedora:
     name: Fedora (.rpm)
@@ -49,6 +57,8 @@ jobs:
       - uses: actions/checkout@v5
       - run: bash install.sh
       - run: rpm -q orbital && command -v orbital
+      - name: Without GitHub's API
+        run: ORBITAL_NO_API=1 bash install.sh
 
   appimage:
     name: Other Linux (AppImage → ~/.local/bin)
@@ -57,6 +67,8 @@ jobs:
       - uses: actions/checkout@v5
       - run: ORBITAL_PACKAGE=appimage bash install.sh
       - run: test -x "$HOME/.local/bin/orbital" && file "$HOME/.local/bin/orbital" | grep -q ELF
+      - name: Without GitHub's API
+        run: ORBITAL_PACKAGE=appimage ORBITAL_NO_API=1 bash install.sh
 
   windows:
     name: Windows (silent NSIS install)
@@ -75,6 +87,7 @@ jobs:
           Start-Sleep -Seconds 10
           if ($p.HasExited) { throw "Orbital exited with code $($p.ExitCode)" }
           Stop-Process -Id $p.Id -Force
-      - name: Windows PowerShell 5.1 can run it too
+      - name: Windows PowerShell 5.1 can run it too, without GitHub's API
         shell: powershell
+        env: { ORBITAL_NO_API: "1" }
         run: Get-Content -Raw install.ps1 | Invoke-Expression
