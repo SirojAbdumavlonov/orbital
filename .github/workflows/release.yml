@@ -3,9 +3,11 @@ name: Release
 # Push a tag like v1.0.0 to build the macOS app and the Windows installer and
 # attach them to a draft GitHub Release. Review the draft, then publish it.
 #
-# Signing and notarization run when these repository secrets are set
-# (Settings → Secrets and variables → Actions); without them the build is
-# unsigned and macOS will warn on first open:
+# Without any APPLE_* secrets (the free default) the app is ad-hoc signed:
+# it runs, but isn't notarized, so macOS asks once before the first open
+# (System Settings → Privacy & Security → Open Anyway). A paid Apple
+# Developer account adds Developer ID signing and notarization via these
+# repository secrets (Settings → Secrets and variables → Actions):
 #   APPLE_CERTIFICATE           base64 of the Developer ID Application .p12:
 #                               Keychain Access → My Certificates → right-click
 #                               the certificate (with its key) → Export → .p12,
@@ -97,7 +99,12 @@ jobs:
         run: |
           fail() { echo "::error title=Signing certificate::$1"; exit 1; }
           if [ -z "$CERT" ]; then
-            echo "::warning title=Unsigned build::APPLE_CERTIFICATE is not set, so the app is not signed and macOS warns on first open."
+            # Ad-hoc signature ("-"): free, no Apple account. Without any
+            # signature a downloaded app on Apple Silicon is reported as
+            # "damaged"; ad-hoc signed, macOS only asks once (System Settings →
+            # Privacy & Security → Open Anyway).
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "::notice title=Ad-hoc signed::APPLE_CERTIFICATE is not set: the app is ad-hoc signed, not notarized, and macOS asks once before opening it."
             exit 0
           fi
           p12="$RUNNER_TEMP/signing.p12"
