@@ -10,6 +10,7 @@ use std::collections::HashMap;
 pub const SNAPSHOT_SCRIPT: &str = r#"LC_ALL=C; export LC_ALL
 echo '@@stat'; grep '^cpu' /proc/stat 2>/dev/null
 echo '@@meminfo'; cat /proc/meminfo 2>/dev/null
+echo '@@physmem'; b=$(cat /sys/devices/system/memory/block_size_bytes 2>/dev/null) && echo "$b $(cat /sys/devices/system/memory/memory*/online 2>/dev/null | grep -c 1)"
 echo '@@loadavg'; cat /proc/loadavg 2>/dev/null
 echo '@@uptime'; cat /proc/uptime 2>/dev/null
 echo '@@nproc'; nproc 2>/dev/null || getconf _NPROCESSORS_ONLN
@@ -61,6 +62,39 @@ pub struct Process {
     pub command: String,
 }
 
+/// Where the memory goes, from /proc/meminfo (bytes). `used + buff_cache +
+/// free == total`, like `free`.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryDetail {
+    /// RAM in the machine (online memory blocks); None where /sys doesn't say.
+    pub installed: Option<u64>,
+    /// Used by programs and the kernel, not counting cache.
+    pub used: u64,
+    /// Page cache, buffers and reclaimable kernel caches: given back when programs need it.
+    pub buff_cache: u64,
+    pub free: u64,
+    pub buffers: u64,
+    pub page_cache: u64,
+    /// Programs' own memory (heap, stacks).
+    pub anon: u64,
+    /// Shared memory and tmpfs (/dev/shm, /run).
+    pub shared: u64,
+    pub slab_reclaimable: u64,
+    pub slab_unreclaimable: u64,
+    pub kernel_stack: u64,
+    pub page_tables: u64,
+    /// Changed file data not yet written to disk.
+    pub dirty: u64,
+    /// Memory programs were promised, and how much the kernel allows with its overcommit setting.
+    pub committed: u64,
+    pub commit_limit: u64,
+    pub active: u64,
+    pub inactive: u64,
+    pub swap_cached: u64,
+    pub huge_pages: u64,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
@@ -78,6 +112,7 @@ pub struct Snapshot {
     pub mem_cached: u64,
     pub swap_total: u64,
     pub swap_used: u64,
+    pub memory: MemoryDetail,
     pub uptime_secs: u64,
     pub disks: Vec<Disk>,
     pub net: Vec<NetInterface>,
@@ -128,6 +163,44 @@ pub fn cpu_percent(prev: &CpuTimes, cur: &CpuTimes) -> Option<f64> {
     Some(((dt.saturating_sub(di)) as f64 / dt as f64 * 100.0).clamp(0.0, 100.0))
 }
 
+/// `block_size_hex online_blocks` from /sys/devices/system/memory.
+fn installed_memory(line: &str) -> Option<u64> {
+    let mut it = line.split_whitespace();
+    let size = u64::from_str_radix(it.next()?.trim_start_matches("0x"), 16).ok()?;
+    let blocks: u64 = it.next()?.parse().ok()?;
+    (size > 0 && blocks > 0).then(|| size.saturating_mul(blocks))
+}
+
+fn memory_detail(mem: &HashMap<&str, u64>, physmem: Option<&str>) -> MemoryDetail {
+    let g = |k: &str| mem.get(k).copied().unwrap_or(0);
+    let total = g("MemTotal");
+    let free = g("MemFree");
+    let buff_cache = g("Buffers") + g("Cached") + g("SReclaimable");
+    MemoryDetail {
+        // Online blocks can't be less than what the kernel manages; otherwise /sys is lying (or partial).
+        installed: physmem.and_then(installed_memory).filter(|&b| b >= total),
+        used: total.saturating_sub(free).saturating_sub(buff_cache),
+        buff_cache: buff_cache.min(total.saturating_sub(free)),
+        free,
+        buffers: g("Buffers"),
+        page_cache: g("Cached"),
+        anon: g("AnonPages"),
+        shared: g("Shmem"),
+        slab_reclaimable: g("SReclaimable"),
+        slab_unreclaimable: g("SUnreclaim"),
+        kernel_stack: g("KernelStack"),
+        page_tables: g("PageTables"),
+        dirty: g("Dirty") + g("Writeback"),
+        committed: g("Committed_AS"),
+        commit_limit: g("CommitLimit"),
+        active: g("Active"),
+        inactive: g("Inactive"),
+        swap_cached: g("SwapCached"),
+        // HugePages_* are counts, not kB; Hugetlb is the total in kB (×1024 above).
+        huge_pages: g("Hugetlb"),
+    }
+}
+
 pub fn parse_snapshot(out: &str) -> Snapshot {
     let s = sections(out);
     let get = |k: &str| s.get(k).cloned().unwrap_or_default();
@@ -157,6 +230,7 @@ pub fn parse_snapshot(out: &str) -> Snapshot {
     snap.mem_cached = mem.get("Cached").unwrap_or(&0) + mem.get("Buffers").unwrap_or(&0);
     snap.swap_total = *mem.get("SwapTotal").unwrap_or(&0);
     snap.swap_used = snap.swap_total.saturating_sub(*mem.get("SwapFree").unwrap_or(&0));
+    snap.memory = memory_detail(&mem, get("physmem").first().copied());
 
     if let Some(l) = get("loadavg").first() {
         let v: Vec<f64> = l.split_whitespace().take(3).filter_map(|x| x.parse().ok()).collect();
@@ -300,12 +374,31 @@ mod tests {
         assert_eq!(s.mem_total, 8_143_288 * 1024);
         assert_eq!(s.mem_used, (8_143_288 - 5_120_000) * 1024);
         assert_eq!(s.load, [0.42, 0.37, 0.30]);
+        let m = &s.memory;
+        assert_eq!(m.installed, Some(8 * 1024 * 1024 * 1024));
+        assert_eq!(m.free, 912_004 * 1024);
+        assert_eq!(m.buff_cache, (200_000 + 3_500_000 + 150_000) * 1024);
+        assert_eq!(m.used + m.buff_cache + m.free, s.mem_total, "adds up like `free`");
+        assert_eq!((m.anon, m.shared, m.dirty), (2_400_000 * 1024, 64_000 * 1024, (1_200 + 8) * 1024));
+        assert_eq!((m.committed, m.commit_limit), (4_100_000 * 1024, 6_168_792 * 1024));
         assert_eq!(s.uptime_secs, 864_123);
         assert_eq!(s.disks.len(), 2);
         assert_eq!(s.disks[0].mount, "/");
         assert_eq!(s.net.len(), 1);
         assert_eq!(s.net[0].name, "eth0");
         assert_eq!(s.processes[0].command, "nginx");
+    }
+
+    #[test]
+    fn installed_memory_from_sys() {
+        assert_eq!(installed_memory("8000000 64"), Some(64 * 128 * 1024 * 1024));
+        assert_eq!(installed_memory("0x8000000 2"), Some(256 * 1024 * 1024));
+        assert_eq!(installed_memory(""), None);
+        assert_eq!(installed_memory("zz 3"), None);
+        // An old kernel without /sys/devices/system/memory: nothing after the tag.
+        let s = parse_snapshot("@@meminfo\nMemTotal: 1024 kB\nMemFree: 512 kB\n@@physmem\n@@end\n");
+        assert_eq!(s.memory.installed, None);
+        assert_eq!(s.memory.used, 512 * 1024);
     }
 
     #[test]

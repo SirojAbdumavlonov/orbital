@@ -4,10 +4,10 @@ import { Fragment, useEffect, useState } from "react";
 import { api, asApiError, AuditCategory, AuditEvent } from "../lib/api";
 import { useStore } from "../store";
 
-const CATS: (AuditCategory | "all")[] = ["all", "config", "file", "service", "docker", "command", "terminal", "connection", "security", "dns"];
+const CATS: (AuditCategory | "all")[] = ["all", "config", "file", "service", "docker", "command", "terminal", "connection", "security", "dns", "uptime"];
 const CAT_LABEL: Record<string, string> = {
   all: "All", config: "Config", file: "Files", service: "Services", docker: "Docker", command: "Commands",
-  terminal: "Terminal", connection: "Sessions", security: "Security", dns: "DNS",
+  terminal: "Terminal", connection: "Sessions", security: "Security", dns: "DNS", uptime: "Uptime",
 };
 
 export function ActivityView({ profileId }: { profileId?: string }) {

@@ -6,6 +6,11 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ### Added
 - **Import from `~/.ssh/config`** (Welcome screen, the sidebar's "+" menu, or ⌘K): every `Host` in the file and the files it includes, with its address, user, port, key and route shown before anything is saved. `ProxyJump` (including chains such as `bastion,admin@10.0.0.5:2200`) and the old `ProxyCommand ssh -W %h:%p` form become jump hosts, created first and reused when they are already saved. Hosts already saved (same host, port and user) are marked and skipped. `Match` blocks, unsupported `ProxyCommand`s, loops and routes with more than three jump hosts are pointed out instead of guessed at. Only the config files are read; keys stay where they are and nothing secret is copied.
+- **Uptime monitoring** (sidebar → Uptime, or ⌘K): add websites (HTTP or HTTPS, with the status code to expect and optionally text the page must contain) and ports (TCP `host:port`), checked every 1, 5 or 15 minutes from this Mac while Orbital is open. Each check shows its state, the last 30 results, a latency sparkline, uptime over 24 hours and 7 days and the last error; pause, edit, delete or check now. When a check goes down or comes back, macOS shows a notification, the app a toast, and the activity log records it (new "Uptime" category). A failure is retried once a few seconds later before it counts, and restarting Orbital doesn't repeat an alert. HTTPS checks warn when the certificate expires within 14 days. With a server connected, its nginx sites' domains are offered as one-click checks. Results are kept for 7 days, up/down changes for 90.
+- **Monitor: memory details.** How much memory is installed and how much Linux can use, what's in use, what's available, and a breakdown (programs, cache and buffers, free) with programs' own data, shared memory, kernel, file cache, data waiting to be written, memory promised to programs, active/inactive and swap. The Memory card says how much is installed and the share in use.
+
+### Fixed
+- Running Orbital from a development build showed a blank document as its icon in the Dock, ⌘Tab and Mission Control; it now shows Orbital's icon.
 
 ## 1.0.0 (2026-11-17)
 

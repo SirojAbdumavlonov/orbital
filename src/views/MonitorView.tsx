@@ -1,7 +1,7 @@
 import { AlertTriangle, ArrowUp, CheckCircle2, File, Folder, FolderOpen, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Bar, LiveNumber, Sparkline } from "../components/ui";
-import { api, DiskUsage, ProcessReport } from "../lib/api";
+import { api, DiskUsage, Metrics, ProcessReport } from "../lib/api";
 import { asApiError } from "../lib/api";
 import { useRemote } from "../lib/remote";
 import { bytes, duration, rate } from "../lib/format";
@@ -188,6 +188,77 @@ function ServerDetails({ s }: { s: SessionState }) {
   );
 }
 
+/** How much memory there is and where it goes, in plain words. */
+function MemoryDetails({ m }: { m: Metrics }) {
+  const d = m.memory;
+  if (!d || !m.memTotal) return null;
+  const pct = (v: number) => (v / m.memTotal) * 100;
+  const kernel = d.slabUnreclaimable + d.kernelStack + d.pageTables;
+  const reserved = d.installed != null ? d.installed - m.memTotal : null;
+  const parts = [
+    { key: "used", label: "Used by programs", value: d.used, hint: "Memory programs and the kernel are using now" },
+    { key: "cache", label: "Cache and buffers", value: d.buffCache, hint: "Recently used files kept in memory to make them fast; given back as soon as programs need it" },
+    { key: "free", label: "Free", value: d.free, hint: "Not used for anything" },
+  ];
+  const commitPct = d.commitLimit ? (d.committed / d.commitLimit) * 100 : 0;
+  const row = (label: string, value: number, hint: string) => (
+    <><dt title={hint}>{label}</dt><dd title={hint}>{bytes(value)} <span className="faint">{pct(value).toFixed(1)}%</span></dd></>
+  );
+  return (
+    <section className="panel span-12 mem-details">
+      <h4>Memory details</h4>
+      <div className="mem-head">
+        <div>
+          <div className="faint" style={{ fontSize: 12 }}>{d.installed != null ? "Installed" : "Total"}</div>
+          <div className="big">{bytes(d.installed ?? m.memTotal)}</div>
+          <div className="faint" style={{ fontSize: 12 }}>
+            {reserved != null && reserved > 0 ? <>{bytes(m.memTotal)} usable by Linux · {bytes(reserved)} reserved by the firmware and kernel</> : <>usable by Linux</>}
+          </div>
+        </div>
+        <div>
+          <div className="faint" style={{ fontSize: 12 }}>In use</div>
+          <div className="big">{bytes(m.memUsed)}</div>
+          <div className="faint" style={{ fontSize: 12 }}>{pct(m.memUsed).toFixed(0)}% of usable memory{m.memUsed - d.used > m.memTotal / 100 ? ` · programs ${bytes(d.used)}, plus ${bytes(m.memUsed - d.used)} of cache that can't be given back now` : ""}</div>
+        </div>
+        <div>
+          <div className="faint" style={{ fontSize: 12 }}>Available for programs</div>
+          <div className="big">{bytes(m.memAvailable)}</div>
+          <div className="faint" style={{ fontSize: 12 }}>free memory plus cache Linux can give back</div>
+        </div>
+      </div>
+      <div className="mem-stack" role="img" aria-label={parts.map((p) => `${p.label} ${bytes(p.value)}`).join(", ")}>
+        {parts.map((p) => <i key={p.key} className={p.key} style={{ width: `${pct(p.value)}%` }} title={`${p.label}: ${bytes(p.value)}`} />)}
+      </div>
+      <div className="mem-legend">
+        {parts.map((p) => <span key={p.key} title={p.hint}><i className={p.key} /> {p.label} <b>{bytes(p.value)}</b></span>)}
+      </div>
+      <div className="details">
+        <dl className="kv">
+          {row("Programs' own data", d.anon, "Heap and stacks of running programs (anonymous memory)")}
+          {row("Shared and tmpfs", d.shared, "Shared memory and files in RAM disks such as /dev/shm and /run")}
+          {row("Kernel", kernel, "Kernel data that can't be freed: unreclaimable slab, kernel stacks and page tables")}
+          {d.hugePages > 0 && row("Huge pages", d.hugePages, "Reserved as huge pages (often for databases)")}
+        </dl>
+        <dl className="kv">
+          {row("File cache", d.pageCache, "Contents of files read or written recently")}
+          {row("Buffers", d.buffers, "Raw disk blocks and file system metadata")}
+          {row("Reclaimable kernel cache", d.slabReclaimable, "Kernel caches such as directory entries and inodes, freed under pressure")}
+          {row("Waiting to be written", d.dirty, "Changed file data not yet on disk")}
+        </dl>
+        <dl className="kv">
+          <dt title="Memory programs have asked for (not all of it is used). The commit limit only stops them when the kernel's overcommit setting is strict (vm.overcommit_memory=2).">Promised to programs</dt>
+          <dd>{bytes(d.committed)} <span className="faint">{commitPct.toFixed(0)}% of the {bytes(d.commitLimit)} commit limit</span></dd>
+          <dt title="Recently used memory vs. memory the kernel would reclaim or swap out first">Active / inactive</dt>
+          <dd>{bytes(d.active)} <span className="faint">/ {bytes(d.inactive)}</span></dd>
+          <dt>Swap</dt>
+          <dd>{m.swapTotal ? <>{bytes(m.swapUsed)} <span className="faint">of {bytes(m.swapTotal)}{d.swapCached ? ` · ${bytes(d.swapCached)} also in RAM` : ""}</span></> : <span className="faint">none</span>}</dd>
+        </dl>
+      </div>
+      {m.memAvailable / m.memTotal < 0.1 && <p className="warn-text" style={{ margin: "10px 0 0", fontSize: 12 }}><AlertTriangle size={12} /> Less than 10% is available. Programs may slow down{m.swapTotal ? " as the server swaps" : ""}, and Linux may stop the largest one to free memory.</p>}
+    </section>
+  );
+}
+
 export function MonitorView({ s }: { s: SessionState }) {
   const m = s.metrics[s.metrics.length - 1];
   if (!m) return <div className="empty"><p>Collecting the first sample…</p></div>;
@@ -209,8 +280,8 @@ export function MonitorView({ s }: { s: SessionState }) {
       </section>
 
       <section className="panel span-4">
-        <h4>Memory <span className="faint">{bytes(m.memTotal)}</span></h4>
-        <div className="big">{bytes(m.memUsed)}</div>
+        <h4>Memory <span className="faint">{bytes(m.memory?.installed ?? m.memTotal)}{m.memory?.installed ? " installed" : " total"}</span></h4>
+        <div className="big">{bytes(m.memUsed)} <span className="faint" style={{ fontSize: 14 }}>used · {memPct.toFixed(0)}%</span></div>
         <Sparkline values={hist((x) => (x.memTotal ? (x.memUsed / x.memTotal) * 100 : 0))} width={300} height={46} fluid />
         <div style={{ marginTop: 12 }}><Bar value={memPct} cache={cachePct} hot={memPct > 90} /></div>
         <p className="faint" style={{ margin: "8px 0 0", fontSize: 12 }}>{bytes(m.memAvailable)} available · {bytes(m.memCached)} cache</p>
@@ -253,6 +324,8 @@ export function MonitorView({ s }: { s: SessionState }) {
         <p className="faint" style={{ margin: "6px 0 0", fontSize: 12 }}>{m.osName} · {m.kernel}</p>
         <p className="faint" style={{ margin: "4px 0 0", fontSize: 12 }}>init {s.info.hasSystemd ? "systemd" : "other"} · what uses CPU, memory and disk is below</p>
       </section>
+
+      <MemoryDetails m={m} />
 
       <ServerDetails s={s} />
 

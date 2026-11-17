@@ -110,6 +110,38 @@ const MIGRATIONS: &[&str] = &[
         created_at TEXT NOT NULL
     );
     "#,
+    // v6: uptime checks run from this Mac, their recent results and up/down changes.
+    r#"
+    CREATE TABLE uptime_checks (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        target TEXT NOT NULL,
+        expected_status INTEGER NOT NULL DEFAULT 200,
+        contains TEXT,
+        interval_minutes INTEGER NOT NULL DEFAULT 5,
+        paused INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE uptime_results (
+        check_id TEXT NOT NULL,
+        at TEXT NOT NULL,
+        up INTEGER NOT NULL,
+        latency_ms INTEGER,
+        status_code INTEGER,
+        error TEXT,
+        cert_expires TEXT,
+        warning TEXT
+    );
+    CREATE INDEX uptime_results_idx ON uptime_results(check_id, at);
+    CREATE TABLE uptime_changes (
+        check_id TEXT NOT NULL,
+        at TEXT NOT NULL,
+        up INTEGER NOT NULL,
+        error TEXT
+    );
+    CREATE INDEX uptime_changes_idx ON uptime_changes(check_id, at);
+    "#,
 ];
 
 impl Database {

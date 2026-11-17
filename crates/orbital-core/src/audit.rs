@@ -24,6 +24,8 @@ pub enum Category {
     Command,
     Security,
     Dns,
+    /// Uptime checks: added, changed, and every up/down change.
+    Uptime,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

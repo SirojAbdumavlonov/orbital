@@ -27,6 +27,7 @@ use orbital_core::sysinfo::SystemInfo;
 use orbital_core::terminal::TermEvent;
 use orbital_core::tools::DetectedTool;
 use orbital_core::tunnels::TunnelInfo;
+use orbital_core::uptime::{Check, CheckInput, CheckStatus, UptimeEvent};
 use orbital_core::usage::{DiskUsage, ProcessReport};
 use orbital_core::users::{NewUser, UserChange, UsersReport};
 use orbital_core::webservers::{ApacheStatus, HaServerState, HaproxyStatus};
@@ -746,4 +747,40 @@ pub struct PointsHere {
 pub async fn dns_points_here(engine: Eng<'_>, session_id: String, names: Vec<String>) -> R<PointsHere> {
     let (addresses, checks) = engine.dns_points_here(&session_id, &names).await?;
     Ok(PointsHere { addresses, checks })
+}
+
+// ---------- uptime checks ----------
+
+/// The page's channel for uptime events (results and alerts); replaced when the page reloads.
+#[derive(Default)]
+pub struct UptimeWatch(pub std::sync::Mutex<Option<Channel<UptimeEvent>>>);
+
+#[tauri::command]
+pub fn uptime_watch(watch: State<'_, UptimeWatch>, on_event: Channel<UptimeEvent>) {
+    *watch.0.lock().unwrap_or_else(|p| p.into_inner()) = Some(on_event);
+}
+
+#[tauri::command]
+pub fn list_uptime(engine: Eng<'_>) -> R<Vec<CheckStatus>> {
+    engine.list_uptime()
+}
+
+#[tauri::command]
+pub fn save_uptime_check(engine: Eng<'_>, id: Option<String>, input: CheckInput) -> R<Check> {
+    engine.save_uptime_check(id.as_deref(), input)
+}
+
+#[tauri::command]
+pub fn set_uptime_paused(engine: Eng<'_>, id: String, paused: bool) -> R<Check> {
+    engine.set_uptime_paused(&id, paused)
+}
+
+#[tauri::command]
+pub fn delete_uptime_check(engine: Eng<'_>, id: String) -> R<()> {
+    engine.delete_uptime_check(&id)
+}
+
+#[tauri::command]
+pub async fn run_uptime_check(engine: Eng<'_>, id: String) -> R<CheckStatus> {
+    engine.run_uptime_check(&id).await
 }

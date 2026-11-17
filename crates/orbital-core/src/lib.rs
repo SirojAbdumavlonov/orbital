@@ -36,6 +36,7 @@ pub mod sysinfo;
 pub mod terminal;
 pub mod tools;
 pub mod tunnels;
+pub mod uptime;
 pub mod usage;
 pub mod users;
 pub mod vault;

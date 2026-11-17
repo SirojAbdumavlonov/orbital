@@ -62,6 +62,65 @@ fn move_old_data(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Run the uptime checks in the background while the app is open. Going down
+/// and coming back show a macOS notification; the page also gets every event
+/// (it shows the toast and refreshes).
+fn start_uptime(app: tauri::AppHandle, engine: &Arc<Engine>) {
+    use orbital_core::uptime::{Change, UptimeEvent};
+    use tauri_plugin_notification::NotificationExt;
+    engine.set_uptime_listener(move |ev| {
+        let note = match &ev {
+            UptimeEvent::Changed {
+                name,
+                change: Change::WentDown,
+                error,
+                ..
+            } => Some((
+                format!("{name} is down"),
+                error.clone().unwrap_or_else(|| "The check failed.".into()),
+            )),
+            UptimeEvent::Changed {
+                name,
+                target,
+                change: Change::Recovered,
+                ..
+            } => Some((format!("{name} is back up"), target.clone())),
+            UptimeEvent::CertWarning { name, message, .. } => Some((format!("{name}: certificate expiring"), message.clone())),
+            UptimeEvent::Result { .. } => None,
+        };
+        if let Some((title, body)) = note {
+            if let Err(e) = app.notification().builder().title(title).body(body).show() {
+                tracing::warn!("couldn't show a notification: {e}");
+            }
+        }
+        let watch = app.state::<commands::UptimeWatch>();
+        let ch = watch.0.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(ch) = ch {
+            let _ = ch.send(ev);
+        }
+    });
+    tauri::async_runtime::spawn(engine.clone().run_uptime());
+}
+
+/// Outside an .app bundle (`npm run tauri dev`), macOS has no icon for the
+/// process and shows a blank document in the Dock, ⌘Tab and Mission Control.
+/// Give it Orbital's icon. A bundled app already has it from icon.icns.
+#[cfg(target_os = "macos")]
+fn set_app_icon() {
+    use objc2::{AllocAnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+    let bundled = std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"));
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    if bundled {
+        return;
+    }
+    let data = NSData::with_bytes(include_bytes!("../icons/icon.png"));
+    if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
+        unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&image)) };
+    }
+}
+
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -73,7 +132,11 @@ pub fn run() {
         // and fetched from the release's latest.json; the UI asks before installing.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
+        .manage(commands::UptimeWatch::default())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            set_app_icon();
             let dir = data_dir(app)?;
             if let Err(e) = move_old_data(&dir) {
                 tracing::error!("couldn't move data from the old folder: {e}");
@@ -86,7 +149,9 @@ pub fn run() {
             let engine = Engine::with_presence(Arc::new(db), secrets, Arc::new(orbital_core::presence::LocalAuth));
             #[cfg(not(target_os = "macos"))]
             let engine = Engine::new(Arc::new(db), secrets);
-            app.manage(Arc::new(engine));
+            let engine = Arc::new(engine);
+            start_uptime(app.handle().clone(), &engine);
+            app.manage(engine);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -194,6 +259,12 @@ pub fn run() {
             commands::audit_query,
             commands::audit_verify,
             commands::audit_export,
+            commands::uptime_watch,
+            commands::list_uptime,
+            commands::save_uptime_check,
+            commands::set_uptime_paused,
+            commands::delete_uptime_check,
+            commands::run_uptime_check,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Orbital");

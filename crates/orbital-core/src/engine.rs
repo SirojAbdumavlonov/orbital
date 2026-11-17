@@ -33,6 +33,7 @@ use crate::sysinfo::SystemInfo;
 use crate::terminal::{TermEvent, Terminal};
 use crate::tools::DetectedTool;
 use crate::tunnels::{self, Tunnel, TunnelInfo};
+use crate::uptime::{self, Change, Check, CheckInput, CheckResult, CheckStatus, UptimeEvent};
 use crate::usage::{DiskUsage, ProcessReport};
 use crate::users::{self, NewUser, UserChange, UsersReport};
 use crate::webservers::{self, ApacheStatus, HaServerState, HaproxyStatus};
@@ -87,6 +88,9 @@ pub struct Engine {
     dns_clients: Mutex<HashMap<String, Arc<dns::Cloudflare>>>,
     /// Cloudflare's API and the resolvers asked when checking; tests point them at local servers.
     dns_endpoints: std::sync::RwLock<(String, Vec<(String, String)>)>,
+    uptime: std::sync::Mutex<uptime::Runtime>,
+    uptime_listener: std::sync::RwLock<Option<uptime::Listener>>,
+    http: std::sync::OnceLock<reqwest::Client>,
 }
 
 /// What a deploy reports while it runs.
@@ -141,6 +145,9 @@ impl Engine {
                 dns::CLOUDFLARE_API.into(),
                 dns::RESOLVERS.iter().map(|(l, u)| (l.to_string(), u.to_string())).collect(),
             )),
+            uptime: Default::default(),
+            uptime_listener: Default::default(),
+            http: Default::default(),
         }
     }
 
@@ -2233,6 +2240,214 @@ impl Engine {
     }
 
     // ---------- audit ----------
+
+    // ---------- uptime checks (run from this Mac) ----------
+
+    fn uptime_rt(&self) -> std::sync::MutexGuard<'_, uptime::Runtime> {
+        self.uptime.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn uptime_emit(&self, ev: UptimeEvent) {
+        let l = self.uptime_listener.read().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(l) = l {
+            l(ev);
+        }
+    }
+
+    /// Where uptime results and alerts go (notifications, toasts).
+    pub fn set_uptime_listener(&self, f: impl Fn(UptimeEvent) + Send + Sync + 'static) {
+        *self.uptime_listener.write().unwrap_or_else(|p| p.into_inner()) = Some(Arc::new(f));
+    }
+
+    fn record_uptime(&self, action: &str, c: &Check, outcome: Outcome, details: Option<serde_json::Value>) {
+        self.record(
+            None,
+            NewEvent {
+                category: Some(Category::Uptime),
+                action: action.into(),
+                target: Some(if c.name == c.target {
+                    c.target.clone()
+                } else {
+                    format!("{} ({})", c.name, c.target)
+                }),
+                outcome: Some(outcome),
+                details,
+                ..Default::default()
+            },
+        );
+    }
+
+    pub fn list_uptime(&self) -> Result<Vec<CheckStatus>> {
+        let now = chrono::Utc::now();
+        uptime::list_checks(&self.db)?
+            .into_iter()
+            .map(|c| uptime::status(&self.db, c, now))
+            .collect()
+    }
+
+    pub fn save_uptime_check(&self, id: Option<&str>, input: CheckInput) -> Result<Check> {
+        let c = uptime::save_check(&self.db, id, &input)?;
+        // An edited check starts over: it runs on the next tick and alerts afresh.
+        self.uptime_rt().forget(&c.id);
+        self.record_uptime(
+            if id.is_some() {
+                "uptime.check_update"
+            } else {
+                "uptime.check_create"
+            },
+            &c,
+            Outcome::Success,
+            None,
+        );
+        Ok(c)
+    }
+
+    pub fn set_uptime_paused(&self, id: &str, paused: bool) -> Result<Check> {
+        let c = uptime::set_paused(&self.db, id, paused)?;
+        self.uptime_rt().forget(id);
+        self.record_uptime(if paused { "uptime.pause" } else { "uptime.resume" }, &c, Outcome::Success, None);
+        Ok(c)
+    }
+
+    pub fn delete_uptime_check(&self, id: &str) -> Result<()> {
+        let c = uptime::get_check(&self.db, id)?;
+        uptime::delete_check(&self.db, id)?;
+        self.uptime_rt().forget(id);
+        self.record_uptime("uptime.check_delete", &c, Outcome::Success, None);
+        Ok(())
+    }
+
+    /// Run a check now (the "Check now" button). Alerts like a scheduled run.
+    pub async fn run_uptime_check(&self, id: &str) -> Result<CheckStatus> {
+        let c = uptime::get_check(&self.db, id)?;
+        self.uptime_run(c, false).await?;
+        uptime::status(&self.db, uptime::get_check(&self.db, id)?, chrono::Utc::now())
+    }
+
+    /// Run one check, store the result and alert on a change. With `retry`, a
+    /// failure is tried once more a few seconds later before it counts, so a
+    /// single dropped request doesn't page anyone.
+    async fn uptime_run(&self, c: Check, retry: bool) -> Result<Option<CheckResult>> {
+        if !self.uptime_rt().running.insert(c.id.clone()) {
+            return Ok(None);
+        }
+        struct Running<'a>(&'a Engine, String);
+        impl Drop for Running<'_> {
+            fn drop(&mut self) {
+                self.0.uptime_rt().running.remove(&self.1);
+            }
+        }
+        let _guard = Running(self, c.id.clone());
+        let client = self.http.get_or_init(uptime::http_client);
+        let mut r = uptime::probe(client, &c).await;
+        if !r.up && retry {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            r = uptime::probe(client, &c).await;
+        }
+        // Deleted or changed while it ran: drop the result.
+        match uptime::get_check(&self.db, &c.id) {
+            Ok(now) if now.target == c.target && now.kind == c.kind => {}
+            Ok(_) | Err(Error::NotFound(_)) => return Ok(None),
+            Err(e) => return Err(e),
+        }
+        let prev = self.uptime_rt().states.get(&c.id).copied();
+        // Without one, pick up where the last launch left off, so a restart doesn't re-alert.
+        let prev = match prev {
+            Some(p) => p,
+            None => uptime::last_state(&self.db, &c.id)?,
+        };
+        uptime::store_result(&self.db, &c.id, &r)?;
+        let (state, change) = uptime::transition(prev, r.up);
+        let warn = {
+            let mut rt = self.uptime_rt();
+            rt.states.insert(c.id.clone(), state);
+            rt.last_run.insert(c.id.clone(), Instant::now());
+            match &r.warning {
+                Some(w) if rt.cert_warned.insert(c.id.clone()) => Some(w.clone()),
+                Some(_) => None,
+                None => {
+                    rt.cert_warned.remove(&c.id);
+                    None
+                }
+            }
+        };
+        if let Some(change) = change {
+            uptime::store_change(&self.db, &c.id, &r.at, r.up, r.error.as_deref())?;
+            let (action, outcome) = match change {
+                Change::WentDown => ("uptime.down", Outcome::Failure),
+                Change::Recovered => ("uptime.up", Outcome::Success),
+            };
+            self.record_uptime(
+                action,
+                &c,
+                outcome,
+                Some(serde_json::json!({ "error": r.error, "statusCode": r.status_code, "latencyMs": r.latency_ms })),
+            );
+            self.uptime_emit(UptimeEvent::Changed {
+                check_id: c.id.clone(),
+                name: c.name.clone(),
+                target: c.target.clone(),
+                change,
+                error: r.error.clone(),
+            });
+        }
+        if let Some(message) = warn {
+            self.uptime_emit(UptimeEvent::CertWarning {
+                check_id: c.id.clone(),
+                name: c.name.clone(),
+                message,
+            });
+        }
+        self.uptime_emit(UptimeEvent::Result {
+            check_id: c.id.clone(),
+            result: r.clone(),
+        });
+        Ok(Some(r))
+    }
+
+    /// The scheduler: every few seconds, start the checks that are due. Runs
+    /// until the app quits; spawn it once.
+    pub async fn run_uptime(self: Arc<Self>) {
+        loop {
+            match uptime::list_checks(&self.db) {
+                Ok(checks) => {
+                    let now = Instant::now();
+                    let due: Vec<Check> = {
+                        let rt = self.uptime_rt();
+                        checks
+                            .into_iter()
+                            .filter(|c| !rt.running.contains(&c.id) && uptime::is_due(c, rt.last_run.get(&c.id).copied(), now))
+                            .collect()
+                    };
+                    for c in due {
+                        // Mark it now so the next tick doesn't start it again while it runs.
+                        self.uptime_rt().last_run.insert(c.id.clone(), now);
+                        let e = self.clone();
+                        tokio::spawn(async move {
+                            if let Err(err) = e.uptime_run(c, true).await {
+                                tracing::error!("uptime check failed to run: {err}");
+                            }
+                        });
+                    }
+                }
+                Err(e) => tracing::error!("couldn't read uptime checks: {e}"),
+            }
+            let prune = {
+                let mut rt = self.uptime_rt();
+                let due = rt.last_prune.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(3600));
+                if due {
+                    rt.last_prune = Some(Instant::now());
+                }
+                due
+            };
+            if prune {
+                if let Err(e) = uptime::prune(&self.db, chrono::Utc::now()) {
+                    tracing::error!("couldn't prune uptime results: {e}");
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    }
 
     pub fn audit_query(&self, f: &AuditFilter) -> Result<Vec<AuditEvent>> {
         audit::query(&self.db, f)

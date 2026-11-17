@@ -115,7 +115,16 @@ const metric = () => {
     hostname: "prod-web-01", osName: "Ubuntu 24.04.1 LTS", kernel: "Linux 6.8.0-45-generic x86_64",
     cpuModel: "AMD EPYC 7B13 64-Core Processor", cores: 8, load: [1.42 + Math.random() * 0.3, 1.21, 0.98],
     memTotal: 16_658_984_960, memAvailable: 7_100_000_000 - Math.random() * 2e8, memUsed: 9_558_984_960 + Math.random() * 2e8,
-    memCached: 4_900_000_000, swapTotal: 2_147_483_648, swapUsed: 182_000_000, uptimeSecs: 3_456_789 + (t % 1000),
+    memCached: 4_900_000_000, swapTotal: 2_147_483_648, swapUsed: 182_000_000,
+    memory: (() => {
+      const total = 16_658_984_960, free = 2_150_000_000 - Math.random() * 1e8, buffCache = 5_210_000_000;
+      return {
+        installed: 17_179_869_184, used: total - free - buffCache, buffCache, free, buffers: 310_000_000, pageCache: 4_590_000_000,
+        anon: 7_480_000_000, shared: 212_000_000, slabReclaimable: 310_000_000, slabUnreclaimable: 196_000_000, kernelStack: 24_000_000,
+        pageTables: 88_000_000, dirty: 3_400_000 + Math.random() * 2e6, committed: 11_900_000_000, commitLimit: 10_476_975_104,
+        active: 8_100_000_000, inactive: 5_300_000_000, swapCached: 21_000_000, hugePages: 0,
+      };
+    })(), uptimeSecs: 3_456_789 + (t % 1000),
     disks: [
       { filesystem: "/dev/nvme0n1p1", fsType: "ext4", mount: "/", totalBytes: 160e9, usedBytes: 61e9, availableBytes: 91e9, usedPercent: 40.1 },
       { filesystem: "/dev/nvme1n1", fsType: "xfs", mount: "/var/lib/docker", totalBytes: 500e9, usedBytes: 455e9, availableBytes: 45e9, usedPercent: 91.0 },
@@ -471,6 +480,72 @@ const importSsh = (keys: string[]) => {
   return { created, failed };
 };
 
+// ---- uptime checks ----
+const MIN = 60_000;
+type MockCheck = { id: string; name: string; kind: "http" | "tcp"; target: string; expectedStatus: number; contains: string | null; intervalMinutes: number; paused: boolean; createdAt: string };
+let uptimeChecks: MockCheck[] = [
+  { id: "u1", name: "Shop", kind: "http", target: "https://shop.example.com/", expectedStatus: 200, contains: "Add to cart", intervalMinutes: 1, paused: false, createdAt: "2026-11-01T10:00:00Z" },
+  { id: "u2", name: "Shop API health", kind: "http", target: "https://shop.example.com/api/health", expectedStatus: 200, contains: null, intervalMinutes: 1, paused: false, createdAt: "2026-11-01T10:01:00Z" },
+  { id: "u3", name: "grafana.example.com", kind: "http", target: "https://grafana.example.com/", expectedStatus: 200, contains: null, intervalMinutes: 5, paused: false, createdAt: "2026-11-02T10:00:00Z" },
+  { id: "u4", name: "Status page", kind: "http", target: "https://status.example.org/", expectedStatus: 200, contains: null, intervalMinutes: 15, paused: false, createdAt: "2026-11-03T10:00:00Z" },
+  { id: "u5", name: "PostgreSQL (db-primary)", kind: "tcp", target: "10.0.4.21:5432", expectedStatus: 0, contains: null, intervalMinutes: 5, paused: false, createdAt: "2026-11-04T10:00:00Z" },
+  { id: "u6", name: "Old landing page", kind: "http", target: "http://promo.example.com/", expectedStatus: 200, contains: null, intervalMinutes: 15, paused: true, createdAt: "2026-11-05T10:00:00Z" },
+];
+const certIn = (days: number) => new Date(Date.now() + days * 86400_000).toISOString();
+const CERTS: Record<string, string | null> = { u1: certIn(61), u2: certIn(61), u3: certIn(9), u4: certIn(44) };
+let uptimeResults: Record<string, any[]> = {};
+let uptimeChanges: Record<string, any[]> = {};
+const fakeResult = (c: MockCheck, at: number, up: boolean, error?: string) => {
+  const base = c.kind === "tcp" ? 4 : c.id === "u4" ? 180 : 60;
+  const cert = CERTS[c.id] ?? null;
+  const days = cert ? (new Date(cert).getTime() - Date.now()) / 86400_000 : 99;
+  return {
+    at: new Date(at).toISOString(), up, latencyMs: up ? Math.round(base + Math.random() * base * 0.6 + (Math.sin(at / 9e5) + 1) * base * 0.3) : null,
+    statusCode: c.kind === "http" ? (up ? c.expectedStatus : error?.startsWith("got 502") ? 502 : null) : null,
+    error: up ? null : error ?? "timed out", certExpires: cert, warning: up && days <= 14 ? `the TLS certificate expires in ${Math.floor(days)} days` : null,
+  };
+};
+for (const c of uptimeChecks) {
+  const step = c.intervalMinutes * MIN;
+  const list: any[] = [];
+  for (let i = 59; i >= 0; i--) {
+    const at = Date.now() - i * step - 20_000;
+    // The API had a short outage about forty minutes ago; the status page was down for one check.
+    const down = (c.id === "u2" && i >= 38 && i <= 41) || (c.id === "u4" && i === 30);
+    list.push(fakeResult(c, at, !down, c.id === "u2" ? "got 502 Bad Gateway, expected 200 OK" : "timed out"));
+  }
+  uptimeResults[c.id] = list;
+  uptimeChanges[c.id] = [];
+  for (let i = 1; i < list.length; i++) if (list[i].up !== list[i - 1].up) uptimeChanges[c.id].unshift({ at: list[i].at, up: list[i].up, error: list[i].error });
+}
+const uptimeStatus = (c: MockCheck) => {
+  const recent = uptimeResults[c.id] ?? [];
+  const last = recent[recent.length - 1] ?? null;
+  const share = (ms: number) => { const r = recent.filter((x) => Date.now() - new Date(x.at).getTime() <= ms); return r.length ? (r.filter((x) => x.up).length * 100) / r.length : null; };
+  const lastErr = [...recent].reverse().find((r) => !r.up);
+  return {
+    check: { ...c }, state: c.paused || !last ? "unknown" : last.up ? "up" : "down", last, recent,
+    uptime24h: share(86400_000), uptime7d: share(7 * 86400_000) === null ? null : Math.min(100, (share(7 * 86400_000) ?? 100) - (c.id === "u2" ? 0.12 : 0)),
+    lastError: lastErr ? { at: lastErr.at, up: false, error: lastErr.error } : null,
+    since: uptimeChanges[c.id]?.[0]?.at ?? null, changes: uptimeChanges[c.id] ?? [],
+  };
+};
+let uptimeCh: any = null;
+const uptimeRun = (c: MockCheck, up = true, error?: string) => {
+  const r = fakeResult(c, Date.now(), up, error);
+  const list = (uptimeResults[c.id] ??= []);
+  const prev = list[list.length - 1];
+  list.push(r);
+  if (list.length > 60) list.shift();
+  if ((prev ? prev.up : true) !== up) {
+    (uptimeChanges[c.id] ??= []).unshift({ at: r.at, up, error: r.error });
+    audit.unshift({ ...audit[0], seq: audit[0].seq + 1, id: `u${Date.now()}`, ts: r.at, profileId: null, server: null, category: "uptime", action: up ? "uptime.up" : "uptime.down", target: c.name === c.target ? c.target : `${c.name} (${c.target})`, command: null, outcome: up ? "success" : "failure", exitCode: null, details: { error: r.error } } as any);
+    uptimeCh?.onmessage({ type: "changed", checkId: c.id, name: c.name, target: c.target, change: up ? "recovered" : "wentDown", error: r.error });
+  }
+  uptimeCh?.onmessage({ type: "result", checkId: c.id, result: r });
+  return r;
+};
+
 export function install() {
   mockIPC(async (cmd, args: any) => {
     switch (cmd) {
@@ -653,6 +728,39 @@ export function install() {
         return { Id: args.id, Config: { Image: c?.image ?? "nginx:1.27-alpine", Env: ["TZ=Asia/Tashkent"], Labels: labels }, State: { Status: "running", Health: { Status: "healthy" } } };
       }
       case "compose_action": return { stdout: "", stderr: args.action === "pull" ? ` ✔ web Pulled\n ✔ api Pulled\n` : ` ✔ Container ${args.target.project}-${args.target.service ?? "web"}-1  ${args.action === "up" ? "Running" : "Started"}\n`, exitCode: 0, durationMs: 2400 };
+      case "uptime_watch": {
+        const first = !uptimeCh;
+        uptimeCh = args.onEvent;
+        if (!first) return null;
+        // The blog's server falls over a little after launch and comes back half a minute later.
+        setTimeout(() => {
+          let blog = uptimeChecks.find((c) => c.target === "http://blog.example.com/");
+          const api = uptimeChecks.find((c) => c.id === "u2")!;
+          uptimeRun(api, false, "got 502 Bad Gateway, expected 200 OK");
+          setTimeout(() => uptimeRun(api, true), 30_000);
+          if (blog) uptimeRun(blog, false);
+        }, 12_000);
+        setTimeout(() => uptimeCh?.onmessage({ type: "certWarning", checkId: "u3", name: "grafana.example.com", message: "the TLS certificate expires in 9 days" }), 4_000);
+        return null;
+      }
+      case "list_uptime": return uptimeChecks.map(uptimeStatus);
+      case "save_uptime_check": {
+        const i = args.input;
+        if (i.kind === "http" && !/^https?:\/\/[^/\s]+/.test(i.target.trim())) throw { kind: "invalidInput", message: "the URL must start with http:// or https://" };
+        const c: MockCheck = { id: args.id ?? `u${Date.now()}`, name: i.name?.trim() || i.target.trim(), kind: i.kind, target: i.target.trim(), expectedStatus: i.kind === "http" ? i.expectedStatus ?? 200 : 0, contains: i.kind === "http" ? i.contains?.trim() || null : null, intervalMinutes: i.intervalMinutes, paused: !!i.paused, createdAt: new Date().toISOString() };
+        if (args.id) { uptimeChecks = uptimeChecks.map((x) => (x.id === args.id ? { ...c, createdAt: x.createdAt } : x)); uptimeResults[c.id] = []; uptimeChanges[c.id] = []; }
+        else uptimeChecks.push(c);
+        return c;
+      }
+      case "set_uptime_paused": { const c = uptimeChecks.find((x) => x.id === args.id)!; c.paused = args.paused; return { ...c }; }
+      case "delete_uptime_check": uptimeChecks = uptimeChecks.filter((x) => x.id !== args.id); return null;
+      case "run_uptime_check": {
+        const c = uptimeChecks.find((x) => x.id === args.id)!;
+        await new Promise((r) => setTimeout(r, 500));
+        const prev = uptimeResults[c.id]?.[uptimeResults[c.id].length - 1];
+        uptimeRun(c, c.target.includes("blog.example.com") ? false : c.id === "u2" ? prev?.up ?? true : true, c.target.includes("blog.example.com") ? "couldn't connect: Connection refused (os error 61)" : undefined);
+        return uptimeStatus(c);
+      }
       case "audit_query": return audit.filter((e) => !args.filter?.category || e.category === args.filter.category);
       case "audit_verify": return { ok: true, checked: 1284, firstBrokenSeq: null };
       case "dns_accounts": return dnsAccounts.map((a) => ({ ...a }));

@@ -1,5 +1,5 @@
 import { Command } from "cmdk";
-import { Activity, ArrowLeft, ArrowRight, Download, FileInput, FolderTree, Globe, Gauge, KeyRound, ListChecks, Moon, Plug, Plus, RefreshCw, Server, Settings, SquareTerminal, Sun, Unplug } from "lucide-react";
+import { Activity, HeartPulse, ArrowLeft, ArrowRight, Download, FileInput, FolderTree, Globe, Gauge, KeyRound, ListChecks, Moon, Plug, Plus, RefreshCw, Server, Settings, SquareTerminal, Sun, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useUpdates } from "../lib/updates";
@@ -97,6 +97,7 @@ export function CommandMenu() {
         <Command.Group heading="Orbital">
           <Command.Item value="domains dns records cloudflare check" onSelect={run(() => st.setGlobalView("domains"))}><Globe size={14} /> Domains and DNS</Command.Item>
           <Command.Item value="activity log" onSelect={run(() => st.setGlobalView("activity"))}><Activity size={14} /> Activity log</Command.Item>
+          <Command.Item value="uptime monitoring websites checks down" onSelect={run(() => st.setGlobalView("uptime"))}><HeartPulse size={14} /> Uptime</Command.Item>
           <Command.Item value="security touch id hosts" onSelect={run(() => st.setGlobalView("knownHosts"))}><KeyRound size={14} /> Security</Command.Item>
           <Command.Item value="settings preferences" onSelect={run(() => st.setGlobalView("settings"))}><Settings size={14} /> Settings</Command.Item>
           <Command.Item value="check for updates new version" onSelect={run(() => { st.setGlobalView("settings"); void useUpdates.getState().check(); })}><Download size={14} /> Check for updates…</Command.Item>

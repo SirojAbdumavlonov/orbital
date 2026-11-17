@@ -13,6 +13,20 @@ Cached:          3500000 kB
 SwapCached:            0 kB
 SwapTotal:       2097148 kB
 SwapFree:        2000000 kB
+Dirty:              1200 kB
+Writeback:             8 kB
+AnonPages:       2400000 kB
+Shmem:             64000 kB
+KReclaimable:     150000 kB
+SReclaimable:     150000 kB
+SUnreclaim:        90000 kB
+KernelStack:       12000 kB
+PageTables:        30000 kB
+CommitLimit:     6168792 kB
+Committed_AS:    4100000 kB
+Hugetlb:               0 kB
+@@physmem
+8000000 64
 @@loadavg
 0.42 0.37 0.30 2/412 31337
 @@uptime
