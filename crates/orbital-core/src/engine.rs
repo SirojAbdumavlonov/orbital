@@ -2271,6 +2271,78 @@ impl Engine {
         }
     }
 
+    // ---------- system updates ----------
+
+    /// Upgradable packages (security first) and whether a reboot is needed. Read-only.
+    pub async fn updates(&self, sid: &str) -> Result<crate::updates::UpdatesReport> {
+        self.session(sid).await?.updates().await
+    }
+
+    /// Run a root command for system maintenance, streaming its output to the
+    /// job, with its own timeout, and record it.
+    async fn system_exec(&self, s: &SshSession, action: &str, target: &str, cmd: &str, timeout: std::time::Duration) -> Result<ExecOutput> {
+        let sent = s.privileged_command(cmd);
+        match progress::with_output(s.exec_privileged_with(cmd, None, timeout)).await {
+            Ok(o) => {
+                self.record_exec(s, Category::Command, action, target, &sent, &o);
+                Ok(o)
+            }
+            Err(e) => {
+                self.record_error(s, Category::Command, action, target, Some(sent), &e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Refresh the package list (`apt-get update`, `dnf makecache`), then list again.
+    pub async fn refresh_updates(&self, sid: &str) -> Result<crate::updates::UpdatesReport> {
+        let s = self.session(sid).await?;
+        let pm = s.package_manager().await?;
+        progress::step("Asking the package mirrors for new versions …");
+        self.system_exec(
+            &s,
+            "updates.refresh",
+            "package list",
+            pm.refresh_command(),
+            std::time::Duration::from_secs(600),
+        )
+        .await?
+        .check()?;
+        progress::step("Listing what can be upgraded …");
+        s.updates().await
+    }
+
+    /// Install every available update. Returns the package manager's output
+    /// whether it worked or not.
+    pub async fn install_updates(&self, sid: &str) -> Result<ExecOutput> {
+        let s = self.session(sid).await?;
+        let pm = s.package_manager().await?;
+        progress::step("Installing updates (this can take several minutes) …");
+        self.system_exec(
+            &s,
+            "updates.install",
+            "all packages",
+            pm.upgrade_command(),
+            std::time::Duration::from_secs(3600),
+        )
+        .await
+    }
+
+    /// Reboot the server. The connection drops a few seconds later.
+    pub async fn reboot(&self, sid: &str) -> Result<()> {
+        let s = self.session(sid).await?;
+        self.system_exec(
+            &s,
+            "server.reboot",
+            &s.profile.host,
+            crate::updates::REBOOT_COMMAND,
+            std::time::Duration::from_secs(30),
+        )
+        .await?
+        .check()?;
+        Ok(())
+    }
+
     // ---------- commands & terminals ----------
 
     /// The server's shell history (newest first, likely secrets left out), for

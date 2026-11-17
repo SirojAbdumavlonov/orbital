@@ -4,7 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { CornerDownLeft, Plus, ShieldAlert, Sparkles, SquareTerminal, User, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, asApiError } from "../lib/api";
-import { useResolvedTheme, useSettings } from "../lib/settings";
+import { useAccentColor, useResolvedTheme, useSettings } from "../lib/settings";
 import { SessionState, TermTab, useStore } from "../store";
 import { LineTracker, suggest } from "../lib/suggest";
 
@@ -140,6 +140,9 @@ function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visibl
   const toast = useStore((x) => x.toast);
   const theme = useResolvedTheme();
   const fontSize = useSettings((x) => x.terminalFontSize);
+  const accent = useAccentColor();
+  // The cursor and selection follow the accent colour.
+  const termTheme = () => ({ ...TERM_THEMES[theme], cursor: accent, selectionBackground: `${accent}40` });
   const suggestOn = useSettings((x) => x.terminalSuggestions);
   const suggestOnRef = useRef(suggestOn);
   suggestOnRef.current = suggestOn;
@@ -186,10 +189,10 @@ function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visibl
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    term.options.theme = TERM_THEMES[theme];
+    term.options.theme = termTheme();
     term.options.fontSize = fontSize;
     try { fitRef.current?.fit(); } catch { /* hidden */ }
-  }, [theme, fontSize]);
+  }, [theme, fontSize, accent]);
 
   useEffect(() => {
     const term = new Terminal({
@@ -200,7 +203,7 @@ function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visibl
       allowProposedApi: true,
       macOptionIsMeta: true,
       scrollback: 10000,
-      theme: TERM_THEMES[theme],
+      theme: termTheme(),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);

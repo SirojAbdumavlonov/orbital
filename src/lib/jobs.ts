@@ -18,7 +18,9 @@ export interface Job {
   server?: string;
   /** Where it was started: "Show" goes back there. */
   loc: Loc;
-  status: "running" | "done" | "failed";
+  status: "running" | "done" | "failed" | "stopped";
+  /** The engine's id for it (its progress channel), to stop it. */
+  jobId?: number;
   /** The latest step in words, and the latest line a command printed. */
   step?: string;
   last?: string;
@@ -94,8 +96,20 @@ export async function runJob<T>(run: (onProgress: OnProgress) => Promise<T>, opt
   };
   useJobs.setState((s) => ({ jobs: [job, ...s.jobs].slice(0, KEEP) }));
   const { update } = useJobs.getState();
+  const listener: OnProgress = (e) => update(id, (j) => applyProgress(j, e));
+  // The API writes each call's job id onto the listener as it starts it; a job
+  // made of several calls (sending several files) follows the current one, so
+  // Stop always reaches what is running now.
+  let current: number | undefined;
+  Object.defineProperty(listener, "jobId", {
+    get: () => current,
+    set: (v: number) => {
+      current = v;
+      update(id, () => ({ jobId: v }));
+    },
+  });
   try {
-    const r = await run((e) => update(id, (j) => applyProgress(j, e)));
+    const r = await run(listener);
     const d = opts.done?.(r);
     const failed = typeof d === "object" ? d.failed : undefined;
     update(id, () => ({ status: failed ? "failed" : "done", ended: Date.now(), outcome: failed ?? (typeof d === "string" ? d : "Done") }));
@@ -103,9 +117,11 @@ export async function runJob<T>(run: (onProgress: OnProgress) => Promise<T>, opt
     return r;
   } catch (e) {
     const err = asApiError(e);
-    update(id, () => ({ status: "failed", ended: Date.now(), outcome: err.message }));
-    // A failed pre-flight check is explained by the view's own dialog (withSafetyOverride).
-    finished(id, err.kind === "PreflightFailed");
+    const stopped = err.kind === "Cancelled";
+    update(id, () => ({ status: stopped ? "stopped" : "failed", ended: Date.now(), outcome: stopped ? "Stopped" : err.message }));
+    // A failed pre-flight check is explained by the view's own dialog (withSafetyOverride);
+    // a job the user stopped needs no report.
+    if (!stopped) finished(id, err.kind === "PreflightFailed");
     throw e;
   }
 }
@@ -137,4 +153,11 @@ export function useJob(key: string): Job | undefined {
 /** The newest job with this key while it runs. */
 export function useRunningJob(key: string): Job | undefined {
   return useJobs((s) => s.jobs.find((j) => j.key === key && j.status === "running"));
+}
+
+/** Stop a running job. The engine ends its command on the server; the job then shows "Stopped". */
+export async function stopJob(j: Job) {
+  if (j.status !== "running" || j.jobId === undefined) return;
+  useJobs.getState().update(j.id, () => ({ step: "Stopping …" }));
+  await api.cancelJob(j.jobId).catch(() => false);
 }

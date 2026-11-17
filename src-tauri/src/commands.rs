@@ -257,7 +257,12 @@ pub async fn upload(
     remote_path: String,
     progress: Channel<ProgressEvent>,
 ) -> R<u64> {
-    progress::scope(sink(progress), engine.upload(&session_id, &PathBuf::from(local_path), &remote_path)).await
+    progress::run_job(
+        progress.id(),
+        sink(progress),
+        engine.upload(&session_id, &PathBuf::from(local_path), &remote_path),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -275,7 +280,8 @@ pub async fn copy_between(
     overwrite: bool,
     progress: Channel<ProgressEvent>,
 ) -> R<TransferReport> {
-    progress::scope(
+    progress::run_job(
+        progress.id(),
         sink(progress),
         engine.copy_between(&src_session_id, &src_path, &dst_session_id, &dst_path, overwrite),
     )
@@ -306,7 +312,7 @@ pub async fn create_website(
     input: WebsiteInput,
     progress: Channel<ProgressEvent>,
 ) -> R<WebsiteReport> {
-    progress::scope(sink(progress), engine.create_website(&session_id, &input)).await
+    progress::run_job(progress.id(), sink(progress), engine.create_website(&session_id, &input)).await
 }
 
 #[tauri::command]
@@ -317,7 +323,7 @@ pub async fn compose_action(
     action: ComposeAction,
     progress: Channel<ProgressEvent>,
 ) -> R<ExecOutput> {
-    progress::scope(sink(progress), engine.compose_action(&session_id, target, action)).await
+    progress::run_job(progress.id(), sink(progress), engine.compose_action(&session_id, target, action)).await
 }
 
 #[tauri::command]
@@ -419,7 +425,8 @@ pub async fn backup_database(
     local_path: String,
     progress: Channel<ProgressEvent>,
 ) -> R<u64> {
-    progress::scope(
+    progress::run_job(
+        progress.id(),
         sink(progress),
         engine.backup_database(&session_id, kind, &name, format, &PathBuf::from(local_path)),
     )
@@ -495,7 +502,7 @@ pub async fn certbot_status(engine: Eng<'_>, session_id: String) -> R<CertbotSta
 
 #[tauri::command]
 pub async fn certbot_issue(engine: Eng<'_>, session_id: String, request: IssueRequest, progress: Channel<ProgressEvent>) -> R<ExecOutput> {
-    progress::scope(sink(progress), engine.certbot_issue(&session_id, request)).await
+    progress::run_job(progress.id(), sink(progress), engine.certbot_issue(&session_id, request)).await
 }
 
 #[tauri::command]
@@ -506,7 +513,12 @@ pub async fn certbot_renew(
     mode: RenewMode,
     progress: Channel<ProgressEvent>,
 ) -> R<ExecOutput> {
-    progress::scope(sink(progress), engine.certbot_renew(&session_id, name.as_deref(), mode)).await
+    progress::run_job(
+        progress.id(),
+        sink(progress),
+        engine.certbot_renew(&session_id, name.as_deref(), mode),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -517,7 +529,7 @@ pub async fn certbot_delete(
     force: bool,
     progress: Channel<ProgressEvent>,
 ) -> R<ExecOutput> {
-    progress::scope(sink(progress), engine.certbot_delete(&session_id, &name, force)).await
+    progress::run_job(progress.id(), sink(progress), engine.certbot_delete(&session_id, &name, force)).await
 }
 
 #[tauri::command]
@@ -543,7 +555,7 @@ pub async fn service_action(
     action: ServiceAction,
     progress: Channel<ProgressEvent>,
 ) -> R<ActionReport> {
-    progress::scope(sink(progress), engine.service_action(&session_id, &unit, action)).await
+    progress::run_job(progress.id(), sink(progress), engine.service_action(&session_id, &unit, action)).await
 }
 
 #[tauri::command]
@@ -574,7 +586,7 @@ pub async fn container_action(
     action: ContainerAction,
     progress: Channel<ProgressEvent>,
 ) -> R<ExecOutput> {
-    progress::scope(sink(progress), engine.container_action(&session_id, &id, action)).await
+    progress::run_job(progress.id(), sink(progress), engine.container_action(&session_id, &id, action)).await
 }
 
 #[tauri::command]
@@ -931,4 +943,34 @@ pub fn notify(app: tauri::AppHandle, title: String, body: String) {
 #[tauri::command]
 pub async fn shell_history(engine: Eng<'_>, session_id: String, root: bool) -> R<Vec<String>> {
     engine.shell_history(&session_id, root).await
+}
+
+/// Stop a running job (its id is its progress channel's). False if it already finished.
+#[tauri::command]
+pub fn cancel_job(id: u32) -> bool {
+    progress::cancel(id)
+}
+
+#[tauri::command]
+pub async fn updates(engine: Eng<'_>, session_id: String) -> R<orbital_core::updates::UpdatesReport> {
+    engine.updates(&session_id).await
+}
+
+#[tauri::command]
+pub async fn refresh_updates(
+    engine: Eng<'_>,
+    session_id: String,
+    progress: Channel<ProgressEvent>,
+) -> R<orbital_core::updates::UpdatesReport> {
+    progress::run_job(progress.id(), sink(progress), engine.refresh_updates(&session_id)).await
+}
+
+#[tauri::command]
+pub async fn install_updates(engine: Eng<'_>, session_id: String, progress: Channel<ProgressEvent>) -> R<ExecOutput> {
+    progress::run_job(progress.id(), sink(progress), engine.install_updates(&session_id)).await
+}
+
+#[tauri::command]
+pub async fn reboot_server(engine: Eng<'_>, session_id: String) -> R<()> {
+    engine.reboot(&session_id).await
 }

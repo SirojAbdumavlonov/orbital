@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound } from "lucide-react";
+import { PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound } from "lucide-react";
 import { Activity, Boxes, Cable, Clock, Cpu, Database, FolderTree, Gauge, Globe, ListChecks, LockKeyhole, Network, Plus, RefreshCw, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, asApiError, DetectedTool } from "../lib/api";
@@ -23,6 +23,8 @@ export const toolIcon = (t?: DetectedTool) => (t && CATEGORY_ICON[t.category]) |
 
 /** Tabs that exist on every server, with no detected software behind them. */
 const BUILTIN: Record<string, { name: string; hint: string; icon: typeof Gauge }> = {
+  checkup: { name: "Checkup", hint: "What needs attention on this server, and how to fix it", icon: Stethoscope },
+  updates: { name: "Updates", hint: "Install package and security updates; reboot", icon: PackageCheck },
   deploy: { name: "Deploy", hint: "Pull, build and restart your app; roll back", icon: Rocket },
   logs: { name: "Logs", hint: "Follow log files, services and containers live", icon: ScrollText },
   tunnels: { name: "Tunnels", hint: "Use the server's ports from this computer", icon: ArrowLeftRight },
@@ -182,7 +184,7 @@ export function ServerHeader({ s }: { s: SessionState }) {
             <div className="signal-item">
               <b><LiveNumber value={memPct} suffix="%" /></b>
               <Sparkline values={memHist} />
-              <span>Memory · {bytes(last?.memTotal, 0)}</span>
+              <span title="Used by programs, of the memory Linux can use">Memory · {last ? `${bytes(last.memUsed)} of ${bytes(last.memTotal, 0)}` : "–"}</span>
             </div>
             <div className="signal-item">
               <b><LiveNumber value={last?.load[0]} decimals={2} /></b>

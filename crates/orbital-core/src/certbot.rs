@@ -51,6 +51,9 @@ pub struct CertbotStatus {
     pub plugins: Vec<String>,
     /// What certbot said when it couldn't list certificates.
     pub error: Option<String>,
+    /// Another certbot holds the lock, so the list is unavailable for now.
+    #[serde(default)]
+    pub busy: bool,
 }
 
 /// How certbot proves to Let's Encrypt that the domain points at this server.
@@ -295,7 +298,10 @@ pub fn issue_command(r: &IssueRequest) -> Result<String> {
 }
 
 pub fn renew_command(name: Option<&str>, mode: RenewMode) -> Result<String> {
-    let mut cmd = String::from("certbot renew --non-interactive");
+    // Without a terminal, certbot renew first sleeps a random 0-8 minutes (so
+    // cron jobs everywhere don't hit Let's Encrypt at once). Someone clicked
+    // this button and is waiting: start now.
+    let mut cmd = String::from("certbot renew --non-interactive --no-random-sleep-on-renew");
     if let Some(n) = name {
         cmd.push_str(&format!(" --cert-name {}", quote(validate_cert_name(n)?)));
     }
@@ -324,10 +330,24 @@ pub fn usage_check_command(name: &str) -> Result<String> {
     ))
 }
 
+/// What the certificate list says while another certbot (a renewal, a test or
+/// the timer's own run) holds certbot's lock.
+pub const BUSY: &str = "certbot is busy: another certbot run (a renewal or a renewal test) is in progress on this server. The list comes back when it finishes.";
+
+/// certbot refused because another instance holds its lock.
+pub fn is_busy(err: &str) -> bool {
+    err.contains("Another instance of Certbot is already running")
+}
+
 impl SshSession {
     pub async fn certbot_status(&self) -> Result<CertbotStatus> {
         let (o, _) = self.exec_inspect(STATUS_SCRIPT).await?;
-        let st = parse_status(&o.stdout, Utc::now()).ok_or_else(|| Error::NotFound("certbot is not installed on this server".into()))?;
+        let mut st =
+            parse_status(&o.stdout, Utc::now()).ok_or_else(|| Error::NotFound("certbot is not installed on this server".into()))?;
+        if st.error.as_deref().is_some_and(is_busy) {
+            st.busy = true;
+            st.error = Some(BUSY.into());
+        }
         if st
             .error
             .as_deref()
@@ -474,14 +494,20 @@ timer=certbot.timer|ActiveState=active|LoadState=loaded|NextElapseUSecRealtime=S
     }
 
     #[test]
+    fn a_running_certbot_is_reported_as_busy() {
+        assert!(is_busy("Another instance of Certbot is already running."));
+        assert!(!is_busy("The requested nginx plugin does not appear to be installed"));
+    }
+
+    #[test]
     fn builds_renew_and_delete_commands() {
         assert_eq!(
             renew_command(None, RenewMode::DryRun).unwrap(),
-            "certbot renew --non-interactive --dry-run"
+            "certbot renew --non-interactive --no-random-sleep-on-renew --dry-run"
         );
         assert_eq!(
             renew_command(Some("shop.example.com"), RenewMode::Force).unwrap(),
-            "certbot renew --non-interactive --cert-name shop.example.com --force-renewal"
+            "certbot renew --non-interactive --no-random-sleep-on-renew --cert-name shop.example.com --force-renewal"
         );
         assert_eq!(
             delete_command("old.example.com-0001").unwrap(),

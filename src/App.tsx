@@ -1,4 +1,6 @@
 import { PanelRightClose } from "lucide-react";
+import { CheckupView } from "./views/CheckupView";
+import { UpdatesView } from "./views/UpdatesView";
 import { useEffect } from "react";
 import { Modal } from "./components/ui";
 import { useNavigationGestures } from "./lib/navigation";
@@ -57,6 +59,8 @@ const GLOBAL_TITLES = {
 
 /** Software with a screen of its own; everything else gets the generic tool tab. */
 const TOOL_VIEWS: Record<string, (p: { s: SessionState }) => JSX.Element> = {
+  checkup: CheckupView,
+  updates: UpdatesView,
   docker: DockerView,
   nginx: NginxView,
   ufw: FirewallView,

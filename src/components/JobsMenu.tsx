@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, ListChecks, Loader2, XCircle } from "lucide-react";
-import { useJobs } from "../lib/jobs";
+import { CheckCircle2, CircleSlash, ListChecks, Loader2, Square, XCircle } from "lucide-react";
+import { stopJob, useJobs } from "../lib/jobs";
 import { goTo, reachable } from "../store";
 import { elapsed } from "./JobProgress";
 
@@ -47,7 +47,7 @@ export function JobsMenu() {
           </div>
           <ul>
             {jobs.map((j) => {
-              const Icon = j.status === "running" ? Loader2 : j.status === "done" ? CheckCircle2 : XCircle;
+              const Icon = j.status === "running" ? Loader2 : j.status === "done" ? CheckCircle2 : j.status === "stopped" ? CircleSlash : XCircle;
               const canGo = reachable(j.loc);
               return (
                 <li key={j.id}>
@@ -69,6 +69,11 @@ export function JobsMenu() {
                     </span>
                     <span className="faint jobs-time">{elapsed((j.ended ?? Date.now()) - j.started)}</span>
                   </button>
+                  {j.status === "running" && j.jobId !== undefined && (
+                    <button className="row-btn danger jobs-stop" title="Stop it: the command on the server is ended" aria-label={`Stop ${j.title}`} onClick={() => void stopJob(j)}>
+                      <Square size={12} />
+                    </button>
+                  )}
                 </li>
               );
             })}

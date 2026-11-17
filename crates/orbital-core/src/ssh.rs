@@ -461,7 +461,17 @@ impl SshSession {
             // One buffer per stream, so a partial line on one isn't joined to the other's.
             let pw = self.sudo_password.as_ref().map(|p| p.as_str());
             let mut lines = crate::progress::live().then(|| (crate::progress::Lines::new(pw), crate::progress::Lines::new(pw)));
-            while let Some(msg) = ch.wait().await {
+            loop {
+                // A stopped job ends the command: SIGTERM (sudo passes it on), then close.
+                let msg = tokio::select! {
+                    m = ch.wait() => m,
+                    _ = crate::progress::cancelled() => {
+                        let _ = ch.signal(russh::Sig::TERM).await;
+                        let _ = ch.close().await;
+                        return Err(Error::Cancelled);
+                    }
+                };
+                let Some(msg) = msg else { break };
                 match msg {
                     ChannelMsg::Data { data } => {
                         if let Some((l, _)) = lines.as_mut() {

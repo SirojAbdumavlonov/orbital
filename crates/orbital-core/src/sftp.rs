@@ -428,6 +428,7 @@ impl SshSession {
             if n == 0 {
                 break;
             }
+            crate::progress::check()?;
             dst.write_all(&buf[..n]).await?;
             total += n as u64;
             meter.add(n as u64, remote);
@@ -479,6 +480,7 @@ async fn copy_file(from: &SftpSession, src: &str, to: &SftpSession, dst: &str, p
         if n == 0 {
             break;
         }
+        crate::progress::check()?;
         writer.write_all(&buf[..n]).await?;
         total += n as u64;
         meter.add(n as u64, src);

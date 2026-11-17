@@ -1,5 +1,5 @@
 import { Command } from "cmdk";
-import { Activity, HeartPulse, SquareCode, ArrowLeft, ArrowRight, Download, FileInput, FolderTree, Globe, Gauge, KeyRound, ListChecks, Moon, Plug, Plus, RefreshCw, Server, Settings, SquareTerminal, Sun, Unplug } from "lucide-react";
+import { Activity, ArrowRightLeft, HeartPulse, SquareCode, ArrowLeft, ArrowRight, Download, FileInput, FolderTree, Globe, Gauge, KeyRound, ListChecks, Moon, Plug, Plus, RefreshCw, Server, Settings, SquareTerminal, Sun, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useUpdates } from "../lib/updates";
@@ -72,7 +72,7 @@ export function CommandMenu() {
             {s.toolTabs.map((id) => {
               const t = s.tools?.find((x) => x.id === id);
               const Icon = toolIcon(t);
-              return <Command.Item key={id} value={`tab ${t?.name ?? id}`} onSelect={run(() => go(`tool:${id}`))}><Icon size={14} /> {t?.name ?? ({ ports: "Open ports", users: "Users", docker: "Docker", deploy: "Deploy", logs: "Logs", tunnels: "Tunnels", sshkeys: "SSH keys" } as Record<string, string>)[id] ?? id}</Command.Item>;
+              return <Command.Item key={id} value={`tab ${t?.name ?? id}`} onSelect={run(() => go(`tool:${id}`))}><Icon size={14} /> {t?.name ?? ({ checkup: "Checkup", updates: "Updates", ports: "Open ports", users: "Users", docker: "Docker", deploy: "Deploy", logs: "Logs", tunnels: "Tunnels", sshkeys: "SSH keys" } as Record<string, string>)[id] ?? id}</Command.Item>;
             })}
             {(s.tools ?? []).filter((t) => !s.toolTabs.includes(t.id)).map((t) => {
               const Icon = toolIcon(t);
@@ -80,6 +80,9 @@ export function CommandMenu() {
             })}
             {s.tools?.some((t) => t.id === "nginx") && (
               <Command.Item value="new website site domain nginx https" onSelect={run(() => { st.setActive(s.info.id); st.openTool(s.info.id, "nginx"); st.setNewWebsite(s.info.id); })}><Globe size={14} /> New website…<span className="cmdk-hint">nginx</span></Command.Item>
+            )}
+            {s.info.protocol === "sftp" && (
+              <Command.Item value="send copy file folder to another server transfer" onSelect={run(() => { st.setActive(s.info.id); st.setTab(s.info.id, "files"); useStore.setState({ sendRequest: s.info.id }); })}><ArrowRightLeft size={14} /> Send a file to another server…</Command.Item>
             )}
             <Command.Item value="reconnect" onSelect={run(() => st.reconnect(s.info.id))}><RefreshCw size={14} /> Reconnect</Command.Item>
             <Command.Item value="disconnect" onSelect={run(() => st.disconnect(s.info.id))}><Unplug size={14} /> Disconnect</Command.Item>

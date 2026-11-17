@@ -1776,3 +1776,56 @@ async fn shell_history_for_suggestions() {
         .await
         .unwrap();
 }
+
+/// Stopping a job ends its command on the server, not just the wait for it.
+#[tokio::test]
+async fn stopping_a_job_ends_its_command_on_the_server() {
+    use orbital_core::progress;
+    let Some(e) = env() else { return };
+    let Some(key) = e.key.clone() else { return };
+    let engine = std::sync::Arc::new(engine());
+    let p = engine.create_profile(profile(&e, AuthMethod::Key, Some(key))).unwrap();
+    let a = connect(&engine, &p.id, None).await;
+    let marker = format!("sleep {}", 4000 + std::process::id() % 1000);
+
+    let started = std::time::Instant::now();
+    let job = {
+        let (engine, sid, cmd) = (engine.clone(), a.id.clone(), marker.clone());
+        tokio::spawn(async move { progress::run_job(4242, None, engine.run_command(&sid, &cmd, false)).await })
+    };
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert!(progress::cancel(4242));
+    let r = job.await.unwrap();
+    assert!(matches!(r, Err(orbital_core::error::Error::Cancelled)), "{r:?}");
+    assert!(started.elapsed() < Duration::from_secs(8), "stopped promptly");
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let left = engine
+        .run_command(&a.id, &format!("pgrep -f '^{marker}$' || true"), false)
+        .await
+        .unwrap();
+    assert_eq!(left.stdout.trim(), "", "the command was ended on the server");
+}
+
+/// Updates: list what can be upgraded; in CI (root via sudo) also refresh the
+/// package list and see the refresh recorded. Installing isn't run here.
+#[tokio::test]
+async fn updates_list_and_refresh() {
+    let Some(e) = env() else { return };
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    let r = engine.updates(&s.id).await.unwrap();
+    if r.manager.is_none() {
+        return; // not apt/dnf/yum (macOS)
+    }
+    if std::env::var("ORBITAL_IT_USERS").is_err() {
+        return;
+    }
+    let after = engine.refresh_updates(&s.id).await.unwrap();
+    assert_eq!(after.manager, r.manager);
+    let log = engine.audit_query(&AuditFilter::default()).unwrap();
+    assert!(
+        log.iter().any(|ev| ev.action == "updates.refresh"),
+        "the refresh is in the activity log"
+    );
+}

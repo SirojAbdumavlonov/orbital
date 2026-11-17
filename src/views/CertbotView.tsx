@@ -1,5 +1,5 @@
 import { CheckCircle2, CircleDashed, FlaskConical, Globe, Lock, Plus, RefreshCw, RotateCw, Trash2, XCircle } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { confirm, Modal } from "../components/ui";
 import { api, asApiError, Certificate, CertbotStatus, CertMethod, DnsCheck, ExecOutput, IssueRequest } from "../lib/api";
 import { runJob, useRunningJob } from "../lib/jobs";
@@ -165,7 +165,17 @@ function IssueDialog({ s, status, initialDomains, onClose, onDone }: { s: Sessio
 export function CertbotView({ s }: { s: SessionState }) {
   const { patch } = useStore();
   const sid = s.info.id;
-  const { data: st, error, loading, reload } = useRemote(() => api.certbotStatus(sid), [sid]);
+  const { data: fresh, error, loading, reload } = useRemote(() => api.certbotStatus(sid), [sid]);
+  // While another certbot holds its lock (a renewal test, the timer), keep
+  // showing the last list and look again every 10 seconds.
+  const lastGood = useRef<CertbotStatus | null>(null);
+  if (fresh && !fresh.busy) lastGood.current = fresh;
+  const st = fresh?.busy && lastGood.current ? { ...lastGood.current, error: fresh.error, busy: true } : fresh;
+  useEffect(() => {
+    if (!fresh?.busy) return;
+    const t = setTimeout(reload, 10_000);
+    return () => clearTimeout(t);
+  }, [fresh]);
   const [sel, setSel] = useState<string | null>(null);
   const [issuing, setIssuing] = useState<string[] | null>(null);
   const [output, setOutput] = useState<{ title: string; out: ExecOutput } | null>(null);
@@ -239,13 +249,13 @@ export function CertbotView({ s }: { s: SessionState }) {
           : <span className="badge bad">No automatic renewal set up</span>)}
         {st?.version && <span className="faint">certbot {st.version}</span>}
         <span className="spacer" />
-        {st && <button className="btn" disabled={working || st.certificates.length === 0} title="Rehearse renewing every certificate against the test servers. Nothing changes." onClick={() => renew(null, "dryRun")}><FlaskConical size={13} /> Test renewal</button>}
+        {st && <button className="btn" disabled={working || st.certificates.length === 0} title="A rehearsal: renews every certificate against Let's Encrypt's test servers, so you know the automatic renewal will work (for example after changing nginx, DNS or the firewall). Nothing changes on the server." onClick={() => renew(null, "dryRun")}><FlaskConical size={13} /> Test renewal</button>}
         {st && <button className="btn primary" disabled={working} onClick={() => setIssuing([])}><Plus size={13} /> New certificate</button>}
         <button className="icon-btn" aria-label="Refresh" onClick={reload}><RefreshCw size={14} className={loading ? "spin" : ""} /></button>
       </div>
       {job && !issuing && <div className="job-bar"><JobProgress job={job} /></div>}
       {error && <div className="empty"><div><h3>Couldn't read certificates</h3><p>{error.message}</p><button className="btn" onClick={reload}>Try again</button></div></div>}
-      {st?.error && <div className="notice">{st.error}</div>}
+      {st?.error && <div className="notice">{st.busy && <RefreshCw size={13} className="spin" style={{ marginRight: 6, verticalAlign: -2 }} />}{st.error}</div>}
       {st && !st.error && st.certificates.length === 0 && (
         <div className="empty"><div>
           <Lock size={28} className="faint" />

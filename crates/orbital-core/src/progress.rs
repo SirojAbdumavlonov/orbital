@@ -15,9 +15,13 @@
 //! a command printed or Orbital wrote: never stdin, so never a sudo password,
 //! and lines that contain the session's sudo password are redacted anyway.
 
+use crate::error::{Error, Result};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -35,6 +39,62 @@ pub type Sink = Arc<dyn Fn(ProgressEvent) + Send + Sync>;
 tokio::task_local! {
     static SINK: Sink;
     static LIVE: bool;
+    static CANCEL: CancellationToken;
+}
+
+/// Jobs that can be stopped, by id (the UI's progress channel id).
+static RUNNING: LazyLock<Mutex<HashMap<u32, CancellationToken>>> = LazyLock::new(Default::default);
+
+/// How long a stopped job gets to wind down (signal its command, record the
+/// stop in the activity log) before it is dropped.
+const GRACE: Duration = Duration::from_secs(5);
+
+/// Run `fut` as job `id`: its progress goes to `sink`, and [`cancel`] stops it.
+/// Stopping is cooperative first: the command running on the server gets
+/// SIGTERM and its channel is closed, transfers stop between chunks, and the
+/// engine returns [`Error::Cancelled`] (recorded like any failure). If it
+/// hasn't returned after a few seconds, it is dropped.
+pub async fn run_job<T, F>(id: u32, sink: Option<Sink>, fut: F) -> Result<T>
+where
+    F: Future<Output = Result<T>>,
+{
+    let token = CancellationToken::new();
+    RUNNING.lock().unwrap_or_else(|p| p.into_inner()).insert(id, token.clone());
+    let work = scope(sink, CANCEL.scope(token.clone(), fut));
+    tokio::pin!(work);
+    let r = tokio::select! {
+        r = &mut work => r,
+        _ = token.cancelled() => tokio::time::timeout(GRACE, &mut work).await.unwrap_or(Err(Error::Cancelled)),
+    };
+    RUNNING.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+    r
+}
+
+/// Stop job `id`. False when no such job is running (it already finished).
+pub fn cancel(id: u32) -> bool {
+    match RUNNING.lock().unwrap_or_else(|p| p.into_inner()).get(&id) {
+        Some(t) => {
+            t.cancel();
+            true
+        }
+        None => false,
+    }
+}
+
+/// Resolves when the current job is stopped; never, outside a stoppable job.
+pub async fn cancelled() {
+    match CANCEL.try_with(|t| t.clone()) {
+        Ok(t) => t.cancelled().await,
+        Err(_) => std::future::pending().await,
+    }
+}
+
+/// `Err(Cancelled)` once the current job was stopped (for loops between chunks).
+pub fn check() -> Result<()> {
+    match CANCEL.try_with(|t| t.is_cancelled()) {
+        Ok(true) => Err(Error::Cancelled),
+        _ => Ok(()),
+    }
 }
 
 /// Run `fut` with `sink` receiving its progress; without a sink, just run it.
@@ -214,6 +274,35 @@ mod tests {
                 "Saving debug log to /var/log/letsencrypt"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn a_job_can_be_stopped() {
+        // Cooperative: the job notices and returns Cancelled itself.
+        let job = tokio::spawn(run_job(7, None, async {
+            loop {
+                check()?;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            #[allow(unreachable_code)]
+            Ok::<(), Error>(())
+        }));
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(cancel(7));
+        assert!(matches!(job.await.unwrap(), Err(Error::Cancelled)));
+        assert!(!cancel(7), "a finished job is forgotten");
+
+        // Waiting on `cancelled()` (as a running command does) wakes up too.
+        let job = tokio::spawn(run_job(8, None, async {
+            cancelled().await;
+            Err::<(), _>(Error::Cancelled)
+        }));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        cancel(8);
+        assert!(matches!(job.await.unwrap(), Err(Error::Cancelled)));
+
+        // Outside a job nothing is ever cancelled.
+        assert!(check().is_ok());
     }
 
     #[tokio::test]

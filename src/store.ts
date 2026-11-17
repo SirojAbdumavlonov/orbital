@@ -10,7 +10,7 @@ export const isSsh = (s: { info: { protocol?: string } }) => (s.info.protocol ??
 export type Tab = "files" | "services" | "monitor" | "terminal" | "activity" | `tool:${string}`;
 
 /** Tabs offered on every server, whatever software it runs. */
-export const ALWAYS_TOOLS = ["deploy", "logs", "tunnels", "ports", "users", "sshkeys"];
+export const ALWAYS_TOOLS = ["checkup", "updates", "deploy", "logs", "tunnels", "ports", "users", "sshkeys"];
 
 export interface OpenFile {
   path: string;
@@ -58,7 +58,7 @@ export interface SessionState {
 export type Loc = { sid: string; tab: Tab } | { global: NonNullable<State["globalView"]> } | null;
 
 /** Software with its own tab view (the rest get the generic one). */
-export const DEDICATED_TOOLS = ["docker", "nginx", "ufw", "fail2ban", "certbot", "sshd", "ports", "postgresql", "mysql", "mongodb", "redis", "apache", "haproxy", "users", "cron", "deploy", "logs", "tunnels", "sshkeys"];
+export const DEDICATED_TOOLS = ["checkup", "updates", "docker", "nginx", "ufw", "fail2ban", "certbot", "sshd", "ports", "postgresql", "mysql", "mongodb", "redis", "apache", "haproxy", "users", "cron", "deploy", "logs", "tunnels", "sshkeys"];
 
 /** Profile fields that only take effect on a new connection. */
 const CONNECTION_FIELDS = ["host", "port", "username", "authMethod", "keyPath", "sudoMode", "initialPath", "jumpProfileId"] as const;
@@ -100,6 +100,8 @@ interface State {
   reconnectAsk: string | null;
   /** Server the "New website" dialog is open for. */
   newWebsite: string | null;
+  /** Session whose Files tab should open "Send to server" (from ⌘K). */
+  sendRequest: string | null;
   /** Bumped when a website was created, so the nginx view reads its config again. */
   websiteRev: number;
 
@@ -167,6 +169,7 @@ export const useStore = create<State>((set, get) => ({
   importingSsh: false,
   globalView: null,
   newWebsite: null,
+  sendRequest: null,
   websiteRev: 0,
   navBack: [],
   navFwd: [],

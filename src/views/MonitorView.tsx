@@ -281,7 +281,7 @@ export function MonitorView({ s }: { s: SessionState }) {
 
       <section className="panel span-4">
         <h4>Memory <span className="faint">{bytes(m.memory?.installed ?? m.memTotal)}{m.memory?.installed ? " installed" : " total"}</span></h4>
-        <div className="big">{bytes(m.memUsed)} <span className="faint" style={{ fontSize: 14 }}>used · {memPct.toFixed(0)}%</span></div>
+        <div className="big">{bytes(m.memUsed)} <span className="faint" style={{ fontSize: 14 }}>of {bytes(m.memTotal)} used · {memPct.toFixed(0)}%</span></div>
         <Sparkline values={hist((x) => (x.memTotal ? (x.memUsed / x.memTotal) * 100 : 0))} width={300} height={46} fluid />
         <div style={{ marginTop: 12 }}><Bar value={memPct} cache={cachePct} hot={memPct > 90} /></div>
         <p className="faint" style={{ margin: "8px 0 0", fontSize: 12 }}>{bytes(m.memAvailable)} available · {bytes(m.memCached)} cache</p>

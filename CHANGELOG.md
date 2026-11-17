@@ -4,6 +4,21 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Stop a running job.** Running jobs have **Stop** (in their progress bar and in the sidebar's Jobs list). It ends the command on the server (SIGTERM, passed on by sudo) or the transfer between chunks; the job shows "Stopped" and the activity log records it.
+- **Updates** tab on every server: the packages that can be upgraded (security updates first), **Check for updates** (`apt-get update` / `dnf makecache`), **Install updates** as a job with live output (configuration files you changed are kept), and **Reboot** when the server needs one (type the server's name to confirm). apt, dnf and yum.
+- **Checkup** tab on every server: one click looks at disk space, memory, CPU load, failed services, waiting (security) updates, a needed reboot, the firewall, risky SSH settings and expiring certificates, and lists what needs attention worst first, in plain words, each with a button to the tab that fixes it.
+- **Accent colour** in Settings → Appearance: amber, blue, teal, green, violet, rose or graphite, for primary buttons, selection, charts and running jobs (the terminal cursor follows).
+- **Send several files at once**: the send button (⇄) in the Files toolbar, next to the terminal button, opens a picker to tick one or more files and folders, across folders; they go in one job with one progress and one Stop. Also in ⌘K: "Send a file to another server…".
+- Every file row shows its permissions (`rwxr-xr-x`) with rename, permissions and delete buttons; owner and modification time are in the tooltip and the bottom bar.
+
+### Changed
+- Monitor and the server header show memory as used **of** total (for example "9.0 GB of 16 GB").
+
+### Fixed
+- **Test renewal (and Renew now) took minutes**: without a terminal, certbot renew first sleeps a random 0–8 minutes, so Orbital now passes `--no-random-sleep-on-renew`. While another certbot run holds its lock, the certificates page keeps showing the last list with a "certbot is busy" note and checks again every 10 seconds, instead of showing nothing.
+- The Test renewal button explains what it's for: a rehearsal against Let's Encrypt's test servers, to make sure automatic renewal will work.
+
 ## 1.1.0 (2026-11-17)
 
 ### Added

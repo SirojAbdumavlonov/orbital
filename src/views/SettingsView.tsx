@@ -2,7 +2,7 @@ import { Download, Monitor, Moon, RefreshCw, RotateCcw, Sun } from "lucide-react
 import { isMac, isWindows, KEYS } from "../lib/platform";
 import { useEffect, useState } from "react";
 import { confirm } from "../components/ui";
-import { ThemePref, useSettings } from "../lib/settings";
+import { ACCENTS, ThemePref, useResolvedTheme, useSettings } from "../lib/settings";
 import { bytes } from "../lib/format";
 import { useUpdates } from "../lib/updates";
 import { useStore } from "../store";
@@ -85,6 +85,7 @@ function UpdateRow({ version }: { version: string }) {
 /** Preferences for the app itself (this computer), not for any server. */
 export function SettingsView() {
   const st = useSettings();
+  const resolved = useResolvedTheme();
   const { toast, setGlobalView } = useStore();
   const [version, setVersion] = useState("1.0.0");
   useEffect(() => {
@@ -110,6 +111,13 @@ export function SettingsView() {
             <div className="segmented">
               {themes.map(([id, label, Icon]) => (
                 <button key={id} className={st.theme === id ? "on" : ""} onClick={() => st.set({ theme: id })}><Icon size={12} /> {label}</button>
+              ))}
+            </div>
+          </Row>
+          <Row title="Accent colour" hint="The one highlight colour: primary buttons, the selected row, live charts and running jobs.">
+            <div className="accent-swatches" role="radiogroup" aria-label="Accent colour">
+              {ACCENTS.map((a) => (
+                <button key={a.id} role="radio" aria-checked={st.accent === a.id} aria-label={a.name} title={a.name} className={`swatch ${st.accent === a.id ? "on" : ""}`} style={{ background: resolved === "light" ? a.light : a.dark }} onClick={() => st.set({ accent: a.id })} />
               ))}
             </div>
           </Row>

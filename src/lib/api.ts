@@ -99,7 +99,7 @@ export interface ApiError {
   kind:
     | "Ssh" | "Sftp" | "AuthFailed" | "UnknownHostKey" | "HostKeyMismatch" | "CredentialsRequired"
     | "PresenceRequired" | "Secret" | "Db" | "InvalidInput" | "NotFound" | "Remote" | "PermissionDenied" | "Conflict"
-    | "ValidationFailed" | "PreflightFailed" | "NotConnected" | "Io" | "Other";
+    | "ValidationFailed" | "PreflightFailed" | "NotConnected" | "Io" | "Cancelled" | "Other";
   message: string;
   data: any;
 }
@@ -800,6 +800,8 @@ export interface CertbotStatus {
   autoRenew: { via: string; active: boolean; nextRun: string | null } | null;
   plugins: string[];
   error: string | null;
+  /** Another certbot run holds the lock; the list is unavailable for now. */
+  busy: boolean;
 }
 
 export type CertMethod = "nginx" | "apache" | "webroot" | "standalone";
@@ -876,6 +878,23 @@ export interface DnsCheck { name: string; type: DnsType; expected: string[]; ans
 
 export type TermMessage = { type: "data"; data: string } | { type: "exit"; code: number | null };
 
+// ---------- system updates ----------
+
+export interface Upgradable {
+  name: string;
+  current: string | null;
+  available: string;
+  security: boolean;
+}
+
+export interface UpdatesReport {
+  manager: "apt" | "dnf" | "yum" | null;
+  packages: Upgradable[];
+  rebootRequired: boolean;
+  /** Unix seconds of the last package-list refresh, when known. */
+  refreshedAt: number | null;
+}
+
 // ---------- job progress (orbital_core::progress) ----------
 
 /** What a long operation reports while it runs. */
@@ -883,16 +902,27 @@ export type ProgressEvent =
   | { type: "step"; text: string }
   | { type: "line"; text: string }
   | { type: "transfer"; files: number; bytes: number; current: string };
-export type OnProgress = (e: ProgressEvent) => void;
+/** A progress listener. The channel's id is written onto it: it is the job's id, which `cancelJob` stops. */
+export type OnProgress = ((e: ProgressEvent) => void) & { jobId?: number };
 
 /** Long commands always take a progress channel; it is only listened to when someone wants it. */
 function progressChannel(onProgress?: OnProgress) {
   const ch = new Channel<ProgressEvent>();
-  if (onProgress) ch.onmessage = onProgress;
+  if (onProgress) {
+    ch.onmessage = onProgress;
+    onProgress.jobId = ch.id;
+  }
   return ch;
 }
 
 export const api = {
+  updates: (sessionId: string) => invoke<UpdatesReport>("updates", { sessionId }),
+  refreshUpdates: (sessionId: string, onProgress?: OnProgress) => invoke<UpdatesReport>("refresh_updates", { sessionId, progress: progressChannel(onProgress) }),
+  installUpdates: (sessionId: string, onProgress?: OnProgress) => invoke<ExecOutput>("install_updates", { sessionId, progress: progressChannel(onProgress) }),
+  /** Reboots the server; the connection drops a few seconds later. */
+  rebootServer: (sessionId: string) => invoke<void>("reboot_server", { sessionId }),
+  /** Stop a running job (see OnProgress.jobId). False when it already finished. */
+  cancelJob: (id: number) => invoke<boolean>("cancel_job", { id }),
   /** A system notification (for jobs that finish while Orbital is in the background). */
   notify: (title: string, body: string) => invoke<void>("notify", { title, body }),
   listProfiles: () => invoke<Profile[]>("list_profiles"),

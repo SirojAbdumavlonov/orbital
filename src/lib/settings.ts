@@ -3,8 +3,21 @@ import { create } from "zustand";
 
 export type ThemePref = "system" | "light" | "dark";
 
+/** The one highlight colour (primary buttons, selection, live signal). */
+export const ACCENTS = [
+  { id: "amber", name: "Amber", dark: "#f2b544", light: "#e3a32c" },
+  { id: "blue", name: "Blue", dark: "#6ea8ff", light: "#2f6fe0" },
+  { id: "teal", name: "Teal", dark: "#3cc6c0", light: "#1a9690" },
+  { id: "green", name: "Green", dark: "#4fc78f", light: "#1e9a62" },
+  { id: "violet", name: "Violet", dark: "#a98bff", light: "#7b55e0" },
+  { id: "rose", name: "Rose", dark: "#ff7a93", light: "#d9465f" },
+  { id: "graphite", name: "Graphite", dark: "#c7cfdd", light: "#4a5670" },
+] as const;
+export type Accent = (typeof ACCENTS)[number]["id"];
+
 export interface Settings {
   theme: ThemePref;
+  accent: Accent;
   editorFontSize: number;
   editorWordWrap: boolean;
   editorMinimap: boolean;
@@ -24,6 +37,7 @@ export interface Settings {
 
 const DEFAULTS: Settings = {
   theme: "system",
+  accent: "amber",
   editorFontSize: 13,
   editorWordWrap: false,
   editorMinimap: false,
@@ -78,10 +92,20 @@ export function useResolvedTheme(): "light" | "dark" {
   return pref === "system" ? system : pref;
 }
 
-/** Puts the theme on <html data-theme>, which the stylesheet keys off. */
+/** Puts the theme and accent on <html data-theme data-accent>, which the stylesheet keys off. */
 export function useApplyTheme() {
   const theme = useResolvedTheme();
+  const accent = useSettings((s) => s.accent);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-  }, [theme]);
+    document.documentElement.dataset.accent = accent;
+  }, [theme, accent]);
+}
+
+/** The accent colour in effect, for places that need a value rather than a CSS variable (the terminal). */
+export function useAccentColor(): string {
+  const theme = useResolvedTheme();
+  const accent = useSettings((s) => s.accent);
+  const a = ACCENTS.find((x) => x.id === accent) ?? ACCENTS[0];
+  return theme === "light" ? a.light : a.dark;
 }

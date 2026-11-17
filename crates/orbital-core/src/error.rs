@@ -65,6 +65,9 @@ pub enum Error {
     NotConnected(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// The user stopped the job before it finished.
+    #[error("Stopped before it finished")]
+    Cancelled,
     #[error("{0}")]
     Other(String),
 }
@@ -90,6 +93,7 @@ impl Error {
             Error::PreflightFailed { .. } => "PreflightFailed",
             Error::NotConnected(_) => "NotConnected",
             Error::Io(_) => "Io",
+            Error::Cancelled => "Cancelled",
             Error::Other(_) => "Other",
         }
     }

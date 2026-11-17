@@ -1,6 +1,6 @@
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
-  ArrowRightLeft, ArrowUp, Download, Eye, EyeOff, FilePlus, FileText, Folder, FolderPlus, FolderUp, History, Link2, Lock, Pencil, RefreshCw, RotateCcw, Save,
+  ArrowRightLeft, ArrowUp, ChevronRight, Download, Eye, EyeOff, FilePlus, FileText, Folder, FolderPlus, FolderUp, History, Link2, Lock, Pencil, RefreshCw, RotateCcw, Save,
   ShieldCheck, SquareTerminal, Trash2, Upload, X,
 } from "lucide-react";
 import { isMac, mod } from "../lib/platform";
@@ -39,7 +39,15 @@ function Browser({ s }: { s: SessionState }) {
   const [rename, setRename] = useState<FileEntry | null>(null);
   const [chmodOf, setChmodOf] = useState<FileEntry | null>(null);
   const [newItem, setNewItem] = useState<"file" | "folder" | null>(null);
-  const [copyOf, setCopyOf] = useState<FileEntry | null>(null);
+  const [copyOf, setCopyOf] = useState<FileEntry[] | null>(null);
+  // "Send to server" with nothing selected: first choose what to send.
+  const [pickSend, setPickSend] = useState(false);
+  const sendRequest = useStore((x) => x.sendRequest);
+  useEffect(() => {
+    if (sendRequest !== sid) return;
+    useStore.setState({ sendRequest: null });
+    setPickSend(true);
+  }, [sendRequest]);
   const uploadJob = useRunningJob(`upload:${sid}`);
   const copyJob = useRunningJob(`copy:${sid}`);
 
@@ -159,6 +167,7 @@ function Browser({ s }: { s: SessionState }) {
         <button className="icon-btn" title="Upload files from this computer (or drop files and folders here)" aria-label="Upload files" onClick={pickUpload}><Upload size={15} /></button>
         <button className="icon-btn" title="Upload a folder from this computer" aria-label="Upload folder" onClick={pickUploadFolder}><FolderUp size={15} /></button>
         {ssh && <button className="icon-btn" title="Open terminal in this folder" aria-label="Open terminal here" onClick={() => openTerminal(sid, s.cwd)}><SquareTerminal size={15} /></button>}
+        {ssh && <button className="icon-btn" title="Send files or folders to another server" aria-label="Send to another server" onClick={() => setPickSend(true)}><ArrowRightLeft size={15} /></button>}
       </div>
       {(uploadJob || copyJob) && (
         <div className="job-stack">
@@ -180,24 +189,26 @@ function Browser({ s }: { s: SessionState }) {
             className={`entry ${e.kind === "dir" ? "dir" : ""} ${e.hidden ? "hidden" : ""} ${sel === e.path ? "sel" : ""}`}
             onClick={() => setSel(e.path)}
             onDoubleClick={() => openEntry(e)}
-            title={ssh ? `${e.mode}  ${e.owner ?? e.uid ?? ""}:${e.group ?? e.gid ?? ""}` : e.name}
+            title={`${e.name}\n${ssh ? `${e.mode}  ${e.owner ?? e.uid ?? ""}:${e.group ?? e.gid ?? ""}\n` : ""}Modified ${relativeTime(e.mtime)}`}
           >
             {e.kind === "dir" ? <Folder size={15} color="var(--amber)" /> : e.kind === "symlink" ? <Link2 size={15} className="faint" /> : <FileText size={15} className="faint" />}
             <span className="n">{e.name}</span>
             <span className="s">{e.kind === "dir" ? "" : bytes(e.size)}</span>
-            <span className="t">{relativeTime(e.mtime)}</span>
+            {/* Permissions, then this item's actions; the click doesn't select or open the row. */}
+            <span className="entry-side" onClick={(ev) => ev.stopPropagation()} onDoubleClick={(ev) => ev.stopPropagation()}>
+              <span className="mode mono">{ssh ? e.mode : relativeTime(e.mtime)}</span>
+              <button className="row-btn" title="Rename" aria-label={`Rename ${e.name}`} onClick={() => setRename(e)}><Pencil size={13} /></button>
+              {ssh && <button className="row-btn" title="Permissions" aria-label={`Permissions of ${e.name}`} onClick={() => setChmodOf(e)}><Lock size={13} /></button>}
+              <button className="row-btn danger" title="Delete" aria-label={`Delete ${e.name}`} onClick={() => remove(e)}><Trash2 size={13} /></button>
+            </span>
           </div>
         ))}
       </div>
       {selected && (
         <div className="toolbar" style={{ borderTop: "1px solid var(--slate-4)", borderBottom: 0 }}>
-          {ssh ? <span className="mono faint" title="Permissions">{selected.mode}</span> : <span className="mono faint">{selected.kind === "dir" ? "Folder" : bytes(selected.size)}</span>}
+          {ssh ? <span className="mono faint" title="Owner:group, last modified">{selected.owner ?? selected.uid}:{selected.group ?? selected.gid} · {relativeTime(selected.mtime)}</span> : <span className="mono faint">{selected.kind === "dir" ? "Folder" : bytes(selected.size)} · {relativeTime(selected.mtime)}</span>}
           <span className="spacer" />
           {selected.kind !== "dir" && <button className="icon-btn" title="Download" aria-label="Download" onClick={() => download(selected)}><Download size={14} /></button>}
-          {ssh && <button className="btn" title="Copy this to another server" onClick={() => setCopyOf(selected)}><ArrowRightLeft size={13} /> Send to server…</button>}
-          <button className="icon-btn" title="Rename" aria-label="Rename" onClick={() => setRename(selected)}><Pencil size={14} /></button>
-          {ssh && <button className="icon-btn" title="Permissions" aria-label="Permissions" onClick={() => setChmodOf(selected)}><Lock size={14} /></button>}
-          <button className="icon-btn" title="Delete" aria-label="Delete" onClick={() => remove(selected)}><Trash2 size={14} /></button>
         </div>
       )}
       {rename && (
@@ -229,7 +240,8 @@ function Browser({ s }: { s: SessionState }) {
           }}
         />
       )}
-      {copyOf && <CopyDialog s={s} entry={copyOf} onClose={() => setCopyOf(null)} />}
+      {copyOf && <CopyDialog s={s} entries={copyOf} onClose={() => setCopyOf(null)} />}
+      {pickSend && <PickSourceDialog s={s} initial={selected} onClose={() => setPickSend(false)} onPick={(es) => { setPickSend(false); setCopyOf(es); }} />}
       {chmodOf && <ChmodDialog entry={chmodOf} onClose={() => setChmodOf(null)} onSubmit={async (mode) => { await api.chmod(sid, chmodOf.path, mode); setChmodOf(null); load(); }} />}
     </section>
   );
@@ -256,11 +268,88 @@ function NameDialog(p: { title: string; initial: string; action: string; onClose
 }
 
 /**
+ * Step one of "Send to server" when nothing is selected: choose the file or
+ * folder on this server. Click selects, double-click (or the arrow) opens a
+ * folder; "Next" goes on to the destination.
+ */
+function PickSourceDialog({ s, initial, onClose, onPick }: { s: SessionState; initial: FileEntry | null; onClose: () => void; onPick: (e: FileEntry[]) => void }) {
+  const [dir, setDir] = useState(s.cwd);
+  const [list, setList] = useState<FileEntry[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  // Chosen items, by path; they can come from different folders.
+  const [chosen, setChosen] = useState<Map<string, FileEntry>>(() => new Map(initial ? [[initial.path, initial]] : []));
+  useEffect(() => {
+    let alive = true;
+    setList(null);
+    api.listDir(s.info.id, dir).then(
+      (l) => alive && (setList(l.filter((f) => !f.hidden)), setErr(null)),
+      (e) => alive && setErr(asApiError(e).message),
+    );
+    return () => { alive = false; };
+  }, [dir]);
+  const toggle = (f: FileEntry) => setChosen((m) => {
+    const n = new Map(m);
+    if (n.has(f.path)) n.delete(f.path);
+    else n.set(f.path, f);
+    return n;
+  });
+  const here = list ?? [];
+  const allHere = here.length > 0 && here.every((f) => chosen.has(f.path));
+  const up = parentPath(dir);
+  return (
+    <Modal
+      title="Send to another server"
+      subtitle={<>Step 1 of 2: choose what to send from <b>{s.profile.name}</b></>}
+      onClose={onClose}
+      footer={<>
+        <span className="left faint">{chosen.size ? `${chosen.size} selected` : "Nothing selected"}</span>
+        {chosen.size > 0 && <button className="btn ghost" onClick={() => setChosen(new Map())}>Clear</button>}
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn primary" disabled={chosen.size === 0} onClick={() => onPick([...chosen.values()])}>Next{chosen.size > 1 ? ` (${chosen.size})` : ""}</button>
+      </>}
+    >
+      {err && <div className="alert">{err}</div>}
+      <div className="pick-head">
+        <div className="crumbs mono">
+          {breadcrumbs(dir).map((b) => <button key={b.path} onClick={() => setDir(b.path)}>{b.name}</button>)}
+        </div>
+        {here.length > 0 && (
+          <label className="check">
+            <input type="checkbox" checked={allHere} onChange={() => setChosen((m) => {
+              const n = new Map(m);
+              for (const f of here) allHere ? n.delete(f.path) : n.set(f.path, f);
+              return n;
+            })} />
+            <span>All here</span>
+          </label>
+        )}
+      </div>
+      <div className="folder-pick tall" role="listbox" aria-multiselectable="true" aria-label="Files and folders">
+        {dir !== "/" && <button className="folder-row" onClick={() => setDir(up)}><FolderUp size={13} /> ..</button>}
+        {!list && !err && <div className="faint" style={{ padding: "6px 8px" }}>Loading…</div>}
+        {here.map((f) => (
+          <div key={f.path} role="option" aria-selected={chosen.has(f.path)} className={`folder-row ${chosen.has(f.path) ? "on" : ""}`} onClick={() => toggle(f)} onDoubleClick={() => f.kind === "dir" && setDir(f.path)}>
+            <input type="checkbox" checked={chosen.has(f.path)} onChange={() => toggle(f)} onClick={(e) => e.stopPropagation()} aria-label={`Send ${f.name}`} />
+            {f.kind === "dir" ? <Folder size={13} /> : <FileText size={13} />}
+            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</span>
+            <span className="faint">{f.kind === "dir" ? "folder" : bytes(f.size)}</span>
+            {f.kind === "dir" && <button className="row-btn" title={`Open ${f.name}`} aria-label={`Open ${f.name}`} onClick={(e) => { e.stopPropagation(); setDir(f.path); }}><ChevronRight size={13} /></button>}
+          </div>
+        ))}
+        {list?.length === 0 && <div className="faint" style={{ padding: "6px 8px" }}>This folder is empty</div>}
+      </div>
+      <p className="hint" style={{ marginTop: 8 }}>Tick one or more files and folders (a folder is sent with everything in it). Open a folder with › or a double-click; ticked items stay ticked when you move between folders.</p>
+    </Modal>
+  );
+}
+
+/**
  * Send a file or folder to another server: any saved SSH server, connected
  * here on the spot if it isn't yet. The copy is a job: it shows files and
  * bytes as they go, and keeps going if the dialog is closed.
  */
-function CopyDialog({ s, entry, onClose }: { s: SessionState; entry: FileEntry; onClose: () => void }) {
+function CopyDialog({ s, entries, onClose }: { s: SessionState; entries: FileEntry[]; onClose: () => void }) {
+  const what = entries.length === 1 ? entries[0].name : `${entries.length} items`;
   const { sessions, profiles, connecting } = useStore();
   const key = `copy:${s.info.id}`;
   const job = useRunningJob(key);
@@ -306,16 +395,26 @@ function CopyDialog({ s, entry, onClose }: { s: SessionState; entry: FileEntry; 
     if (!valid || !dst) return;
     setErr(null);
     const target = dst.info.id;
-    const to = joinPath(dir, entry.name);
     try {
+      // One job for all of them: one progress, one Stop.
       await runJob(
-        (p) => api.copyBetween({ srcSessionId: s.info.id, srcPath: entry.path, dstSessionId: target, dstPath: to, overwrite }, p),
+        async (p) => {
+          const total = { files: 0, dirs: 0, bytes: 0, skipped: 0 };
+          for (const entry of entries) {
+            const rep = await api.copyBetween({ srcSessionId: s.info.id, srcPath: entry.path, dstSessionId: target, dstPath: joinPath(dir, entry.name), overwrite }, p);
+            total.files += rep.files;
+            total.dirs += rep.dirs;
+            total.bytes += rep.bytes;
+            total.skipped += rep.skipped;
+          }
+          return total;
+        },
         {
           key,
-          title: `Sending ${entry.name} to ${dst.profile.name}`,
+          title: `Sending ${what} to ${dst.profile.name}`,
           sid: s.info.id,
           quietHere: false,
-          done: (rep) => `${entry.name} sent to ${dst.profile.name}: ${rep.files} ${rep.files === 1 ? "file" : "files"}, ${bytes(rep.bytes)}${rep.skipped ? `, ${rep.skipped} links or special files skipped` : ""}`,
+          done: (rep) => `${what} sent to ${dst.profile.name}: ${rep.files} ${rep.files === 1 ? "file" : "files"}, ${bytes(rep.bytes)}${rep.skipped ? `, ${rep.skipped} links or special files skipped` : ""}`,
         },
       );
       // The other server's file list shows the new item the next time it's opened.
@@ -329,8 +428,8 @@ function CopyDialog({ s, entry, onClose }: { s: SessionState; entry: FileEntry; 
   const up = dir.replace(/\/[^/]+\/?$/, "") || "/";
   return (
     <Modal
-      title={`Send ${entry.name} to another server`}
-      subtitle={<>From <b>{s.profile.name}</b> <span className="mono">{entry.path}</span></>}
+      title={`Send ${what} to another server`}
+      subtitle={<>From <b>{s.profile.name}</b> <span className="mono">{entries.length === 1 ? entries[0].path : entries.map((e) => e.name).join(", ")}</span></>}
       onClose={onClose}
       footer={<>
         <button className="btn" onClick={onClose}>{job ? "Continue in the background" : "Cancel"}</button>
@@ -351,7 +450,7 @@ function CopyDialog({ s, entry, onClose }: { s: SessionState; entry: FileEntry; 
           </label>
           {!dst ? (
             <div className="notice" style={{ margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ flex: 1 }}>Orbital connects to it to send the file; you stay here.</span>
+              <span style={{ flex: 1 }}>Orbital connects to it first; you stay here.</span>
               <button className="btn primary" disabled={!!connecting[pid]} onClick={connectTarget}>{connecting[pid] ? "Connecting…" : "Connect"}</button>
             </div>
           ) : (
@@ -369,10 +468,10 @@ function CopyDialog({ s, entry, onClose }: { s: SessionState; entry: FileEntry; 
                   {folders.length === 0 && <div className="faint" style={{ padding: "6px 8px" }}>No folders here</div>}
                 </div>
               )}
-              <span className="hint">Arrives as <span className="mono">{valid ? joinPath(dir, entry.name) : "…"}</span>. Files travel through this computer; the two servers don't connect to each other, and no keys or passwords are sent to either.</span>
+              <span className="hint">Arrives {entries.length === 1 ? "as" : "in"} <span className="mono">{valid ? (entries.length === 1 ? joinPath(dir, entries[0].name) : dir) : "…"}</span>. Files travel through this computer; the two servers don't connect to each other, and no keys or passwords are sent to either.</span>
               <label className="check">
                 <input type="checkbox" checked={overwrite} disabled={!!job} onChange={(e) => setOverwrite(e.target.checked)} />
-                <span>Replace it if it already exists there</span>
+                <span>Replace what already exists there</span>
               </label>
             </>
           )}

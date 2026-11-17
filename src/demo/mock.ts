@@ -359,14 +359,31 @@ const certs = () => ({
   ],
 });
 /** Play a job's progress (steps, output lines, transfers) on its channel, then return. */
+const stopped = new Set<number>();
 async function progress(ch: any, events: ([number, any] | [number, "step" | "line", string])[]) {
   for (const [ms, a, b] of events as any[]) {
     await new Promise((r) => setTimeout(r, ms));
+    if (ch && stopped.has(ch.id)) throw { kind: "Cancelled", message: "Stopped before it finished" };
     ch?.onmessage?.(typeof a === "string" ? { type: a, text: b } : a);
   }
 }
 const transferEvents = (files: number, total: number, names: string[], ms: number) =>
   Array.from({ length: 12 }, (_, i) => [ms / 12, { type: "transfer", files: Math.round(((i + 1) / 12) * files), bytes: Math.round(((i + 1) / 12) * total), current: names[i % names.length] }] as [number, any]);
+
+let upgraded = false;
+const updatesReport = () => ({
+  manager: "apt",
+  refreshedAt: Math.floor(Date.now() / 1000) - 5 * 3600,
+  rebootRequired: true,
+  packages: upgraded ? [] : [
+    { name: "libssl3t64", current: "3.0.13-0ubuntu3.1", available: "3.0.13-0ubuntu3.4", security: true },
+    { name: "openssl", current: "3.0.13-0ubuntu3.1", available: "3.0.13-0ubuntu3.4", security: true },
+    { name: "linux-image-generic", current: "6.8.0-45.45", available: "6.8.0-49.49", security: true },
+    { name: "curl", current: "8.5.0-2ubuntu10.4", available: "8.5.0-2ubuntu10.5", security: false },
+    { name: "nginx", current: "1.24.0-2ubuntu7.1", available: "1.24.0-2ubuntu7.2", security: false },
+    { name: "docker-ce", current: "5:27.3.1-1~ubuntu.24.04~noble", available: "5:27.4.0-1~ubuntu.24.04~noble", security: false },
+  ],
+});
 
 const certbotOut = (title: string) => ({ stdout: `Saving debug log to /var/log/letsencrypt/letsencrypt.log\n${title}\n`, stderr: "", exitCode: 0, durationMs: 8200 });
 const ports = {
@@ -781,6 +798,18 @@ export function install() {
         return n;
       }
       case "notify": return null;
+      case "cancel_job": stopped.add(args.id); return true;
+      case "updates": return updatesReport();
+      case "refresh_updates":
+        await progress(args.progress, [[0, "step", "Asking the package mirrors for new versions …"], [400, "line", "Hit:1 http://archive.ubuntu.com/ubuntu noble InRelease"], [700, "line", "Get:2 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]"], [900, "line", "Get:3 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]"], [1200, "line", "Fetched 1,822 kB in 2s (912 kB/s)"], [500, "line", "Reading package lists..."], [400, "step", "Listing what can be upgraded …"]]);
+        return updatesReport();
+      case "install_updates": {
+        const lines = updatesReport().packages.flatMap((p: any) => [[500, "line", `Unpacking ${p.name} (${p.available}) over (${p.current}) ...`], [350, "line", `Setting up ${p.name} (${p.available}) ...`]] as [number, "line", string][]);
+        await progress(args.progress, [[0, "step", "Installing updates (this can take several minutes) …"], [600, "line", "Reading package lists..."], [500, "line", `${updatesReport().packages.length} upgraded, 0 newly installed, 0 to remove and 0 not upgraded.`], ...lines, [600, "line", "Processing triggers for libc-bin (2.39-0ubuntu8.3) ..."]]);
+        upgraded = true;
+        return { stdout: "Reading package lists...\nAll packages upgraded.\n", stderr: "", exitCode: 0, durationMs: 9000 };
+      }
+      case "reboot_server": return null;
       case "shell_history":
         return ["docker compose logs -f --tail=100", "sudo systemctl restart nginx", "sudo nginx -t", "git pull", "tail -f /var/log/nginx/error.log", "systemctl status shop", "df -h", "cd /srv/shop", "ls -la", "htop", "sudo journalctl -u shop -n 50 --no-pager", "npm ci", "docker ps"];
       case "redis_info": return redis();
