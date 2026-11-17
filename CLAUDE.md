@@ -46,7 +46,7 @@ Orbital (working name) is a macOS desktop app for managing Linux servers over SS
 - **Not yet verified**: never run against a real user's config in the app. Not imported: `Match` blocks, `CertificateFile`, forwards, `${ENV}` and `%l`-style tokens in IdentityFile, ProxyCommands other than `ssh -W %h:%p`. Hosts without IdentityFile become ssh-agent profiles.
 
 ## Status (Linux, 2026-11-17)
-- `tauri.linux.conf.json` (deb, rpm, AppImage; plain window frame), `data_home` → `~/.local/share/orbital`, `vault::parse_machine_id` rejects empty/"uninitialized" machine-ids, `prepare_platform` (called first in `main`) sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless set. `scripts/linux-smoke.sh` installs the .deb, starts it under Xvfb in a fresh HOME, checks the data folder (0700) and vault (0600), then removes it. CI's `linux` job (ubuntu-22.04) and release.yml's `linux` job (after Windows, same draft) run it.
+- `tauri.linux.conf.json` (deb, rpm, AppImage; plain window frame), `data_home` → `~/.local/share/orbital`, `vault::parse_machine_id` rejects empty/"uninitialized" machine-ids, `prepare_platform` (called first in `main`) sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless set. `scripts/linux-bundles.sh` picks the bundles (no .rpm for a version with `-`, which RPM rejects). `scripts/linux-smoke.sh` installs the .deb, starts it under Xvfb in a fresh HOME, checks the data folder (0700) and vault (0600), then removes it. CI's `linux` job (ubuntu-22.04) and release.yml's `linux` job (after Windows, same draft) run it.
 - **Not yet verified**: never run on a real Linux desktop (only headless under Xvfb); the updater on Linux (AppImage self-replace, deb/rpm via pkexec) is untested; only x86_64 is built (no arm64).
 
 ## Status (Windows; uncommitted as of 2026-11-16)

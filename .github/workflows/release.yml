@@ -232,6 +232,7 @@ jobs:
            "plugins": {"updater": {"endpoints": ["https://github.com/$dest/releases/latest/download/latest.json"]}}}
           JSON
           echo "config=$RUNNER_TEMP/release.conf.json" >> "$GITHUB_OUTPUT"
+          echo "bundles=$(bash scripts/linux-bundles.sh)" >> "$GITHUB_OUTPUT"
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ vars.RELEASES_REPO && secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
@@ -243,7 +244,7 @@ jobs:
           owner: ${{ steps.prep.outputs.owner }}
           repo: ${{ steps.prep.outputs.repo }}
           includeUpdaterJson: true
-          args: --config ${{ steps.prep.outputs.config }}
+          args: --bundles ${{ steps.prep.outputs.bundles }} --config ${{ steps.prep.outputs.config }}
       # The packages that were just uploaded install and start on a clean system.
       - name: Install test
         run: bash scripts/linux-smoke.sh

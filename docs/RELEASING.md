@@ -70,7 +70,8 @@ app to anyone.
    and its `.sig` (macOS), `Orbital_1.1.0_x64-setup.exe` and its `.sig`
    (Windows; the Windows job runs after the macOS one and adds to the same
    draft), `Orbital_1.1.0_amd64.deb`, `Orbital-1.1.0-1.x86_64.rpm`,
-   `Orbital_1.1.0_amd64.AppImage` and their `.sig` files (Linux; after
+   `Orbital_1.1.0_amd64.AppImage` and their `.sig` files (Linux; a
+   pre-release version like 1.1.0-beta.1 has no `.rpm`, which can't carry a `-`; after
    Windows, then the job installs and starts the .deb), and `latest.json`
    with all three platforms. Publish it. Installed copies see it at their
    next check (launch, or within six hours); Settings → Check for updates

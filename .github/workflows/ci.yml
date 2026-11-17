@@ -127,7 +127,7 @@ jobs:
       - name: Engine unit tests (incl. this machine's ID for the vault)
         run: cargo test -p orbital-core --lib vault
       - name: Build the packages
-        run: npm run tauri build
+        run: npm run tauri build -- --bundles "$(bash scripts/linux-bundles.sh)"
         # linuxdeploy (for the AppImage) is itself an AppImage; this lets it run without FUSE.
         env: { APPIMAGE_EXTRACT_AND_RUN: 1 }
       - name: Install, start and remove the .deb (headless)
