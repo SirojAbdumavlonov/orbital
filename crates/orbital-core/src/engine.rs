@@ -20,13 +20,15 @@ use crate::metrics::{self, Metrics};
 use crate::nginx::NginxConfig;
 use crate::ports::PortsReport;
 use crate::presence::{Unavailable, UserPresence};
-use crate::profiles::{self, Profile, ProfileInput, Protocol};
+use crate::profiles::{self, AuthMethod, Profile, ProfileInput, Protocol};
 use crate::secrets::{secret_key, GatedStore, SecretKind, SecretStore, Unlock};
 use crate::services::{ActionReport, Service, ServiceAction, ServiceDetail};
 use crate::sftp::{FileContent, FileEntry, TransferReport};
+use crate::snippets;
 use crate::ssh::{saved_secrets_wanted, ConnectOptions, ExecOutput, SshSession};
 use crate::ssh_config;
 use crate::sshd::SshdReport;
+use crate::sshkeys;
 use crate::storage::StorageSession;
 use crate::streams::{Stream, StreamEvent};
 use crate::sysinfo::SystemInfo;
@@ -957,6 +959,31 @@ impl Engine {
                 outcome: Some(outcome),
                 duration_ms: Some(t.elapsed().as_millis() as i64),
                 details: Some(details),
+                ..Default::default()
+            },
+        );
+        r
+    }
+
+    /// Read one backup of a config file (to compare it with the current one).
+    pub async fn read_backup(&self, sid: &str, path: &str, backup: &str, privileged: bool) -> Result<String> {
+        self.session(sid).await?.read_backup(path, backup, privileged).await
+    }
+
+    /// Put a backup back, through safe save: validated, and the current
+    /// version is itself kept as a backup, so a restore can be undone.
+    pub async fn restore_backup(&self, sid: &str, path: &str, backup: &str, privileged: bool) -> Result<SafeWriteReport> {
+        let content = self.read_backup(sid, path, backup, privileged).await?;
+        let r = self.safe_write(sid, path, &content, true, privileged, None).await;
+        let s = self.session(sid).await?;
+        self.record(
+            Some(&s),
+            NewEvent {
+                category: Some(Category::Config),
+                action: "config.restore".into(),
+                target: Some(path.into()),
+                outcome: Some(if r.is_ok() { Outcome::Success } else { Outcome::Failure }),
+                details: Some(serde_json::json!({ "from": backup, "error": r.as_ref().err().map(|e| e.to_string()) })),
                 ..Default::default()
             },
         );
@@ -2527,6 +2554,257 @@ impl Engine {
             "csv" => audit::export_csv(&self.db),
             _ => audit::export_json(&self.db),
         }
+    }
+}
+
+// ---------- snippets ----------
+
+impl Engine {
+    pub fn snippets(&self) -> Result<Vec<snippets::Snippet>> {
+        snippets::list(&self.db)
+    }
+
+    fn record_snippet(&self, action: &str, name: &str) {
+        self.record(
+            None,
+            NewEvent {
+                category: Some(Category::Command),
+                action: action.into(),
+                target: Some(name.into()),
+                outcome: Some(Outcome::Success),
+                ..Default::default()
+            },
+        );
+    }
+
+    pub fn save_snippet(&self, id: Option<&str>, input: &snippets::SnippetInput) -> Result<snippets::Snippet> {
+        let s = snippets::save(&self.db, id, input)?;
+        self.record_snippet(if id.is_some() { "snippet.update" } else { "snippet.create" }, &s.name);
+        Ok(s)
+    }
+
+    pub fn delete_snippet(&self, id: &str) -> Result<()> {
+        let s = snippets::get(&self.db, id)?;
+        snippets::delete(&self.db, id)?;
+        self.record_snippet("snippet.delete", &s.name);
+        Ok(())
+    }
+
+    /// Add the example snippets (only when there are none).
+    pub fn add_example_snippets(&self) -> Result<Vec<snippets::Snippet>> {
+        if snippets::list(&self.db)?.is_empty() {
+            for e in snippets::examples() {
+                snippets::save(&self.db, None, &e)?;
+            }
+            self.record_snippet("snippet.create", "examples");
+        }
+        snippets::list(&self.db)
+    }
+
+    /// Run a snippet on every server in `session_ids` at once. Each server's
+    /// run is audited with the exact command sent; one failing doesn't stop the others.
+    pub async fn run_snippet(
+        &self,
+        id: &str,
+        session_ids: &[String],
+        values: &HashMap<String, String>,
+    ) -> Result<Vec<snippets::SnippetRun>> {
+        let snip = snippets::get(&self.db, id)?;
+        let command = snippets::render(&snip.command, values)?;
+        if session_ids.is_empty() {
+            return Err(Error::InvalidInput("choose at least one server".into()));
+        }
+        if session_ids.len() > 50 {
+            return Err(Error::InvalidInput("run on at most 50 servers at once".into()));
+        }
+        let runs = session_ids.iter().map(|sid| {
+            let command = command.clone();
+            let name = snip.name.clone();
+            async move {
+                let s = match self.session(sid).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return snippets::SnippetRun {
+                            session_id: sid.clone(),
+                            server: sid.clone(),
+                            command,
+                            output: None,
+                            error: Some(e.to_string()),
+                        }
+                    }
+                };
+                let sent = if snip.sudo {
+                    s.privileged_command(&command)
+                } else {
+                    command.clone()
+                };
+                let r = if snip.sudo {
+                    s.exec_privileged(&command).await
+                } else {
+                    s.exec(&command).await
+                };
+                match &r {
+                    Ok(o) => self.record_exec(&s, Category::Command, "snippet.run", &name, &sent, o),
+                    Err(e) => self.record_error(&s, Category::Command, "snippet.run", &name, Some(sent.clone()), e),
+                }
+                snippets::SnippetRun {
+                    session_id: sid.clone(),
+                    server: s.label(),
+                    command,
+                    error: r.as_ref().err().map(|e| e.to_string()),
+                    output: r.ok(),
+                }
+            }
+        });
+        Ok(futures_util::future::join_all(runs).await)
+    }
+}
+
+// ---------- SSH keys ----------
+
+/// Reads the login user's authorized_keys (nothing is interpolated).
+const READ_AUTHORIZED: &str = "cd && if [ -f .ssh/authorized_keys ]; then echo @@file; cat .ssh/authorized_keys; else echo @@missing; fi";
+/// Replaces it with stdin: written beside it, then moved over it, so a broken
+/// connection never leaves half a file. sshd wants 700 and 600.
+const WRITE_AUTHORIZED: &str = "set -e; umask 077; cd; mkdir -p .ssh; chmod 700 .ssh; \
+t=.ssh/.authorized_keys.orbital-$$; cat > \"$t\"; chmod 600 \"$t\"; mv -f \"$t\" .ssh/authorized_keys";
+
+impl Engine {
+    /// Key pairs in this computer's ~/.ssh.
+    pub fn local_ssh_keys(&self) -> Vec<sshkeys::LocalKey> {
+        sshkeys::ssh_dir().map(|d| sshkeys::local_keys(&d)).unwrap_or_default()
+    }
+
+    /// Make a new ed25519 key pair in ~/.ssh. The passphrase only encrypts the file.
+    pub fn generate_ssh_key(&self, name: &str, comment: &str, passphrase: Option<&str>) -> Result<sshkeys::LocalKey> {
+        let dir = sshkeys::ssh_dir().ok_or_else(|| Error::Other("couldn't find your home folder".into()))?;
+        let r = sshkeys::generate(&dir, name, comment, passphrase);
+        let (outcome, details) = match &r {
+            Ok(_) => (Outcome::Success, None),
+            Err(e) => (Outcome::Failure, Some(serde_json::json!({ "error": e.to_string() }))),
+        };
+        self.record(
+            None,
+            NewEvent {
+                category: Some(Category::Security),
+                action: "sshkey.generate".into(),
+                target: Some(format!("~/.ssh/{name}")),
+                outcome: Some(outcome),
+                details: details.or_else(|| {
+                    r.as_ref()
+                        .ok()
+                        .map(|k| serde_json::json!({ "fingerprint": k.fingerprint, "passphrase": k.encrypted }))
+                }),
+                ..Default::default()
+            },
+        );
+        r
+    }
+
+    /// Fingerprints of the keys this computer could sign in with: ~/.ssh,
+    /// the profile's own key file, and the SSH agent.
+    async fn my_key_fingerprints(&self, s: &SshSession) -> Vec<String> {
+        let mut out: Vec<String> = self.local_ssh_keys().into_iter().map(|k| k.fingerprint).collect();
+        if let Some(path) = s.profile.key_path.as_deref().filter(|p| !p.is_empty()) {
+            let path = crate::ssh::expand_tilde(path);
+            if let Ok(k) = russh::keys::load_public_key(format!("{path}.pub")) {
+                out.push(k.fingerprint(russh::keys::HashAlg::Sha256).to_string());
+            }
+        }
+        out.extend(crate::ssh::agent_fingerprints().await);
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    async fn read_authorized(&self, s: &SshSession) -> Result<(String, bool)> {
+        let o = s.exec(READ_AUTHORIZED).await?;
+        if o.exit_code != 0 {
+            return Err(Error::PermissionDenied(format!(
+                "couldn't read ~/.ssh/authorized_keys: {}",
+                o.stderr.trim()
+            )));
+        }
+        match o.stdout.split_once('\n') {
+            Some(("@@file", rest)) => Ok((rest.to_string(), false)),
+            _ if o.stdout.starts_with("@@missing") => Ok((String::new(), true)),
+            _ => Ok((String::new(), true)),
+        }
+    }
+
+    /// The keys that can sign in as the connected user.
+    pub async fn authorized_keys(&self, sid: &str) -> Result<sshkeys::AuthorizedKeys> {
+        let s = self.session(sid).await?;
+        let (text, missing) = self.read_authorized(&s).await?;
+        let mine = self.my_key_fingerprints(&s).await;
+        Ok(sshkeys::AuthorizedKeys {
+            user: s.profile.username.clone(),
+            path: "~/.ssh/authorized_keys".into(),
+            keys: sshkeys::parse_authorized(&text, &mine),
+            missing,
+        })
+    }
+
+    async fn write_authorized(&self, s: &SshSession, action: &str, target: &str, text: &str) -> Result<()> {
+        let o = s
+            .exec_with_input(WRITE_AUTHORIZED, Some(text.as_bytes()), std::time::Duration::from_secs(30))
+            .await;
+        match o {
+            Ok(o) => {
+                self.record_exec(s, Category::Security, action, target, WRITE_AUTHORIZED, &o);
+                o.check().map(|_| ())
+            }
+            Err(e) => {
+                self.record_error(s, Category::Security, action, target, Some(WRITE_AUTHORIZED.into()), &e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Let a public key sign in as the connected user (like ssh-copy-id).
+    pub async fn add_authorized_key(&self, sid: &str, line: &str) -> Result<sshkeys::AuthorizedKeys> {
+        let s = self.session(sid).await?;
+        let line = sshkeys::validate_public_line(line)?;
+        let (text, _) = self.read_authorized(&s).await?;
+        let new = sshkeys::with_key(&text, &line)?;
+        let (_, a, b, c) = sshkeys::split_line(&line).expect("validated");
+        let target = format!("{} {}", sshkeys::fingerprint(&a, &b).unwrap_or_default(), c)
+            .trim()
+            .to_string();
+        self.write_authorized(&s, "sshkey.authorize", &target, &new).await?;
+        self.authorized_keys(sid).await
+    }
+
+    /// Stop a key from signing in. Removing the last key from this computer
+    /// while this connection uses a key is refused unless `force`.
+    pub async fn remove_authorized_key(&self, sid: &str, line: &str, force: bool) -> Result<sshkeys::AuthorizedKeys> {
+        let s = self.session(sid).await?;
+        let (text, _) = self.read_authorized(&s).await?;
+        let new = sshkeys::without_line(&text, line)?;
+        let mine = self.my_key_fingerprints(&s).await;
+        let keys = sshkeys::parse_authorized(&text, &mine);
+        let target = keys
+            .iter()
+            .find(|k| k.line == line)
+            .map(|k| {
+                format!("{} {}", k.fingerprint.as_deref().unwrap_or("?"), k.comment)
+                    .trim()
+                    .to_string()
+            })
+            .unwrap_or_else(|| "?".into());
+        let key_login = matches!(s.profile.auth_method, AuthMethod::Key | AuthMethod::Agent);
+        if !force {
+            if let Some(reason) = sshkeys::lockout_reason(&keys, line, key_login) {
+                let e = Error::PreflightFailed {
+                    check: "your access".into(),
+                    output: reason,
+                };
+                self.record_error(&s, Category::Security, "sshkey.revoke", &target, None, &e);
+                return Err(e);
+            }
+        }
+        self.write_authorized(&s, "sshkey.revoke", &target, &new).await?;
+        self.authorized_keys(sid).await
     }
 }
 

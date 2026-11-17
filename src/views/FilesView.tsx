@@ -1,6 +1,6 @@
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
-  ArrowRightLeft, ArrowUp, Download, Eye, EyeOff, FilePlus, FileText, Folder, FolderPlus, FolderUp, Link2, Lock, Pencil, RefreshCw, Save,
+  ArrowRightLeft, ArrowUp, Download, Eye, EyeOff, FilePlus, FileText, Folder, FolderPlus, FolderUp, History, Link2, Lock, Pencil, RefreshCw, RotateCcw, Save,
   ShieldCheck, SquareTerminal, Trash2, Upload, X,
 } from "lucide-react";
 import { isMac, mod } from "../lib/platform";
@@ -352,6 +352,7 @@ export function EditorPane({ s }: { s: SessionState }) {
   const sid = s.info.id;
   const file = s.files.find((f) => f.path === s.activeFile) ?? null;
   const [review, setReview] = useState<OpenFile | null>(null);
+  const [versions, setVersions] = useState<OpenFile | null>(null);
   const saveRef = useRef<() => void>(() => {});
 
   const update = (path: string, p: Partial<OpenFile>) =>
@@ -434,6 +435,7 @@ export function EditorPane({ s }: { s: SessionState }) {
         {!file.writable && <span className="badge amber"><Lock size={11} /> Needs sudo to save</span>}
         {file.validator && <span className="badge ok"><ShieldCheck size={11} /> Checked by {file.validator.name}</span>}
         <span style={{ flex: 1 }} />
+        {isSsh(s) && <button className="icon-btn" title="Earlier versions (backups made by safe save)" aria-label="Earlier versions" onClick={() => setVersions(file)}><History size={14} /></button>}
         <button className="icon-btn" title="Reload from server" aria-label="Reload from server" onClick={() => reload(file)}><RefreshCw size={14} /></button>
         <button className="btn primary" disabled={!dirty} onClick={() => save(file)}><Save size={14} /> {file.validator || !file.writable ? "Review & save" : "Save"}</button>
       </div>
@@ -454,6 +456,7 @@ export function EditorPane({ s }: { s: SessionState }) {
           }}
         />
       </div>
+      {versions && <VersionsDialog s={s} file={versions} onClose={() => setVersions(null)} onRestored={async () => { const f = versions; setVersions(null); await reload(f); }} />}
       {review && <SaveReview s={s} file={review} onClose={() => setReview(null)} onSaved={(rep) => {
         update(review.path, { original: review.content, mtime: rep.newMtime, writable: review.writable });
         setReview(null);
@@ -551,6 +554,104 @@ function SaveReview({ s, file, onClose, onSaved }: { s: SessionState; file: Open
         The current file is backed up next to it as <span className="mono">{baseName(file.path)}.orbital-bak-…</span> (last 5 kept).
         {validate && file.validator?.stage === "postInstall" && " If the check fails, the backup is restored automatically."}
       </p>
+    </Modal>
+  );
+}
+
+/** "orbital-bak-20261117093000" → a local date (backups are named in UTC). */
+function backupDate(name: string): Date | null {
+  const m = name.match(/\.(?:orbital|outpost)-bak-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/);
+  return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])) : null;
+}
+
+/** Earlier versions of a config file, kept by safe save: compare one with the editor and put it back. */
+function VersionsDialog({ s, file, onClose, onRestored }: { s: SessionState; file: OpenFile; onClose: () => void; onRestored: () => void }) {
+  const toast = useStore((x) => x.toast);
+  const monacoTheme = useResolvedTheme() === "light" ? "orbital-light" : "orbital-dark";
+  const sid = s.info.id;
+  const [privileged, setPrivileged] = useState(!file.writable);
+  const [list, setList] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sel, setSel] = useState<string | null>(null);
+  const [content, setContent] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const diffRef = useRef<Parameters<DiffOnMount>[0] | null>(null);
+  useEffect(() => () => {
+    const ed = diffRef.current;
+    const m = ed?.getModel();
+    ed?.setModel(null);
+    m?.original.dispose();
+    m?.modified.dispose();
+  }, []);
+
+  useEffect(() => {
+    api.listBackups(sid, file.path, privileged)
+      .then((l) => { setList(l); setSel(l[0] ?? null); })
+      .catch((e) => setError(asApiError(e).message));
+  }, [privileged]);
+  useEffect(() => {
+    if (!sel) return;
+    setContent(null);
+    api.readBackup(sid, file.path, sel, privileged).then(setContent).catch((e) => {
+      const err = asApiError(e);
+      // Backups keep the original's permissions; root-only ones need sudo to read.
+      if (!privileged && err.kind !== "InvalidInput" && s.info.elevation) setPrivileged(true);
+      else setError(err.message);
+    });
+  }, [sel, privileged]);
+
+  async function restore() {
+    if (!sel) return;
+    const when = backupDate(sel);
+    const dirty = file.content !== file.original;
+    const ok = await confirm({
+      title: `Restore the version from ${when ? when.toLocaleString() : baseName(sel)}?`,
+      body: `It goes through safe save: ${file.validator ? `checked by ${file.validator.name}, and ` : ""}the current version is kept as a backup, so you can undo this.${dirty ? " Your unsaved edits in the editor are discarded." : ""}`,
+      confirmLabel: "Restore",
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const rep = await api.restoreBackup(sid, file.path, sel, privileged);
+      toast({ kind: "success", title: `Restored ${baseName(file.path)}`, body: rep.suggestedReload ? `Reload ${rep.suggestedReload} to apply it.` : rep.validatorOutput ? `${rep.validator}: ${rep.validatorOutput.split("\n")[0]}` : undefined });
+      onRestored();
+    } catch (e) {
+      const err = asApiError(e);
+      toast({ kind: "error", title: "The version wasn't restored", body: err.data?.output ?? err.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Earlier versions of ${baseName(file.path)}`} wide onClose={onClose}
+      subtitle={<span className="mono">{file.path}</span>}
+      footer={<><button className="btn" onClick={onClose}>Close</button><button className="btn primary" disabled={!sel || content === null || busy} onClick={restore}><RotateCcw size={13} /> {busy ? "Restoring…" : "Restore this version"}</button></>}>
+      {error && <div className="notice bad-text" style={{ margin: 0 }}>{error}</div>}
+      {list && list.length === 0 && <p className="muted" style={{ margin: 0 }}>No earlier versions yet. Each save through "Review & save" keeps the previous version (the last 5).</p>}
+      {list && list.length > 0 && (
+        <div className="versions">
+          <div className="versions-list">
+            {list.map((b) => {
+              const d = backupDate(b);
+              return (
+                <button key={b} className={`nav-item ${sel === b ? "on" : ""}`} onClick={() => setSel(b)} title={b}>
+                  <History size={13} />
+                  <span className="grow">{d ? d.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : baseName(b)}<small>{d ? relativeTime(Math.floor(d.getTime() / 1000)) : ""}</small></span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="versions-diff">
+            <div className="versions-labels"><span>That version</span><span>Now in the editor</span></div>
+            {content === null
+              ? <div className="empty"><p>Loading…</p></div>
+              : <DiffEditor theme={monacoTheme} original={content} modified={file.content} language={languageFor(file.path)} keepCurrentOriginalModel keepCurrentModifiedModel
+                  onMount={(ed) => (diffRef.current = ed)}
+                  options={{ readOnly: true, renderSideBySide: true, useInlineViewWhenSpaceIsLimited: false, minimap: { enabled: false }, fontFamily: "JetBrains Mono", fontSize: 12.5, automaticLayout: true, scrollBeyondLastLine: false }} />}
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }

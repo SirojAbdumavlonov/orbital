@@ -10,7 +10,7 @@ export const isSsh = (s: { info: { protocol?: string } }) => (s.info.protocol ??
 export type Tab = "files" | "services" | "monitor" | "terminal" | "activity" | `tool:${string}`;
 
 /** Tabs offered on every server, whatever software it runs. */
-export const ALWAYS_TOOLS = ["deploy", "logs", "tunnels", "ports", "users"];
+export const ALWAYS_TOOLS = ["deploy", "logs", "tunnels", "ports", "users", "sshkeys"];
 
 export interface OpenFile {
   path: string;
@@ -58,7 +58,7 @@ export interface SessionState {
 export type Loc = { sid: string; tab: Tab } | { global: NonNullable<State["globalView"]> } | null;
 
 /** Software with its own tab view (the rest get the generic one). */
-export const DEDICATED_TOOLS = ["docker", "nginx", "ufw", "fail2ban", "certbot", "sshd", "ports", "postgresql", "mysql", "mongodb", "redis", "apache", "haproxy", "users", "cron", "deploy", "logs", "tunnels"];
+export const DEDICATED_TOOLS = ["docker", "nginx", "ufw", "fail2ban", "certbot", "sshd", "ports", "postgresql", "mysql", "mongodb", "redis", "apache", "haproxy", "users", "cron", "deploy", "logs", "tunnels", "sshkeys"];
 
 /** Profile fields that only take effect on a new connection. */
 const CONNECTION_FIELDS = ["host", "port", "username", "authMethod", "keyPath", "sudoMode", "initialPath", "jumpProfileId"] as const;
@@ -92,7 +92,7 @@ interface State {
   editing: Profile | "new" | null;
   /** The "Import from ~/.ssh/config" dialog is open. */
   importingSsh: boolean;
-  globalView: "activity" | "knownHosts" | "settings" | "domains" | "uptime" | null;
+  globalView: "activity" | "knownHosts" | "settings" | "domains" | "uptime" | "snippets" | null;
   /** Back and forward history, like a browser. */
   navBack: Loc[];
   navFwd: Loc[];

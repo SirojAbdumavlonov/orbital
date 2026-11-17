@@ -244,6 +244,23 @@ impl SshSession {
         })
     }
 
+    /// The content of one backup of `path` (root-only backups with `privileged`).
+    pub async fn read_backup(&self, path: &str, backup: &str, privileged: bool) -> Result<String> {
+        validate_path(path)?;
+        validate_path(backup)?;
+        if !is_backup_of(path, backup) {
+            return Err(Error::InvalidInput(format!("{backup} isn't a backup of {path}")));
+        }
+        let o = self
+            .run_maybe_privileged(&format!("cat -- {}", quote(backup)), privileged)
+            .await?
+            .check()?;
+        if o.stdout.len() as u64 > crate::sftp::MAX_EDIT_BYTES {
+            return Err(Error::InvalidInput("the backup is too large to show".into()));
+        }
+        Ok(o.stdout)
+    }
+
     pub async fn list_backups(&self, path: &str, privileged: bool) -> Result<Vec<String>> {
         validate_path(path)?;
         let o = self
@@ -257,9 +274,30 @@ impl SshSession {
     }
 }
 
+/// `backup` is `path` followed by `.orbital-bak-<digits>` (or the old `.outpost-bak-`).
+pub fn is_backup_of(path: &str, backup: &str) -> bool {
+    backup
+        .strip_prefix(path)
+        .and_then(|rest| rest.strip_prefix(".orbital-bak-").or_else(|| rest.strip_prefix(".outpost-bak-")))
+        .is_some_and(|ts| !ts.is_empty() && ts.len() <= 20 && ts.chars().all(|c| c.is_ascii_digit()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognises_backups_of_a_file_only() {
+        assert!(is_backup_of(
+            "/etc/nginx/nginx.conf",
+            "/etc/nginx/nginx.conf.orbital-bak-20261117093000"
+        ));
+        assert!(is_backup_of("/etc/hosts", "/etc/hosts.outpost-bak-20261101000000"));
+        assert!(!is_backup_of("/etc/hosts", "/etc/shadow"));
+        assert!(!is_backup_of("/etc/hosts", "/etc/hosts.orbital-bak-"));
+        assert!(!is_backup_of("/etc/hosts", "/etc/hosts.orbital-bak-1/../../shadow"));
+        assert!(!is_backup_of("/etc/hosts", "/etc/hostsX.orbital-bak-1"));
+    }
     #[test]
     fn detection() {
         assert_eq!(detect_validator("/etc/nginx/sites-enabled/shop").unwrap().command, "nginx -t");

@@ -19,9 +19,11 @@ use orbital_core::profiles::{Profile, ProfileInput};
 use orbital_core::secrets::SecretKind;
 use orbital_core::services::{ActionReport, Service, ServiceAction, ServiceDetail};
 use orbital_core::sftp::{FileContent, FileEntry, TransferReport};
+use orbital_core::snippets::{Snippet, SnippetInput, SnippetRun};
 use orbital_core::ssh::{ConnectOptions, ExecOutput};
 use orbital_core::ssh_config::Preview;
 use orbital_core::sshd::SshdReport;
+use orbital_core::sshkeys::{AuthorizedKeys, LocalKey};
 use orbital_core::streams::StreamEvent;
 use orbital_core::sysinfo::SystemInfo;
 use orbital_core::terminal::TermEvent;
@@ -196,6 +198,16 @@ pub async fn safe_write(
 #[tauri::command]
 pub fn validator_for(engine: Eng, path: String) -> Option<Validator> {
     engine.validator_for(&path)
+}
+
+#[tauri::command]
+pub async fn read_backup(engine: Eng<'_>, session_id: String, path: String, backup: String, privileged: bool) -> R<String> {
+    engine.read_backup(&session_id, &path, &backup, privileged).await
+}
+
+#[tauri::command]
+pub async fn restore_backup(engine: Eng<'_>, session_id: String, path: String, backup: String, privileged: bool) -> R<SafeWriteReport> {
+    engine.restore_backup(&session_id, &path, &backup, privileged).await
 }
 
 #[tauri::command]
@@ -794,4 +806,58 @@ pub fn delete_uptime_check(engine: Eng<'_>, id: String) -> R<()> {
 #[tauri::command]
 pub async fn run_uptime_check(engine: Eng<'_>, id: String) -> R<CheckStatus> {
     engine.run_uptime_check(&id).await
+}
+
+// ---------- SSH keys ----------
+
+#[tauri::command]
+pub fn local_ssh_keys(engine: Eng) -> Vec<LocalKey> {
+    engine.local_ssh_keys()
+}
+
+#[tauri::command]
+pub fn generate_ssh_key(engine: Eng, name: String, comment: String, passphrase: Option<String>) -> R<LocalKey> {
+    engine.generate_ssh_key(&name, &comment, passphrase.as_deref())
+}
+
+#[tauri::command]
+pub async fn authorized_keys(engine: Eng<'_>, session_id: String) -> R<AuthorizedKeys> {
+    engine.authorized_keys(&session_id).await
+}
+
+#[tauri::command]
+pub async fn add_authorized_key(engine: Eng<'_>, session_id: String, line: String) -> R<AuthorizedKeys> {
+    engine.add_authorized_key(&session_id, &line).await
+}
+
+#[tauri::command]
+pub async fn remove_authorized_key(engine: Eng<'_>, session_id: String, line: String, force: bool) -> R<AuthorizedKeys> {
+    engine.remove_authorized_key(&session_id, &line, force).await
+}
+
+// ---------- snippets ----------
+
+#[tauri::command]
+pub fn snippets(engine: Eng) -> R<Vec<Snippet>> {
+    engine.snippets()
+}
+
+#[tauri::command]
+pub fn save_snippet(engine: Eng, id: Option<String>, input: SnippetInput) -> R<Snippet> {
+    engine.save_snippet(id.as_deref(), &input)
+}
+
+#[tauri::command]
+pub fn delete_snippet(engine: Eng, id: String) -> R<()> {
+    engine.delete_snippet(&id)
+}
+
+#[tauri::command]
+pub fn add_example_snippets(engine: Eng) -> R<Vec<Snippet>> {
+    engine.add_example_snippets()
+}
+
+#[tauri::command]
+pub async fn run_snippet(engine: Eng<'_>, id: String, session_ids: Vec<String>, values: HashMap<String, String>) -> R<Vec<SnippetRun>> {
+    engine.run_snippet(&id, &session_ids, &values).await
 }

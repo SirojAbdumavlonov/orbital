@@ -1,5 +1,5 @@
 import { PROTOCOL_NAMES } from "./ProfileDialog";
-import { Activity, HeartPulse, ChevronLeft, ChevronRight, FileInput, Globe, KeyRound, Loader2, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sun, Unplug } from "lucide-react";
+import { Activity, HeartPulse, SquareCode, ChevronLeft, ChevronRight, FileInput, Globe, KeyRound, Loader2, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sun, Unplug } from "lucide-react";
 import { isMac, KEYS } from "../lib/platform";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -86,6 +86,9 @@ export function Sidebar() {
         </button>
         <button className={`nav-item ${globalView === "activity" ? "on" : ""}`} onClick={() => setGlobalView("activity")}>
           <Activity size={15} /> Activity log
+        </button>
+        <button className={`nav-item ${globalView === "snippets" ? "on" : ""}`} onClick={() => setGlobalView("snippets")}>
+          <SquareCode size={15} /> Snippets
         </button>
         <button className={`nav-item ${globalView === "uptime" ? "on" : ""}`} onClick={() => setGlobalView("uptime")}>
           <HeartPulse size={15} /> Uptime

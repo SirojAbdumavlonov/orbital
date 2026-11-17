@@ -12,6 +12,52 @@ const profiles: any[] = [
 ];
 const trusted = new Set(["p1", "p2"]);
 
+// Snippets: saved commands; runs answer with plausible output per server.
+let snippetList: any[] = [];
+const snipParams = (c: string) => [...new Set([...c.matchAll(/\{\{\s*([A-Za-z_][A-Za-z0-9_]{0,31})\s*\}\}/g)].map((m) => m[1]))];
+const mkSnippet = (id: string, i: any) => ({ id, name: i.name.trim(), command: i.command.trimEnd(), description: i.description?.trim() || null, sudo: !!i.sudo, params: snipParams(i.command), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+const EXAMPLES = [
+  { name: "Disk space", command: "df -h -x tmpfs -x devtmpfs -x overlay -x squashfs", description: "Free space on every real disk.", sudo: false },
+  { name: "Biggest folders", command: "du -xh --max-depth=1 {{folder}} 2>/dev/null | sort -rh | head -15", description: "What takes the space in a folder.", sudo: true },
+  { name: "Memory and swap", command: "free -h && echo && ps -eo pid,user,rss,comm --sort=-rss | head -11", description: "Memory use and the ten largest processes.", sudo: false },
+  { name: "Failed services", command: "systemctl --failed --no-legend --plain", description: "systemd units that have failed.", sudo: false },
+  { name: "Restart a service", command: "systemctl restart {{service}} && systemctl --no-pager status {{service}} | head -12", description: "Restart a unit and show its status.", sudo: true },
+  { name: "Recent errors", command: "journalctl -p err --since {{since}} --no-pager | tail -40", description: "Errors in the system journal, e.g. since \"1 hour ago\".", sudo: true },
+  { name: "Pending updates", command: "(command -v apt >/dev/null && apt list --upgradable 2>/dev/null) || echo 'no apt'", description: "Packages with updates available.", sudo: false },
+  { name: "Who is logged in", command: "who && echo && last -n 10", description: "Current sessions and the last logins.", sudo: false },
+];
+const shq = (v: string) => (/^[A-Za-z0-9_./:=@%+-]+$/.test(v) ? v : `'${v.replace(/'/g, "'\\''")}'`);
+function fakeRun(cmd: string, sid: string) {
+  const host = sid === "s-p1" ? "prod-web-01" : sid === "s-p2" ? "db-primary" : "staging";
+  if (cmd.startsWith("df")) return { stdout: `Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        75G   ${sid === "s-p2" ? "68G  3.9G  95%" : "31G   41G  44%"} /\n/dev/sdb1       200G  120G   80G  60% /var/lib/postgresql`, stderr: "", exitCode: 0 };
+  if (cmd.startsWith("systemctl --failed")) return sid === "s-p2" ? { stdout: "pgbackrest-archive.service loaded failed failed pgBackRest archive push", stderr: "", exitCode: 0 } : { stdout: "", stderr: "", exitCode: 0 };
+  if (cmd.startsWith("systemctl restart")) return sid === "s-p3" ? { stdout: "", stderr: `Failed to restart ${cmd.split(" ")[2]}.service: Unit not found.`, exitCode: 5 } : { stdout: `● ${cmd.split(" ")[2]}.service - running\n     Active: active (running) since ${new Date().toUTCString()}; 1s ago`, stderr: "", exitCode: 0 };
+  if (cmd.startsWith("free")) return { stdout: "               total        used        free      shared  buff/cache   available\nMem:            15Gi       5.8Gi       1.2Gi       220Mi       8.6Gi        9.4Gi\nSwap:          2.0Gi          0B       2.0Gi", stderr: "", exitCode: 0 };
+  return { stdout: `${host}: ok`, stderr: "", exitCode: 0 };
+}
+
+// SSH keys: two key pairs on this computer; the server lets one of them and a colleague's in.
+const KEY_A = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl sirojiddin@macbook";
+const KEY_B = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK8sZ3Lr6xv1k7mJdF0q2WcB9yPnT4eRuHa5oGiXsQ2D work@macbook";
+let localKeys: any[] = [
+  { name: "id_ed25519", path: "~/.ssh/id_ed25519", algorithm: "ssh-ed25519", comment: "sirojiddin@macbook", fingerprint: "SHA256:Xw2pRfa9Lw0YkU0yV5mJbqzB2hD1tXcN7pGfE4sHjAo", publicLine: KEY_A, encrypted: false },
+  { name: "id_ed25519_work", path: "~/.ssh/id_ed25519_work", algorithm: "ssh-ed25519", comment: "work@macbook", fingerprint: "SHA256:q8Lr1mVt7cNbS3xK2wPz9yHd4fJe6aUo0gTiR5nQkBc", publicLine: KEY_B, encrypted: true },
+];
+let authLines = [
+  KEY_A,
+  'command="/usr/local/bin/backup-only",no-pty,no-port-forwarding ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ3n backup@nas',
+  "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7 anna@laptop",
+];
+const fpOf = (line: string) => localKeys.find((k) => line.includes(k.publicLine.split(" ")[1]))?.fingerprint ?? (line.includes("backup@nas") ? "SHA256:bK3uP0aZ1x9QmT5vLc2rN8yWe4dHs6oJiG7fRqA1nVk" : "SHA256:Ann4Lp0tK9xYv2mQ7cRs3wE5uZ8dH1oJbN6gTfi0aWq");
+const authReport = () => ({
+  user: "deploy", path: "~/.ssh/authorized_keys", missing: false,
+  keys: authLines.map((line) => {
+    const m = line.match(/(?:^|\s)(ssh-ed25519|ssh-rsa)\s+\S+\s*(.*)$/)!;
+    const options = line.startsWith("ssh-") ? null : line.slice(0, line.indexOf(m[1])).trim();
+    return { line, options, algorithm: m[1], comment: m[2], fingerprint: fpOf(line), onThisComputer: localKeys.some((k) => line.includes(k.publicLine.split(" ")[1])) };
+  }),
+});
+
 // DNS: one Cloudflare account; records "propagate" a few seconds after they change.
 const dnsAccounts: any[] = [{ id: "cf1", name: "Personal", kind: "cloudflare", createdAt: "2026-11-01T10:00:00Z" }];
 const dnsZones: Record<string, any[]> = {
@@ -679,6 +725,14 @@ export function install() {
       }
       case "read_file": return { path: args.path, content: args.path.endsWith("nginx.conf") ? NGINX : args.path.endsWith("docker-compose.yml") ? COMPOSE : "# demo file\n", size: 1482, mtime: now() - 9000, modeOctal: 0o644, writable: !args.path.startsWith("/etc") };
       case "validator_for": return args.path.startsWith("/etc/nginx/") ? { name: "nginx", command: "nginx -t", stage: "postInstall" } : null;
+      case "list_backups": return args.path.endsWith("nginx.conf") ? [`${args.path}.orbital-bak-20261117081205`, `${args.path}.orbital-bak-20261114190033`, `${args.path}.orbital-bak-20261102101500`] : [];
+      case "read_backup": {
+        await new Promise((r) => setTimeout(r, 250));
+        if (args.backup.endsWith("20261117081205")) return NGINX.replace("worker_connections 2048", "worker_connections 1024").replace("rate=20r/s", "rate=10r/s");
+        if (args.backup.endsWith("20261114190033")) return NGINX.replace("    server_tokens off;\n", "").replace("max_fails=3", "max_fails=1");
+        return NGINX.replace(/\n    # Rate limit the public API[\s\S]*?zone=api:10m rate=20r\/s;\n/, "\n");
+      }
+      case "restore_backup": await new Promise((r) => setTimeout(r, 700)); return { path: args.path, bytes: 1400, privileged: args.privileged, backupPath: args.path + ".orbital-bak-20261117100000", validator: "nginx", validatorOutput: "syntax is ok\ntest is successful", newMtime: now(), suggestedReload: "nginx.service" };
       case "safe_write": return { path: args.path, bytes: args.content.length, privileged: args.privileged, backupPath: args.path + ".orbital-bak-20261115011500", validator: "nginx", validatorOutput: "syntax is ok", newMtime: now(), suggestedReload: "nginx.service" };
       case "write_file": return now();
       case "metrics": return metric();
@@ -822,6 +876,46 @@ export function install() {
       }
       case "audit_query": return audit.filter((e) => !args.filter?.category || e.category === args.filter.category);
       case "audit_verify": return { ok: true, checked: 1284, firstBrokenSeq: null };
+      case "snippets": return snippetList.map((s) => ({ ...s }));
+      case "add_example_snippets": if (!snippetList.length) snippetList = EXAMPLES.map((e, i) => mkSnippet("sn" + i, e)).sort((a, b) => a.name.localeCompare(b.name)); return snippetList.map((s) => ({ ...s }));
+      case "save_snippet": {
+        if (!args.input.name.trim() || !args.input.command.trim()) throw { kind: "InvalidInput", message: "give the snippet a short name" };
+        const s = mkSnippet(args.id ?? "sn" + Date.now(), args.input);
+        snippetList = [...snippetList.filter((x) => x.id !== s.id), s].sort((a, b) => a.name.localeCompare(b.name));
+        return s;
+      }
+      case "delete_snippet": snippetList = snippetList.filter((s) => s.id !== args.id); return null;
+      case "run_snippet": {
+        const s = snippetList.find((x) => x.id === args.id);
+        const missing = s.params.filter((p: string) => !args.values[p]);
+        if (missing.length) throw { kind: "InvalidInput", message: `fill in ${missing.join(", ")}` };
+        const cmd = s.command.replace(/\{\{\s*([A-Za-z_][A-Za-z0-9_]{0,31})\s*\}\}/g, (_: string, n: string) => shq(args.values[n]));
+        await new Promise((r) => setTimeout(r, 900));
+        return args.sessionIds.map((sid: string, i: number) => ({ sessionId: sid, server: sid === "s-p1" ? "deploy@203.0.113.10" : sid === "s-p2" ? "ops@10.0.4.21" : "sirojiddin@staging.example.dev", command: cmd, output: { ...fakeRun(cmd, sid), durationMs: 380 + i * 210 }, error: null }));
+      }
+      case "local_ssh_keys": return localKeys.map((k) => ({ ...k }));
+      case "generate_ssh_key": {
+        if (localKeys.some((k) => k.name === args.name)) throw { kind: "InvalidInput", message: `~/.ssh/${args.name} already exists; choose another name` };
+        const b64 = "AAAAC3NzaC1lZDI1NTE5AAAAI" + Math.random().toString(36).slice(2, 12) + "Demo";
+        const k = { name: args.name, path: `~/.ssh/${args.name}`, algorithm: "ssh-ed25519", comment: args.comment, fingerprint: "SHA256:" + Math.random().toString(36).slice(2) + "NewKey0rbital", publicLine: `ssh-ed25519 ${b64} ${args.comment}`, encrypted: !!args.passphrase };
+        localKeys = [...localKeys, k].sort((a, b) => a.name.localeCompare(b.name));
+        return k;
+      }
+      case "authorized_keys": await new Promise((r) => setTimeout(r, 300)); return authReport();
+      case "add_authorized_key": {
+        const line = args.line.trim();
+        if (!/^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256) \S{8,}/.test(line)) throw { kind: "InvalidInput", message: "that isn't an SSH public key: it should look like \"ssh-ed25519 AAAA… name\" (the .pub file, never the private key)" };
+        if (authLines.some((l) => l.includes(line.split(" ")[1]))) throw { kind: "InvalidInput", message: "this key can already sign in" };
+        authLines = [...authLines, line];
+        return authReport();
+      }
+      case "remove_authorized_key": {
+        const mine = authLines.filter((l) => localKeys.some((k) => l.includes(k.publicLine.split(" ")[1])));
+        if (!args.force && mine.length === 1 && mine[0] === args.line && profiles.find((p) => p.id === "p1")?.authMethod !== "password")
+          throw { kind: "PreflightFailed", message: "preflight", data: { check: "your access", output: "This is the only key from this computer that can sign in to this account (SHA256:Xw2pRfa9Lw0YkU0yV5mJbqzB2hD1tXcN7pGfE4sHjAo). This connection signs in with a key, so after removing it you could only get back in with a password, if the server allows one." } };
+        authLines = authLines.filter((l) => l !== args.line);
+        return authReport();
+      }
       case "dns_accounts": return dnsAccounts.map((a) => ({ ...a }));
       case "add_dns_account": {
         await new Promise((r) => setTimeout(r, 600));

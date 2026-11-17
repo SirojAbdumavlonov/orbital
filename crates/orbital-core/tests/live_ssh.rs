@@ -1543,3 +1543,136 @@ async fn new_website_server_block_is_written_validated_and_rolled_back() {
         .unwrap();
     engine.disconnect(&s.id).await.unwrap();
 }
+
+/// authorized_keys: a new key is added and removed again, a bad key never
+/// reaches the server, and the key this connection signs in with can't be
+/// removed without `force`.
+#[tokio::test]
+async fn authorized_keys_add_remove_and_lockout_guard() {
+    let Some(e) = env() else { return };
+    let Some(input) = key_profile(&e) else { return };
+    let engine = engine();
+    let p = engine.create_profile(input).unwrap();
+    let s = connect(&engine, &p.id, None).await;
+
+    let before = engine.authorized_keys(&s.id).await.unwrap();
+    assert!(!before.keys.is_empty(), "{before:?}");
+    // The key this test connects with has its .pub beside it, so it counts as this computer's.
+    let own = before.keys.iter().find(|k| k.on_this_computer).expect("the login key is marked");
+
+    let dir = tempfile::tempdir().unwrap();
+    let new = orbital_core::sshkeys::generate(dir.path(), "it_extra", "orbital-it", None).unwrap();
+    assert!(matches!(
+        engine.add_authorized_key(&s.id, "ssh-ed25519 AAAA nope").await,
+        Err(Error::InvalidInput(_))
+    ));
+    let added = engine.add_authorized_key(&s.id, &new.public_line).await.unwrap();
+    assert!(added
+        .keys
+        .iter()
+        .any(|k| k.fingerprint.as_deref() == Some(new.fingerprint.as_str())));
+    assert!(
+        matches!(
+            engine.add_authorized_key(&s.id, &new.public_line).await,
+            Err(Error::InvalidInput(_))
+        ),
+        "twice"
+    );
+    let line = added.keys.iter().find(|k| k.comment == "orbital-it").unwrap().line.clone();
+    let after = engine.remove_authorized_key(&s.id, &line, false).await.unwrap();
+    assert_eq!(after.keys.len(), before.keys.len());
+
+    // Removing our own login key would lock this connection's way in: refused.
+    let r = engine.remove_authorized_key(&s.id, &own.line, false).await;
+    assert!(matches!(r, Err(Error::PreflightFailed { .. })), "{r:?}");
+    assert_eq!(engine.authorized_keys(&s.id).await.unwrap().keys.len(), before.keys.len());
+
+    let audit = engine.audit_query(&AuditFilter::default()).unwrap();
+    for action in ["sshkey.authorize", "sshkey.revoke"] {
+        assert!(
+            audit.iter().any(|ev| ev.action == action && ev.outcome == Outcome::Success),
+            "{action}"
+        );
+    }
+    assert!(audit.iter().any(|ev| ev.action == "sshkey.revoke" && ev.outcome == Outcome::Denied));
+    engine.disconnect(&s.id).await.unwrap();
+}
+
+/// A snippet runs on the server with its parameter as one quoted word, and
+/// each run is audited with the command that was sent.
+#[tokio::test]
+async fn snippet_runs_with_quoted_parameters() {
+    use orbital_core::snippets::SnippetInput;
+    let Some(e) = env() else { return };
+    let Some(input) = key_profile(&e) else { return };
+    let engine = engine();
+    let p = engine.create_profile(input).unwrap();
+    let s = connect(&engine, &p.id, None).await;
+    let snip = engine
+        .save_snippet(
+            None,
+            &SnippetInput {
+                name: "echo".into(),
+                command: "printf '%s\\n' {{text}}".into(),
+                description: None,
+                sudo: false,
+            },
+        )
+        .unwrap();
+    let tricky = "a b; echo INJECTED $(id) 'q'";
+    let values = [("text".to_string(), tricky.to_string())].into_iter().collect();
+    let runs = engine.run_snippet(&snip.id, std::slice::from_ref(&s.id), &values).await.unwrap();
+    let out = runs[0].output.as_ref().expect("ran");
+    assert_eq!(out.stdout.trim_end(), tricky, "the value arrived as one argument");
+    let missing = engine.run_snippet(&snip.id, std::slice::from_ref(&s.id), &Default::default()).await;
+    assert!(matches!(missing, Err(Error::InvalidInput(_))));
+    let audit = engine.audit_query(&AuditFilter::default()).unwrap();
+    assert!(audit
+        .iter()
+        .any(|ev| ev.action == "snippet.run" && ev.command.as_deref().is_some_and(|c| c.contains("'a b; echo"))));
+    engine.disconnect(&s.id).await.unwrap();
+}
+
+/// Each safe save keeps the previous version; it can be read back and put
+/// back, and the restore keeps a backup of what it replaced.
+#[tokio::test]
+async fn config_backups_are_listed_read_and_restored() {
+    let Some(e) = env() else { return };
+    let Some(input) = key_profile(&e) else { return };
+    let engine = engine();
+    let p = engine.create_profile(input).unwrap();
+    let s = connect(&engine, &p.id, None).await;
+    let dir = format!("/tmp/orbital-it-bak-{}", std::process::id());
+    engine.mkdir(&s.id, &dir).await.unwrap();
+    let cfg = format!("{dir}/app.conf");
+    engine.write_file(&s.id, &cfg, "v1\n", None).await.unwrap();
+    engine.safe_write(&s.id, &cfg, "v2\n", false, false, None).await.unwrap();
+    // Backup names have one-second resolution: make the next one distinct.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    engine.safe_write(&s.id, &cfg, "v3\n", false, false, None).await.unwrap();
+
+    let backups = engine.list_backups(&s.id, &cfg, false).await.unwrap();
+    assert_eq!(backups.len(), 2, "{backups:?}");
+    let oldest = backups.last().unwrap();
+    assert_eq!(engine.read_backup(&s.id, &cfg, oldest, false).await.unwrap(), "v1\n");
+    assert!(matches!(
+        engine.read_backup(&s.id, &cfg, "/etc/passwd", false).await,
+        Err(Error::InvalidInput(_))
+    ));
+
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    engine.restore_backup(&s.id, &cfg, oldest, false).await.unwrap();
+    assert_eq!(engine.read_file(&s.id, &cfg).await.unwrap().content, "v1\n");
+    let after = engine.list_backups(&s.id, &cfg, false).await.unwrap();
+    assert_eq!(
+        engine.read_backup(&s.id, &cfg, &after[0], false).await.unwrap(),
+        "v3\n",
+        "the restore kept v3"
+    );
+    let audit = engine.audit_query(&AuditFilter::default()).unwrap();
+    assert!(audit
+        .iter()
+        .any(|ev| ev.action == "config.restore" && ev.outcome == Outcome::Success));
+    engine.remove(&s.id, &dir, true).await.unwrap();
+    engine.disconnect(&s.id).await.unwrap();
+}

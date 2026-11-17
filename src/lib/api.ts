@@ -838,6 +838,18 @@ export interface SshdReport {
   sessions: { user: string; tty: string; since: string; from: string | null }[];
 }
 
+// ---------- snippets ----------
+
+export interface Snippet { id: string; name: string; command: string; description: string | null; sudo: boolean; params: string[]; createdAt: string; updatedAt: string }
+export interface SnippetInput { name: string; command: string; description: string | null; sudo: boolean }
+export interface SnippetRun { sessionId: string; server: string; command: string; output: ExecOutput | null; error: string | null }
+
+// ---------- SSH keys ----------
+
+export interface LocalKey { name: string; path: string; algorithm: string; comment: string; fingerprint: string; publicLine: string; encrypted: boolean }
+export interface AuthorizedKey { line: string; options: string | null; algorithm: string; comment: string; fingerprint: string | null; onThisComputer: boolean }
+export interface AuthorizedKeys { user: string; path: string; keys: AuthorizedKey[]; missing: boolean }
+
 // ---------- DNS ----------
 
 export type DnsProvider = "cloudflare";
@@ -890,6 +902,9 @@ export const api = {
   safeWrite: (a: { sessionId: string; path: string; content: string; validate: boolean; privileged: boolean; expectedMtime?: number | null }) =>
     invoke<SafeWriteReport>("safe_write", a),
   validatorFor: (path: string) => invoke<Validator | null>("validator_for", { path }),
+  readBackup: (sessionId: string, path: string, backup: string, privileged: boolean) => invoke<string>("read_backup", { sessionId, path, backup, privileged }),
+  /** Put a backup back through safe save (validated; the current version is kept as a backup). */
+  restoreBackup: (sessionId: string, path: string, backup: string, privileged: boolean) => invoke<SafeWriteReport>("restore_backup", { sessionId, path, backup, privileged }),
   listBackups: (sessionId: string, path: string, privileged: boolean) =>
     invoke<string[]>("list_backups", { sessionId, path, privileged }),
   mkdir: (sessionId: string, path: string) => invoke<void>("mkdir", { sessionId, path }),
@@ -1003,6 +1018,16 @@ export const api = {
   terminalResize: (terminalId: string, cols: number, rows: number) => invoke<void>("terminal_resize", { terminalId, cols, rows }),
   terminalClose: (terminalId: string) => invoke<void>("terminal_close", { terminalId }),
 
+  snippets: () => invoke<Snippet[]>("snippets"),
+  saveSnippet: (id: string | null, input: SnippetInput) => invoke<Snippet>("save_snippet", { id, input }),
+  deleteSnippet: (id: string) => invoke<void>("delete_snippet", { id }),
+  addExampleSnippets: () => invoke<Snippet[]>("add_example_snippets"),
+  runSnippet: (id: string, sessionIds: string[], values: Record<string, string>) => invoke<SnippetRun[]>("run_snippet", { id, sessionIds, values }),
+  localSshKeys: () => invoke<LocalKey[]>("local_ssh_keys"),
+  generateSshKey: (name: string, comment: string, passphrase: string | null) => invoke<LocalKey>("generate_ssh_key", { name, comment, passphrase }),
+  authorizedKeys: (sessionId: string) => invoke<AuthorizedKeys>("authorized_keys", { sessionId }),
+  addAuthorizedKey: (sessionId: string, line: string) => invoke<AuthorizedKeys>("add_authorized_key", { sessionId, line }),
+  removeAuthorizedKey: (sessionId: string, line: string, force: boolean) => invoke<AuthorizedKeys>("remove_authorized_key", { sessionId, line, force }),
   dnsAccounts: () => invoke<DnsAccount[]>("dns_accounts"),
   addDnsAccount: (name: string, kind: DnsProvider, token: string) => invoke<DnsAccount>("add_dns_account", { name, kind, token }),
   removeDnsAccount: (id: string) => invoke<void>("remove_dns_account", { id }),

@@ -1,5 +1,5 @@
 import { Command } from "cmdk";
-import { Activity, HeartPulse, ArrowLeft, ArrowRight, Download, FileInput, FolderTree, Globe, Gauge, KeyRound, ListChecks, Moon, Plug, Plus, RefreshCw, Server, Settings, SquareTerminal, Sun, Unplug } from "lucide-react";
+import { Activity, HeartPulse, SquareCode, ArrowLeft, ArrowRight, Download, FileInput, FolderTree, Globe, Gauge, KeyRound, ListChecks, Moon, Plug, Plus, RefreshCw, Server, Settings, SquareTerminal, Sun, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useUpdates } from "../lib/updates";
@@ -72,7 +72,7 @@ export function CommandMenu() {
             {s.toolTabs.map((id) => {
               const t = s.tools?.find((x) => x.id === id);
               const Icon = toolIcon(t);
-              return <Command.Item key={id} value={`tab ${t?.name ?? id}`} onSelect={run(() => go(`tool:${id}`))}><Icon size={14} /> {t?.name ?? ({ ports: "Open ports", users: "Users", docker: "Docker", deploy: "Deploy", logs: "Logs", tunnels: "Tunnels" } as Record<string, string>)[id] ?? id}</Command.Item>;
+              return <Command.Item key={id} value={`tab ${t?.name ?? id}`} onSelect={run(() => go(`tool:${id}`))}><Icon size={14} /> {t?.name ?? ({ ports: "Open ports", users: "Users", docker: "Docker", deploy: "Deploy", logs: "Logs", tunnels: "Tunnels", sshkeys: "SSH keys" } as Record<string, string>)[id] ?? id}</Command.Item>;
             })}
             {(s.tools ?? []).filter((t) => !s.toolTabs.includes(t.id)).map((t) => {
               const Icon = toolIcon(t);
@@ -98,6 +98,7 @@ export function CommandMenu() {
           <Command.Item value="import ssh config hosts" onSelect={run(() => st.setImportingSsh(true))}><FileInput size={14} /> Import from ~/.ssh/config…</Command.Item>
         </Command.Group>
         <Command.Group heading="Orbital">
+          <Command.Item value="snippets saved commands run many servers" onSelect={run(() => st.setGlobalView("snippets"))}><SquareCode size={14} /> Snippets</Command.Item>
           <Command.Item value="domains dns records cloudflare check" onSelect={run(() => st.setGlobalView("domains"))}><Globe size={14} /> Domains and DNS</Command.Item>
           <Command.Item value="activity log" onSelect={run(() => st.setGlobalView("activity"))}><Activity size={14} /> Activity log</Command.Item>
           <Command.Item value="uptime monitoring websites checks down" onSelect={run(() => st.setGlobalView("uptime"))}><HeartPulse size={14} /> Uptime</Command.Item>

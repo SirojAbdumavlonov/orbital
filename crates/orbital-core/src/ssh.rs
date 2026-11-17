@@ -204,7 +204,7 @@ pub fn home_dir() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
-fn expand_tilde(p: &str) -> String {
+pub(crate) fn expand_tilde(p: &str) -> String {
     if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
         if let Some(home) = home_dir() {
             return home.join(rest).to_string_lossy().into_owned();
@@ -616,6 +616,18 @@ async fn open_agent() -> Result<AgentClient> {
             "no SSH agent found: start the \"OpenSSH Authentication Agent\" service or Pageant ({e})"
         ))),
     }
+}
+
+/// Fingerprints (`SHA256:…`) of the keys the SSH agent holds; empty without an agent.
+pub(crate) async fn agent_fingerprints() -> Vec<String> {
+    let Ok(mut agent) = open_agent().await else { return vec![] };
+    let Ok(ids) = agent.request_identities().await else { return vec![] };
+    ids.into_iter()
+        .filter_map(|id| match id {
+            russh::keys::agent::AgentIdentity::PublicKey { key, .. } => Some(key.fingerprint(russh::keys::HashAlg::Sha256).to_string()),
+            _ => None,
+        })
+        .collect()
 }
 
 async fn agent_auth(handle: &mut Handle<ClientHandler>, user: &str) -> Result<bool> {

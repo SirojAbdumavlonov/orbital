@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon } from "lucide-react";
+import { ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound } from "lucide-react";
 import { Activity, Boxes, Cable, Clock, Cpu, Database, FolderTree, Gauge, Globe, ListChecks, LockKeyhole, Network, Plus, RefreshCw, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, asApiError, DetectedTool } from "../lib/api";
@@ -28,6 +28,7 @@ const BUILTIN: Record<string, { name: string; hint: string; icon: typeof Gauge }
   tunnels: { name: "Tunnels", hint: "Use the server's ports from this computer", icon: ArrowLeftRight },
   ports: { name: "Open ports", hint: "What listens where, and who can reach it", icon: Cable },
   users: { name: "Users", hint: "Accounts, groups, sudo and SSH keys", icon: UsersIcon },
+  sshkeys: { name: "SSH keys", hint: "Who can sign in with a key; make and install keys", icon: KeyRound },
 };
 const tabName = (id: string, t?: DetectedTool) => t?.name ?? BUILTIN[id]?.name ?? (id === "docker" ? "Docker" : id);
 

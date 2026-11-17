@@ -37,6 +37,8 @@ import { SshdView } from "./views/SshdView";
 import { DatabaseView, RedisView } from "./views/DatabaseView";
 import { ApacheView, HaproxyView } from "./views/WebServerViews";
 import { UsersView } from "./views/UsersView";
+import { SshKeysView } from "./views/SshKeysView";
+import { SnippetsView } from "./views/SnippetsView";
 import { CronView } from "./views/CronView";
 import { DeployView } from "./views/DeployView";
 import { LogsView } from "./views/LogsView";
@@ -46,6 +48,7 @@ import { TerminalView } from "./views/TerminalView";
 
 const GLOBAL_TITLES = {
   activity: ["Activity log", "Every change across all servers, hash-chained so tampering is detectable"],
+  snippets: ["Snippets", "Saved commands, run on one server or many at once"],
   uptime: ["Uptime", "Websites and ports checked from this Mac, with a notification when one goes down"],
   knownHosts: ["Security", "Saved credentials and the host identities you've verified"],
   settings: ["Settings", "Preferences for Orbital on this computer"],
@@ -68,6 +71,7 @@ const TOOL_VIEWS: Record<string, (p: { s: SessionState }) => JSX.Element> = {
   apache: ApacheView,
   haproxy: HaproxyView,
   users: UsersView,
+  sshkeys: SshKeysView,
   cron: CronView,
   deploy: DeployView,
   logs: LogsView,
@@ -184,7 +188,7 @@ export default function App() {
               <button className="btn" style={{ marginLeft: "auto" }} onClick={() => setGlobalView(null)}>Close</button>
             </div>
           </header>
-          {globalView === "activity" ? <ActivityView /> : globalView === "uptime" ? <UptimeView /> : globalView === "settings" ? <SettingsView /> : globalView === "domains" ? <DomainsView /> : <KnownHostsView />}
+          {globalView === "activity" ? <ActivityView /> : globalView === "uptime" ? <UptimeView /> : globalView === "snippets" ? <SnippetsView /> : globalView === "settings" ? <SettingsView /> : globalView === "domains" ? <DomainsView /> : <KnownHostsView />}
         </div>
       )}
       {order.map((id) => <Workspace key={id} s={sessions[id]} visible={!!showWorkspace && id === active} />)}
