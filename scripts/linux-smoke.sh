@@ -41,18 +41,19 @@ pid=$!
 
 data="$home/.local/share/orbital"
 for _ in $(seq 1 40); do
-  [ -f "$data/orbital.db" ] && [ -f "$data/vault.bin" ] && break
+  [ -f "$data/orbital.db" ] && [ -f "$data/.install-key" ] && break
   kill -0 "$pid" 2>/dev/null || { cat "$log"; fail "Orbital exited during start-up"; }
   sleep 0.5
 done
 [ -f "$data/orbital.db" ] || { cat "$log"; fail "no database in $data"; }
-[ -f "$data/vault.bin" ] || { cat "$log"; fail "no vault in $data"; }
+# The vault's key is made at start-up; vault.bin itself only once a secret is saved.
+[ -f "$data/.install-key" ] || { cat "$log"; fail "no vault key in $data"; }
 ok "created $data"
 
-[ "$(stat -c %a "$data/vault.bin")" = 600 ] || fail "vault.bin is $(stat -c %a "$data/vault.bin"), not 600"
+[ ! -f "$data/vault.bin" ] || [ "$(stat -c %a "$data/vault.bin")" = 600 ] || fail "vault.bin is not 600"
 [ "$(stat -c %a "$data/.install-key")" = 600 ] || fail ".install-key is not 600"
 [ "$(stat -c %a "$data")" = 700 ] || fail "$data is $(stat -c %a "$data"), not 700"
-ok "vault and key are private"
+ok "data folder and vault key are private"
 
 # Still running a few seconds later: the web view loaded instead of crashing.
 sleep 5

@@ -49,7 +49,9 @@ impl Context {
                 if rest.as_os_str().is_empty() {
                     "~".into()
                 } else {
-                    format!("~/{}", rest.display())
+                    // Always with `/`, as ssh_config writes paths, on Windows too.
+                    let parts: Vec<String> = rest.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+                    format!("~/{}", parts.join("/"))
                 }
             }
             _ => p.display().to_string(),
@@ -265,11 +267,13 @@ fn host_matches(patterns: &[String], name: &str) -> bool {
 fn expand_include(arg: &str, ctx: &Context) -> Vec<PathBuf> {
     let p = ctx.expand_tilde(arg);
     let p = if p.is_absolute() { p } else { ctx.home.join(".ssh").join(p) };
-    let mut out = vec![PathBuf::from("/")];
-    for comp in p.components().skip(1) {
-        let comp = comp.as_os_str().to_string_lossy().into_owned();
-        if !is_pattern(&comp) {
-            out = out.into_iter().map(|d| d.join(&comp)).collect();
+    // Rebuilt component by component, so the root (`/`, or `C:\` on Windows)
+    // is kept as it is and only plain names are globbed.
+    let mut out = vec![PathBuf::new()];
+    for part in p.components() {
+        let comp = part.as_os_str().to_string_lossy().into_owned();
+        if !matches!(part, std::path::Component::Normal(_)) || !is_pattern(&comp) {
+            out = out.into_iter().map(|d| d.join(part)).collect();
             continue;
         }
         let mut next = Vec::new();
