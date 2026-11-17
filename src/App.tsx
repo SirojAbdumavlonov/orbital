@@ -6,6 +6,7 @@ import { CommandMenu } from "./components/CommandMenu";
 import { FolderPanel } from "./components/FolderPanel";
 import { Prompts } from "./components/Prompts";
 import { ProfileDialog } from "./components/ProfileDialog";
+import { SshImportDialog } from "./components/SshImportDialog";
 import { ServerHeader, useMetricsPoller } from "./components/ServerHeader";
 import { NavButtons, Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
@@ -184,6 +185,7 @@ export default function App() {
       {order.map((id) => <Workspace key={id} s={sessions[id]} visible={!!showWorkspace && id === active} />)}
       {!globalView && !active && <div className="main"><Welcome /></div>}
       <ProfileDialog />
+      <SshImportDialog />
       <Prompts />
       <ReconnectPrompt />
       <ConfirmHost />

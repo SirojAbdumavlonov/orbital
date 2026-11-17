@@ -94,6 +94,8 @@ pub fn run() {
             commands::create_profile,
             commands::update_profile,
             commands::delete_profile,
+            commands::ssh_config_preview,
+            commands::import_ssh_config,
             commands::set_secret,
             commands::has_secret,
             commands::known_hosts,

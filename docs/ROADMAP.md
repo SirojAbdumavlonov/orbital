@@ -12,7 +12,7 @@
 
 ## Next
 - [x] **Jump hosts / bastions** (ProxyJump): a profile connects through another profile, up to three hops
-- [ ] Import of `~/.ssh/config` hosts (including their `ProxyJump` lines)
+- [x] Import of `~/.ssh/config` hosts (following `Include`, with `ProxyJump` chains as jump hosts)
 - [ ] **Backups browser**: list, diff and restore `*.orbital-bak-*` versions from the editor
 - [x] Touch ID gate before using saved credentials (app-enforced, `LAContext` device-owner policy)
 - [ ] Optionally keep the vault key in the Keychain behind `SecAccessControl(.userPresence)` for signed builds (stronger against other apps, one Touch ID prompt)

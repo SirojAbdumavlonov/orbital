@@ -419,10 +419,64 @@ let line = "";
 const b64 = (s: string) => btoa(unescape(encodeURIComponent(s)));
 const prompt = "\x1b[1;33mdeploy@prod-web-01\x1b[0m:\x1b[1;34m/srv/shop\x1b[0m$ ";
 
+// What `ssh_config_preview` returns for a realistic ~/.ssh/config (see ssh_config.rs tests).
+const note = (text: string, level: "info" | "warn" = "info") => ({ level, text });
+const cand = (c: any) => ({ aliases: [], authMethod: c.keyPath ? "key" : "agent", keyPath: null, jumpKey: null, jumpOnly: false, importable: true, source: null, notes: [], existingId: null, existingName: null, port: 22, ...c });
+const sshImport = () => withSaved({
+  path: "~/.ssh/config",
+  found: true,
+  notes: [
+    note("Host *.prod !bastion.prod (~/.ssh/config:31) is a pattern, not a server: its settings are applied to the hosts it matches"),
+    note('Match host *.corp exec "test -f ~/.vpn" (~/.ssh/config:40) was skipped: Match conditions can\'t be checked before connecting', "warn"),
+  ],
+  candidates: [
+    cand({ key: "sirojiddin@staging.example.dev:2222", name: "staging", host: "staging.example.dev", port: 2222, username: "sirojiddin", source: "~/.ssh/config.d/10-staging:1", notes: [note("No IdentityFile: signs in with ssh-agent")] }),
+    cand({ key: "ops@bastion.example.com:2222", name: "bastion", host: "bastion.example.com", port: 2222, username: "ops", keyPath: "~/.ssh/id_ed25519", source: "~/.ssh/config:5" }),
+    cand({ key: "deploy@203.0.113.10:22", name: "web", aliases: ["web.example.com"], host: "203.0.113.10", username: "deploy", keyPath: "~/.ssh/id_ed25519", source: "~/.ssh/config:11", notes: [note("Also listed as web.example.com")], }),
+    cand({ key: "postgres@10.0.4.30:22 via admin@10.0.0.5:2200 via ops@bastion.example.com:2222", name: "db-replica", host: "10.0.4.30", username: "postgres", keyPath: "~/.ssh/keys/10.0.4.30_postgres", jumpKey: "admin@10.0.0.5:2200 via ops@bastion.example.com:2222", source: "~/.ssh/config:15", notes: [note("2 identity files are listed; Orbital uses the first")] }),
+    cand({ key: "deploy@app.prod:22 via ops@bastion.example.com:2222", name: "app.prod", host: "app.prod", username: "deploy", keyPath: "~/.ssh/id_ed25519", jumpKey: "ops@bastion.example.com:2222", source: "~/.ssh/config:34", notes: [note("Port forwards aren't imported; open them from the Tunnels tab")] }),
+    cand({ key: "sirojiddin@legacy.internal:22 via ops@bastion.example.com:2222", name: "legacy", host: "legacy.internal", username: "sirojiddin", jumpKey: "ops@bastion.example.com:2222", source: "~/.ssh/config:21", notes: [note("ProxyCommand (~/.ssh/config:23) is read as jump host bastion"), note("No IdentityFile: signs in with ssh-agent")] }),
+    cand({ key: "sirojiddin@weird.internal:22", name: "weird", host: "weird.internal", username: "sirojiddin", source: "~/.ssh/config:25", notes: [note("ProxyCommand (~/.ssh/config:27) isn't supported: this server is imported without it. Set a jump host after importing if it needs one", "warn")] }),
+    cand({ key: "!loop-a", name: "loop-a", host: "loop-a", username: "sirojiddin", importable: false, source: "~/.ssh/config:44", notes: [note("ProxyJump loop: loop-a → loop-b → loop-a", "warn")] }),
+    cand({ key: "admin@10.0.0.5:2200 via ops@bastion.example.com:2222", name: "admin@10.0.0.5:2200", host: "10.0.0.5", port: 2200, username: "admin", jumpKey: "ops@bastion.example.com:2222", jumpOnly: true, notes: [note("No IdentityFile: signs in with ssh-agent")] }),
+  ],
+});
+/** Mark candidates whose host, port and user match a saved profile, as the engine does. */
+function withSaved<T extends { candidates: any[] }>(pv: T): T {
+  for (const c of pv.candidates) {
+    const hit = profiles.find((p) => p.protocol === "sftp" && p.host === c.host && p.port === c.port && p.username === c.username);
+    if (hit) { c.existingId = hit.id; c.existingName = hit.name; }
+  }
+  return pv;
+}
+const importSsh = (keys: string[]) => {
+  const all = sshImport().candidates;
+  const byKey = new Map(all.map((c) => [c.key, c]));
+  const ids = new Map<string, string>();
+  const created: any[] = [];
+  const failed: any[] = [];
+  const make = (c: any): string | null => {
+    if (c.existingId) return c.existingId;
+    if (ids.has(c.key)) return ids.get(c.key)!;
+    if (!c.importable) { failed.push({ name: c.name, error: c.notes[0]?.text ?? "can't be imported" }); return null; }
+    const jump = c.jumpKey ? make(byKey.get(c.jumpKey)) : null;
+    if (c.jumpKey && !jump) return null;
+    const p = { id: `imp${profiles.length}`, name: c.name, host: c.host, port: c.port, username: c.username, authMethod: c.authMethod, keyPath: c.keyPath, sudoMode: "auto", groupName: null, color: null, initialPath: null, jumpProfileId: jump, protocol: "sftp", region: null, pathStyle: false, createdAt: new Date().toISOString(), lastConnectedAt: null };
+    profiles.push(p);
+    created.push({ ...p });
+    ids.set(c.key, p.id);
+    return p.id;
+  };
+  for (const k of keys) { const c = byKey.get(k); if (c) make(c); }
+  return { created, failed };
+};
+
 export function install() {
   mockIPC(async (cmd, args: any) => {
     switch (cmd) {
       case "list_profiles": return profiles.map((p) => ({ ...p }));
+      case "ssh_config_preview": return sshImport();
+      case "import_ssh_config": return importSsh(args.keys);
       case "update_profile": {
         const i = profiles.findIndex((p) => p.id === args.id);
         Object.assign(profiles[i], args.input);

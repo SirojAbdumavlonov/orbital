@@ -7,7 +7,7 @@ use orbital_core::databases::{BackupFormat, DbKind, DbServer, RedisAction, Redis
 use orbital_core::deploy::{App, AppInput, Checkout, DeployRecord};
 use orbital_core::dns::{DnsAccount, DnsCheck, DnsRecord, DnsZone, ProviderKind, RecordInput, RecordType};
 use orbital_core::docker::{ComposeAction, ComposeTarget, Container, ContainerAction, ContainerStats};
-use orbital_core::engine::{DeployEvent, Engine, PresenceStatus, SessionInfo};
+use orbital_core::engine::{DeployEvent, Engine, ImportReport, PresenceStatus, SessionInfo};
 use orbital_core::fail2ban::Fail2banStatus;
 use orbital_core::firewall::{UfwRuleInput, UfwRuleRef, UfwStatus};
 use orbital_core::known_hosts::KnownHost;
@@ -20,6 +20,7 @@ use orbital_core::secrets::SecretKind;
 use orbital_core::services::{ActionReport, Service, ServiceAction, ServiceDetail};
 use orbital_core::sftp::{FileContent, FileEntry, TransferReport};
 use orbital_core::ssh::{ConnectOptions, ExecOutput};
+use orbital_core::ssh_config::Preview;
 use orbital_core::sshd::SshdReport;
 use orbital_core::streams::StreamEvent;
 use orbital_core::sysinfo::SystemInfo;
@@ -78,6 +79,16 @@ pub fn update_profile(engine: Eng, id: String, input: ProfileInput) -> R<Profile
 #[tauri::command]
 pub fn delete_profile(engine: Eng, id: String) -> R<()> {
     engine.delete_profile(&id)
+}
+
+#[tauri::command]
+pub fn ssh_config_preview(engine: Eng) -> R<Preview> {
+    engine.ssh_config_preview()
+}
+
+#[tauri::command]
+pub fn import_ssh_config(engine: Eng, keys: Vec<String>) -> R<ImportReport> {
+    engine.import_ssh_config(&keys)
 }
 
 #[tauri::command]

@@ -545,3 +545,24 @@ tr.dim td { opacity: .6; }
 
 /* Windows and Linux draw their own title bar above the page: no traffic lights to leave room for. */
 :root:not([data-platform="mac"]) { --lights-w: 8px; }
+
+/* Import from ~/.ssh/config */
+.note.bad { color: var(--bad); }
+.import-file-notes { margin-bottom: 10px; color: var(--ink-2); font-size: 12.5px; }
+.import-file-notes summary { cursor: pointer; color: var(--ink-3); margin-bottom: 6px; }
+.import-file-notes .note-item.warn { color: var(--warn); }
+.import-list { display: flex; flex-direction: column; gap: 6px; }
+.import-row { display: flex; gap: 10px; align-items: flex-start; padding: 9px 12px; border-radius: var(--radius-s); background: var(--slate-2); border: 1px solid var(--slate-4); cursor: pointer; }
+.import-row.on { border-color: var(--amber); }
+.import-row.off { cursor: default; opacity: .72; }
+.import-row input { accent-color: var(--amber); margin-top: 3px; }
+.import-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.import-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.import-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--ink-3); font-size: 12px; }
+.import-meta > span { display: inline-flex; align-items: center; gap: 5px; }
+.import-route > span { display: inline-flex; align-items: center; gap: 4px; }
+.import-note { display: flex; align-items: center; gap: 6px; color: var(--ink-3); font-size: 12px; }
+.import-note.warn { color: var(--warn); }
+.import-select { margin-right: auto; display: flex; gap: 2px; }
+.welcome-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.add-menu { width: 250px; }

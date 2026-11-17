@@ -39,6 +39,31 @@ export type ProfileInput = Omit<Profile, "id" | "createdAt" | "lastConnectedAt" 
   pathStyle?: boolean;
 };
 
+/** One host from ~/.ssh/config, as it would be saved (ssh_config::Candidate). */
+export interface SshImportCandidate {
+  key: string;
+  name: string;
+  aliases: string[];
+  host: string;
+  port: number;
+  username: string;
+  authMethod: AuthMethod;
+  keyPath: string | null;
+  /** Key of the candidate this one connects through. */
+  jumpKey: string | null;
+  /** Only here because another host jumps through it. */
+  jumpOnly: boolean;
+  importable: boolean;
+  source: string | null;
+  notes: SshImportNote[];
+  /** A saved profile with the same host, port and user. */
+  existingId: string | null;
+  existingName: string | null;
+}
+export interface SshImportNote { level: "info" | "warn"; text: string }
+export interface SshImportPreview { path: string; found: boolean; candidates: SshImportCandidate[]; notes: SshImportNote[] }
+export interface SshImportReport { created: Profile[]; failed: { name: string; error: string }[] }
+
 export interface SessionInfo {
   id: string;
   profileId: string;
@@ -736,6 +761,8 @@ export const api = {
   createProfile: (input: ProfileInput) => invoke<Profile>("create_profile", { input }),
   updateProfile: (id: string, input: ProfileInput) => invoke<Profile>("update_profile", { id, input }),
   deleteProfile: (id: string) => invoke<void>("delete_profile", { id }),
+  sshConfigPreview: () => invoke<SshImportPreview>("ssh_config_preview"),
+  importSshConfig: (keys: string[]) => invoke<SshImportReport>("import_ssh_config", { keys }),
   setSecret: (profileId: string, kind: SecretKind, value: string | null) =>
     invoke<void>("set_secret", { profileId, kind, value }),
   hasSecret: (profileId: string, kind: SecretKind) => invoke<boolean>("has_secret", { profileId, kind }),

@@ -35,7 +35,7 @@ Cyberduck is good at moving files. Real server work is more than that: you edit 
 | **Monitor** | CPU (overall and per core), memory and cache, swap, load, disks, network throughput, top processes, what uses the CPU and memory (by program, service, user or process), disk usage by folder with drill-down, plus server details: OS, kernel, machine and vendor, IP addresses, gateway, DNS, time zone, pending updates, reboot needed, failed services. Agentless: nothing is installed on the server. |
 | **Terminal** | A full xterm (256 colours, links, resize) over the same connection. "Open terminal here" starts a shell in the folder you're browsing. No Terminal.app or iTerm needed. |
 | **Activity log** | Every change, success or failure, is recorded: who, which server, what, the exact command sent, exit code and duration. The log is append-only (enforced by the database) and **SHA-256 hash-chained**, so tampering is detectable with one click. Exports to CSV and JSON. |
-| **Cyberduck-grade security** | Passwords and passphrases are saved encrypted on your Mac, readable only there, and Orbital never interrupts you with Keychain prompts. Unknown host keys need your confirmation; a changed host key is refused outright. Supports password (with keyboard-interactive fallback), private keys (OpenSSH/PEM, encrypted or not) and ssh-agent (1Password, Secretive, YubiKey). Keys in `~/.ssh/known_hosts` are trusted automatically. The sudo password goes over stdin, never on the command line and never into the log. Jump hosts (ProxyJump) with a separate host-key check and credentials per hop. Optional Touch ID before saved credentials are used. |
+| **Cyberduck-grade security** | Passwords and passphrases are saved encrypted on your Mac, readable only there, and Orbital never interrupts you with Keychain prompts. Unknown host keys need your confirmation; a changed host key is refused outright. Supports password (with keyboard-interactive fallback), private keys (OpenSSH/PEM, encrypted or not) and ssh-agent (1Password, Secretive, YubiKey). Keys in `~/.ssh/known_hosts` are trusted automatically. The sudo password goes over stdin, never on the command line and never into the log. Jump hosts (ProxyJump) with a separate host-key check and credentials per hop. **Import your `~/.ssh/config`** (following `Include`, with `ProxyJump` chains): pick hosts from a preview, nothing secret is copied. Optional Touch ID before saved credentials are used. |
 
 <p>
 <img src="docs/screenshots/services.png" width="49%" alt="Services">
@@ -121,7 +121,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT
 
 ```
 crates/orbital-core/   engine: ssh, sftp, metrics, services, docker, config_edit, terminal, audit, db,
-                       tools, nginx, webservers, databases, users, cron, usage, firewall, fail2ban, certbot, sshd, ports, sysinfo
+                       tools, nginx, webservers, databases, users, cron, usage, firewall, fail2ban, certbot, sshd, ports, sysinfo,
+                       ssh_config (import from ~/.ssh/config)
   tests/live_ssh.rs    end-to-end tests against a real sshd
 src-tauri/             Tauri shell: typed commands -> Engine (no business logic)
 src/                   React UI (views/, components/, lib/api.ts mirrors the Rust types)

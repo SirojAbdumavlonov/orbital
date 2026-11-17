@@ -28,6 +28,7 @@ pub mod services;
 pub mod sftp;
 pub mod shell;
 pub mod ssh;
+pub mod ssh_config;
 pub mod sshd;
 pub mod storage;
 pub mod streams;

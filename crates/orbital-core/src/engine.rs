@@ -25,6 +25,7 @@ use crate::secrets::{secret_key, GatedStore, SecretKind, SecretStore, Unlock};
 use crate::services::{ActionReport, Service, ServiceAction, ServiceDetail};
 use crate::sftp::{FileContent, FileEntry, TransferReport};
 use crate::ssh::{saved_secrets_wanted, ConnectOptions, ExecOutput, SshSession};
+use crate::ssh_config;
 use crate::sshd::SshdReport;
 use crate::storage::StorageSession;
 use crate::streams::{Stream, StreamEvent};
@@ -39,6 +40,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
@@ -99,6 +101,21 @@ pub enum DeployEvent {
 
 fn sha256(data: &[u8]) -> String {
     hex::encode(Sha256::digest(data))
+}
+
+/// What an SSH config import created, and what it couldn't.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportReport {
+    pub created: Vec<Profile>,
+    pub failed: Vec<ImportFailure>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportFailure {
+    pub name: String,
+    pub error: String,
 }
 
 impl Engine {
@@ -428,6 +445,140 @@ impl Engine {
             },
         );
         Ok(())
+    }
+
+    // ---------- ~/.ssh/config import ----------
+
+    /// Describe the hosts in `~/.ssh/config` and which of them are already saved.
+    pub fn ssh_config_preview(&self) -> Result<ssh_config::Preview> {
+        let ctx = ssh_config::Context::from_env();
+        self.ssh_config_preview_at(&ctx.default_config(), &ctx)
+    }
+
+    pub fn ssh_config_preview_at(&self, path: &Path, ctx: &ssh_config::Context) -> Result<ssh_config::Preview> {
+        let mut preview = ssh_config::preview(path, ctx);
+        let saved = profiles::list(&self.db)?;
+        for c in &mut preview.candidates {
+            if let Some(p) = saved
+                .iter()
+                .find(|p| p.protocol.is_ssh() && p.host.eq_ignore_ascii_case(&c.host) && p.port == c.port && p.username == c.username)
+            {
+                c.existing_id = Some(p.id.clone());
+                c.existing_name = Some(p.name.clone());
+            }
+        }
+        Ok(preview)
+    }
+
+    /// Create profiles for the chosen candidates (by key), jump hosts first.
+    /// The config is read again here: the UI only says which keys it wants.
+    /// A chosen host's jump hosts are created too unless already saved.
+    pub fn import_ssh_config(&self, keys: &[String]) -> Result<ImportReport> {
+        let ctx = ssh_config::Context::from_env();
+        self.import_ssh_config_at(&ctx.default_config(), &ctx, keys)
+    }
+
+    pub fn import_ssh_config_at(&self, path: &Path, ctx: &ssh_config::Context, keys: &[String]) -> Result<ImportReport> {
+        let preview = self.ssh_config_preview_at(path, ctx)?;
+        let by_key: HashMap<&str, &ssh_config::Candidate> = preview.candidates.iter().map(|c| (c.key.as_str(), c)).collect();
+        let mut done: HashMap<String, std::result::Result<String, String>> = HashMap::new();
+        let mut report = ImportReport::default();
+        for key in keys {
+            let Some(c) = by_key.get(key.as_str()) else {
+                report.failed.push(ImportFailure {
+                    name: key.clone(),
+                    error: "no longer in the SSH config".into(),
+                });
+                continue;
+            };
+            if c.existing_id.is_some() {
+                continue;
+            }
+            let _ = self.import_one(c, &by_key, &preview.path, &mut done, &mut report);
+        }
+        Ok(report)
+    }
+
+    fn import_one(
+        &self,
+        c: &ssh_config::Candidate,
+        by_key: &HashMap<&str, &ssh_config::Candidate>,
+        file: &str,
+        done: &mut HashMap<String, std::result::Result<String, String>>,
+        report: &mut ImportReport,
+    ) -> std::result::Result<String, String> {
+        if let Some(r) = done.get(&c.key) {
+            return r.clone();
+        }
+        let r = (|| {
+            if let Some(id) = &c.existing_id {
+                return Ok(id.clone());
+            }
+            if !c.importable {
+                let why = c
+                    .notes
+                    .iter()
+                    .find(|n| n.level == ssh_config::NoteLevel::Warn)
+                    .map(|n| n.text.clone());
+                return Err(why.unwrap_or_else(|| "can't be imported".into()));
+            }
+            let jump = match &c.jump_key {
+                None => None,
+                Some(k) => {
+                    let j = by_key.get(k.as_str()).ok_or("its jump host is missing")?;
+                    Some(
+                        self.import_one(j, by_key, file, done, report)
+                            .map_err(|e| format!("jump host {}: {e}", j.name))?,
+                    )
+                }
+            };
+            let p = profiles::create(
+                &self.db,
+                ProfileInput {
+                    name: c.name.clone(),
+                    host: c.host.clone(),
+                    port: Some(c.port),
+                    username: c.username.clone(),
+                    auth_method: c.auth_method,
+                    key_path: c.key_path.clone(),
+                    sudo_mode: None,
+                    group_name: None,
+                    color: None,
+                    initial_path: None,
+                    jump_profile_id: jump.clone(),
+                    protocol: Protocol::Sftp,
+                    region: None,
+                    path_style: false,
+                },
+            )
+            .map_err(|e| e.to_string())?;
+            self.record(
+                None,
+                NewEvent {
+                    category: Some(Category::Security),
+                    action: "profile.import".into(),
+                    profile_id: Some(p.id.clone()),
+                    target: Some(format!("{}@{}:{}", p.username, p.host, p.port)),
+                    details: Some(serde_json::json!({
+                        "from": c.source.clone().unwrap_or_else(|| file.to_string()),
+                        "alias": c.name,
+                        "jumpProfileId": jump,
+                    })),
+                    ..Default::default()
+                },
+            );
+            let id = p.id.clone();
+            report.created.push(p);
+            Ok(id)
+        })();
+        if let Err(e) = &r {
+            report.failed.push(ImportFailure {
+                name: c.name.clone(),
+                error: e.clone(),
+            });
+        }
+        done.insert(c.key.clone(), r.clone());
+        r
     }
 
     pub fn set_secret(&self, profile_id: &str, kind: SecretKind, value: Option<&str>) -> Result<()> {
@@ -2365,6 +2516,71 @@ mod tests {
         let mut evs = e.audit_query(&AuditFilter::default()).unwrap();
         evs.reverse();
         evs.into_iter().filter(|ev| ev.action == action).map(|ev| ev.outcome).collect()
+    }
+
+    #[test]
+    fn ssh_config_import_builds_routes_and_skips_saved_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".ssh")).unwrap();
+        let cfg = dir.path().join(".ssh/config");
+        std::fs::write(
+            &cfg,
+            "Host bastion\n  HostName bastion.example.com\n  User ops\n  IdentityFile ~/.ssh/id_ed25519\n\
+             Host db\n  HostName 10.0.4.21\n  ProxyJump bastion,admin@10.0.0.5:2200\n\
+             Host old\n  HostName 203.0.113.10\n  User deploy\n\
+             Host loop\n  ProxyJump loop\n",
+        )
+        .unwrap();
+        let ctx = ssh_config::Context {
+            home: dir.path().into(),
+            user: "me".into(),
+        };
+        let engine = Engine::new(Arc::new(Database::in_memory().unwrap()), Arc::new(MemoryStore::default()));
+        let saved = engine
+            .create_profile(ProfileInput {
+                host: "203.0.113.10".into(),
+                port: Some(22),
+                ..input(AuthMethod::Agent)
+            })
+            .unwrap();
+
+        let preview = engine.ssh_config_preview_at(&cfg, &ctx).unwrap();
+        let old = preview.candidates.iter().find(|c| c.name == "old").unwrap();
+        assert_eq!(old.existing_id.as_deref(), Some(saved.id.as_str()));
+
+        // Choosing only `db` brings its two jump hosts along, outermost first.
+        let key = |n: &str| preview.candidates.iter().find(|c| c.name == n).unwrap().key.clone();
+        let report = engine
+            .import_ssh_config_at(&cfg, &ctx, &[key("db"), key("old"), key("loop"), "gone".into()])
+            .unwrap();
+        let names: Vec<&str> = report.created.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["bastion", "admin@10.0.0.5:2200", "db"]);
+        let db = report.created.iter().find(|p| p.name == "db").unwrap();
+        let route = profiles::chain(&engine.db, &db.id).unwrap();
+        let hosts: Vec<(&str, u16, &str)> = route.iter().map(|p| (p.host.as_str(), p.port, p.username.as_str())).collect();
+        assert_eq!(
+            hosts,
+            [
+                ("bastion.example.com", 22, "ops"),
+                ("10.0.0.5", 2200, "admin"),
+                ("10.0.4.21", 22, "me")
+            ]
+        );
+        assert_eq!(route[0].auth_method, AuthMethod::Key);
+        assert_eq!(route[0].key_path.as_deref(), Some("~/.ssh/id_ed25519"));
+        assert_eq!(route[2].auth_method, AuthMethod::Agent);
+        // The saved host is left alone; the loop and the unknown key fail with a reason.
+        let failed: Vec<&str> = report.failed.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(failed, ["loop", "gone"]);
+        assert!(report.failed[0].error.contains("loop"));
+        assert_eq!(engine.list_profiles().unwrap().len(), 4);
+        assert_eq!(outcomes(&engine, "profile.import").len(), 3);
+
+        // Importing again finds everything saved and creates nothing.
+        let again = engine.ssh_config_preview_at(&cfg, &ctx).unwrap();
+        assert!(again.candidates.iter().filter(|c| c.importable).all(|c| c.existing_id.is_some()));
+        let report = engine.import_ssh_config_at(&cfg, &ctx, &[key("db")]).unwrap();
+        assert!(report.created.is_empty() && report.failed.is_empty());
     }
 
     #[tokio::test]

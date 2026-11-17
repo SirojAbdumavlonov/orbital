@@ -1,5 +1,5 @@
 import { Command } from "cmdk";
-import { Activity, ArrowLeft, ArrowRight, Download, FolderTree, Globe, Gauge, KeyRound, ListChecks, Moon, Plug, Plus, RefreshCw, Server, Settings, SquareTerminal, Sun, Unplug } from "lucide-react";
+import { Activity, ArrowLeft, ArrowRight, Download, FileInput, FolderTree, Globe, Gauge, KeyRound, ListChecks, Moon, Plug, Plus, RefreshCw, Server, Settings, SquareTerminal, Sun, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useUpdates } from "../lib/updates";
@@ -92,6 +92,7 @@ export function CommandMenu() {
             );
           })}
           <Command.Item value="add server new" onSelect={run(() => st.setEditing("new"))}><Plus size={14} /> Add server…</Command.Item>
+          <Command.Item value="import ssh config hosts" onSelect={run(() => st.setImportingSsh(true))}><FileInput size={14} /> Import from ~/.ssh/config…</Command.Item>
         </Command.Group>
         <Command.Group heading="Orbital">
           <Command.Item value="domains dns records cloudflare check" onSelect={run(() => st.setGlobalView("domains"))}><Globe size={14} /> Domains and DNS</Command.Item>
