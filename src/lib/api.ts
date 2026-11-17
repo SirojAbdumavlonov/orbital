@@ -761,6 +761,25 @@ export interface Fail2banStatus {
   clientIp: string | null;
 }
 
+// ---------- new website ----------
+
+export type SiteKind = { kind: "static"; root: string } | { kind: "proxy"; port: number };
+export interface WebsiteInput { domain: string; includeWww: boolean; site: SiteKind }
+export type SiteLayout = "sitesAvailable" | "confD";
+export interface WebsitePlan {
+  domain: string;
+  names: string[];
+  layout: SiteLayout;
+  file: string;
+  enabledLink: string | null;
+  root: string | null;
+  rootExists: boolean;
+  content: string;
+  /** Why it can't be created as it stands. Empty: good to go. */
+  blockers: string[];
+}
+export interface WebsiteReport { plan: WebsitePlan; write: SafeWriteReport; rootCreated: boolean; reloaded: boolean; reloadOutput: string }
+
 // ---------- certbot ----------
 
 export interface Certificate {
@@ -887,6 +906,8 @@ export const api = {
 
   detectTools: (sessionId: string) => invoke<DetectedTool[]>("detect_tools", { sessionId }),
   nginxConfig: (sessionId: string) => invoke<NginxConfig>("nginx_config", { sessionId }),
+  websitePlan: (sessionId: string, input: WebsiteInput) => invoke<WebsitePlan>("website_plan", { sessionId, input }),
+  createWebsite: (sessionId: string, input: WebsiteInput) => invoke<WebsiteReport>("create_website", { sessionId, input }),
   listeningPorts: (sessionId: string) => invoke<PortsReport>("listening_ports", { sessionId }),
   sshdReport: (sessionId: string) => invoke<SshdReport>("sshd_report", { sessionId }),
 

@@ -23,7 +23,7 @@ const METHODS: { id: CertMethod; label: string; hint: string }[] = [
  * Does each name already point at this server? Let's Encrypt checks exactly
  * that, so a name that doesn't is the most common reason a request fails.
  */
-function DnsReadiness({ sid, names }: { sid: string; names: string[] }) {
+export function DnsReadiness({ sid, names }: { sid: string; names: string[] }) {
   const [res, setRes] = useState<{ addresses: string[]; checks: DnsCheck[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

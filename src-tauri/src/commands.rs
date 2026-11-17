@@ -31,6 +31,7 @@ use orbital_core::uptime::{Check, CheckInput, CheckStatus, UptimeEvent};
 use orbital_core::usage::{DiskUsage, ProcessReport};
 use orbital_core::users::{NewUser, UserChange, UsersReport};
 use orbital_core::webservers::{ApacheStatus, HaServerState, HaproxyStatus};
+use orbital_core::website::{WebsiteInput, WebsitePlan, WebsiteReport};
 use orbital_core::Error;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -261,6 +262,16 @@ pub async fn detect_tools(engine: Eng<'_>, session_id: String) -> R<Vec<Detected
 #[tauri::command]
 pub async fn nginx_config(engine: Eng<'_>, session_id: String) -> R<NginxConfig> {
     engine.nginx_config(&session_id).await
+}
+
+#[tauri::command]
+pub async fn website_plan(engine: Eng<'_>, session_id: String, input: WebsiteInput) -> R<WebsitePlan> {
+    engine.website_plan(&session_id, &input).await
+}
+
+#[tauri::command]
+pub async fn create_website(engine: Eng<'_>, session_id: String, input: WebsiteInput) -> R<WebsiteReport> {
+    engine.create_website(&session_id, &input).await
 }
 
 #[tauri::command]

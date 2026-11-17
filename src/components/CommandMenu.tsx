@@ -78,6 +78,9 @@ export function CommandMenu() {
               const Icon = toolIcon(t);
               return <Command.Item key={`open-${t.id}`} value={`open ${t.name} ${t.category}`} onSelect={run(() => { st.setActive(s.info.id); st.openTool(s.info.id, t.id); })}><Icon size={14} /> Open {t.name}<span className="cmdk-hint">{t.category}</span></Command.Item>;
             })}
+            {s.tools?.some((t) => t.id === "nginx") && (
+              <Command.Item value="new website site domain nginx https" onSelect={run(() => { st.setActive(s.info.id); st.openTool(s.info.id, "nginx"); st.setNewWebsite(s.info.id); })}><Globe size={14} /> New website…<span className="cmdk-hint">nginx</span></Command.Item>
+            )}
             <Command.Item value="reconnect" onSelect={run(() => st.reconnect(s.info.id))}><RefreshCw size={14} /> Reconnect</Command.Item>
             <Command.Item value="disconnect" onSelect={run(() => st.disconnect(s.info.id))}><Unplug size={14} /> Disconnect</Command.Item>
           </Command.Group>

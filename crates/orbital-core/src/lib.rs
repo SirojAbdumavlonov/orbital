@@ -41,5 +41,6 @@ pub mod usage;
 pub mod users;
 pub mod vault;
 pub mod webservers;
+pub mod website;
 
 pub use error::{Error, Result};

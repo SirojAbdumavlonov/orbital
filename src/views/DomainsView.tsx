@@ -184,7 +184,7 @@ const POLL_SECS = 10;
 const POLL_FOR_MIN = 15;
 
 /** What each resolver answers, checked again every 10 s until it matches (for up to 15 min). */
-export function CheckPanel({ name, type, expected, keepChecking, note }: { name: string; type: DnsType; expected: string[]; keepChecking: boolean; note?: string }) {
+export function CheckPanel({ name, type, expected, keepChecking, note, onResult }: { name: string; type: DnsType; expected: string[]; keepChecking: boolean; note?: string; onResult?: (verified: boolean) => void }) {
   const [check, setCheck] = useState<DnsCheck | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tries, setTries] = useState(0);
@@ -198,6 +198,7 @@ export function CheckPanel({ name, type, expected, keepChecking, note }: { name:
       const c = await api.dnsCheck(name, type, expected);
       setCheck(c);
       setError(null);
+      onResult?.(c.verified);
       if (c.verified) setPolling(false);
     } catch (e) {
       setError(asApiError(e).message);

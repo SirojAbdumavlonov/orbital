@@ -1429,3 +1429,117 @@ async fn tunnels_logs_and_deploys() {
     engine.run_command(&s.id, &format!("rm -rf {dir}"), false).await.unwrap();
     engine.disconnect(&s.id).await.unwrap();
 }
+
+/// "New website": the server block is written through safe save, enabled,
+/// tested with `nginx -t` and served; a block nginx rejects leaves nothing
+/// behind. Needs nginx installed and running and sudo; it writes under
+/// /etc/nginx and /var/www, so opt in with ORBITAL_IT_NGINX=1 (CI does).
+#[tokio::test]
+async fn new_website_server_block_is_written_validated_and_rolled_back() {
+    use orbital_core::website::{SiteKind, WebsiteInput};
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_NGINX").is_err() || std::env::var("ORBITAL_IT_NO_PASSWORD").is_ok() {
+        eprintln!("skipped: set ORBITAL_IT_NGINX=1 on a disposable machine with nginx");
+        return;
+    }
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    let domain = format!("orbital-it-{}.test", std::process::id());
+    let root = format!("/var/www/{domain}");
+    let input = WebsiteInput {
+        domain: domain.clone(),
+        include_www: true,
+        site: SiteKind::Static { root: root.clone() },
+    };
+
+    // Bad input is refused before anything is sent.
+    let bad = WebsiteInput {
+        site: SiteKind::Proxy { port: 80 },
+        ..input.clone()
+    };
+    assert!(matches!(engine.create_website(&s.id, &bad).await, Err(Error::InvalidInput(_))));
+    let bad = WebsiteInput {
+        site: SiteKind::Static { root: "/etc".into() },
+        ..input.clone()
+    };
+    assert!(matches!(engine.website_plan(&s.id, &bad).await, Err(Error::InvalidInput(_))));
+
+    let plan = engine.website_plan(&s.id, &input).await.unwrap();
+    assert!(plan.blockers.is_empty(), "{:?}", plan.blockers);
+    assert!(!plan.root_exists);
+    assert_eq!(plan.names, [domain.clone(), format!("www.{domain}")]);
+
+    let rep = engine.create_website(&s.id, &input).await.unwrap();
+    assert!(rep.root_created);
+    assert_eq!(rep.write.validator.as_deref(), Some("nginx"));
+    assert!(rep.reloaded, "{}", rep.reload_output);
+    let exists = |p: String| {
+        let engine = &engine;
+        let sid = s.id.clone();
+        async move {
+            engine
+                .run_command(&sid, &format!("test -e '{p}' || test -L '{p}'"), true)
+                .await
+                .unwrap()
+                .ok()
+        }
+    };
+    assert!(exists(rep.plan.file.clone()).await);
+    if let Some(link) = &rep.plan.enabled_link {
+        assert!(exists(link.clone()).await);
+    }
+
+    // nginx lists it and serves the placeholder page under that name.
+    let cfg = engine.nginx_config(&s.id).await.unwrap();
+    assert!(cfg.test_ok, "{}", cfg.test_output);
+    let site = cfg
+        .sites
+        .iter()
+        .find(|x| x.server_names.contains(&domain))
+        .expect("new site in nginx -T");
+    assert_eq!(site.root.as_deref(), Some(root.as_str()));
+    let page = engine
+        .run_command(&s.id, &format!("curl -s -H 'Host: {domain}' http://127.0.0.1/"), false)
+        .await
+        .unwrap();
+    assert!(page.stdout.contains(&format!("{domain} is served by nginx")), "{page:?}");
+
+    // A second time it's refused: the file exists and the name is served.
+    let again = engine.website_plan(&s.id, &input).await.unwrap();
+    assert!(again.blockers.len() >= 2, "{:?}", again.blockers);
+    assert!(matches!(engine.create_website(&s.id, &input).await, Err(Error::InvalidInput(_))));
+
+    // A block nginx rejects is taken back: neither file nor link remains.
+    let (file2, link2) = (
+        format!("{}-broken", rep.plan.file),
+        rep.plan.enabled_link.as_ref().map(|l| format!("{l}-broken")),
+    );
+    let session = engine.session(&s.id).await.unwrap();
+    let r = session
+        .install_site(&file2, link2.as_deref(), "server { this is not nginx }\n")
+        .await;
+    assert!(matches!(r, Err(Error::ValidationFailed { .. })), "{r:?}");
+    assert!(!exists(file2.clone()).await);
+    if let Some(l) = link2 {
+        assert!(!exists(l).await);
+    }
+    assert!(engine.nginx_config(&s.id).await.unwrap().test_ok);
+
+    let log = engine.audit_query(&AuditFilter::default()).unwrap();
+    assert!(log
+        .iter()
+        .any(|ev| ev.action == "website.create" && ev.outcome == Outcome::Success && ev.target.as_deref() == Some(domain.as_str())));
+    assert!(log.iter().any(|ev| ev.action == "website.create" && ev.outcome == Outcome::Failure));
+
+    // Clean up.
+    let link = rep.plan.enabled_link.clone().unwrap_or_default();
+    engine
+        .run_command(
+            &s.id,
+            &format!("rm -rf -- '{}' '{link}' '{root}'; nginx -s reload", rep.plan.file),
+            true,
+        )
+        .await
+        .unwrap();
+    engine.disconnect(&s.id).await.unwrap();
+}

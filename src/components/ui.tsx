@@ -9,7 +9,8 @@ import { create } from "zustand";
  * a click outside close it (when `onClose` is given), and screen readers get
  * its title and description.
  */
-export function Modal(props: { title: string; subtitle?: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; onClose?: () => void }) {
+/** `keepOnOutsideClick`: for multi-step dialogs, where a stray click shouldn't throw the progress away. */
+export function Modal(props: { title: string; subtitle?: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; onClose?: () => void; keepOnOutsideClick?: boolean }) {
   return (
     <Dialog.Root open onOpenChange={(open) => !open && props.onClose?.()}>
       <Dialog.Portal>
@@ -18,7 +19,7 @@ export function Modal(props: { title: string; subtitle?: ReactNode; children: Re
             className={`modal ${props.wide ? "wide" : ""}`}
             {...(props.subtitle ? {} : { "aria-describedby": undefined })}
             onEscapeKeyDown={(e) => !props.onClose && e.preventDefault()}
-            onPointerDownOutside={(e) => !props.onClose && e.preventDefault()}
+            onPointerDownOutside={(e) => (!props.onClose || props.keepOnOutsideClick) && e.preventDefault()}
           >
             <div className="modal-head">
               <Dialog.Title asChild><h2>{props.title}</h2></Dialog.Title>

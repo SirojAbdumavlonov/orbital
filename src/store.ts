@@ -98,6 +98,10 @@ interface State {
   navFwd: Loc[];
   /** Asked after saving changed settings of a connected server. */
   reconnectAsk: string | null;
+  /** Server the "New website" dialog is open for. */
+  newWebsite: string | null;
+  /** Bumped when a website was created, so the nginx view reads its config again. */
+  websiteRev: number;
 
   loadProfiles(): Promise<void>;
   goBack(): void;
@@ -130,6 +134,7 @@ interface State {
   setEditing(p: Profile | "new" | null): void;
   setImportingSsh(open: boolean): void;
   setGlobalView(v: State["globalView"]): void;
+  setNewWebsite(sessionId: string | null): void;
 }
 
 const toolTabsKey = (profileId: string) => `orbital.toolTabs.${profileId}`;
@@ -161,6 +166,8 @@ export const useStore = create<State>((set, get) => ({
   editing: null,
   importingSsh: false,
   globalView: null,
+  newWebsite: null,
+  websiteRev: 0,
   navBack: [],
   navFwd: [],
   reconnectAsk: null,
@@ -400,6 +407,10 @@ export const useStore = create<State>((set, get) => ({
 
   setEditing(editing) {
     set({ editing });
+  },
+
+  setNewWebsite(newWebsite) {
+    set({ newWebsite });
   },
 
   setGlobalView(globalView) {

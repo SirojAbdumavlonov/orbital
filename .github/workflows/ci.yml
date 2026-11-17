@@ -22,11 +22,11 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Start disposable sshd
         run: |
-          sudo apt-get update && sudo apt-get install -y openssh-server ufw fail2ban certbot python3-venv
+          sudo apt-get update && sudo apt-get install -y openssh-server ufw fail2ban certbot python3-venv nginx
           sudo KEYDIR=/tmp/orbital-it-keys bash scripts/it-sshd.sh | tee /tmp/it-env
       - name: Start FTP, WebDAV and S3 test servers
         run: bash scripts/it-storage.sh | tail -n 1 | tee -a /tmp/it-env
-      - name: Prepare ufw and fail2ban for the live tests
+      - name: Prepare ufw, fail2ban and nginx for the live tests
         # The runner keeps accepting everything (default allow), so enabling
         # ufw can't cut it off; fail2ban runs its stock sshd jail.
         run: |
@@ -35,7 +35,8 @@ jobs:
           sudo systemctl restart fail2ban
           sleep 2
           sudo fail2ban-client status
-          echo 'export ORBITAL_IT_UFW=1 ORBITAL_IT_FAIL2BAN=1 ORBITAL_IT_USERS=1' >> /tmp/it-env
+          sudo systemctl start nginx
+          echo 'export ORBITAL_IT_UFW=1 ORBITAL_IT_FAIL2BAN=1 ORBITAL_IT_USERS=1 ORBITAL_IT_NGINX=1' >> /tmp/it-env
       - name: Clippy
         run: cargo clippy -p orbital-core --all-targets -- -D warnings
       - name: Test

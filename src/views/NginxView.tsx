@@ -1,4 +1,4 @@
-import { FileText, FolderOpen, Lock, Pencil, RefreshCw, Search, ShieldAlert, ShieldCheck, Zap } from "lucide-react";
+import { FileText, FolderOpen, Lock, Pencil, Plus, RefreshCw, Search, ShieldAlert, ShieldCheck, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DrawerClose } from "../components/ui";
 import { api, asApiError, NginxConfig, NginxSite } from "../lib/api";
@@ -19,7 +19,8 @@ function serves(x: NginxSite): string {
 
 /** nginx as it is actually configured: every site, where it points, and the files behind it. */
 export function NginxView({ s }: { s: SessionState }) {
-  const { toast, openFile, showFolder, openTool, patch } = useStore();
+  const { toast, openFile, showFolder, openTool, patch, setNewWebsite } = useStore();
+  const websiteRev = useStore((x) => x.websiteRev);
   const hasCertbot = !!s.tools?.some((t) => t.id === "certbot");
   const sid = s.info.id;
   const unit = s.tools?.find((t) => t.id === "nginx")?.unit ?? null;
@@ -41,7 +42,7 @@ export function NginxView({ s }: { s: SessionState }) {
       setLoading(false);
     }
   };
-  useEffect(() => { load(); }, [sid]);
+  useEffect(() => { load(); }, [sid, websiteRev]);
 
   async function reload() {
     if (!unit) return;
@@ -75,6 +76,7 @@ export function NginxView({ s }: { s: SessionState }) {
           : <span className="badge bad"><ShieldAlert size={12} /> Configuration has errors</span>)}
         <div className="search"><Search size={14} /><input className="input" placeholder="Find a domain, port or file" value={q} onChange={(e) => setQ(e.target.value)} /></div>
         <span className="spacer" />
+        <button className="btn primary" title="Point a domain here, add its server block and get it a certificate" onClick={() => setNewWebsite(sid)}><Plus size={13} /> New website</button>
         <button className="btn" onClick={() => showFolder(sid, parentPath(mainFile))}><FolderOpen size={13} /> Open folder</button>
         {unit && <button className="btn" disabled={reloading} title="Apply saved changes without dropping connections. nginx -t runs first." onClick={reload}><Zap size={13} className={reloading ? "spin" : ""} /> Reload nginx</button>}
         <button className="icon-btn" aria-label="Refresh" title="Read the configuration again" onClick={load}><RefreshCw size={14} className={loading ? "spin" : ""} /></button>

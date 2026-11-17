@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { Modal } from "./components/ui";
 import { useNavigationGestures } from "./lib/navigation";
 import { CommandMenu } from "./components/CommandMenu";
+import { NewWebsiteDialog } from "./views/NewWebsite";
 import { FolderPanel } from "./components/FolderPanel";
 import { Prompts } from "./components/Prompts";
 import { ProfileDialog } from "./components/ProfileDialog";
@@ -138,7 +139,7 @@ function Workspace({ s, visible }: { s: SessionState; visible: boolean }) {
 }
 
 export default function App() {
-  const { loadProfiles, order, sessions, active, globalView, setEditing, setGlobalView } = useStore();
+  const { loadProfiles, order, sessions, active, globalView, setEditing, setGlobalView, newWebsite } = useStore();
   useNavigationGestures();
   useApplyTheme();
   const sidebarHidden = useSettings((x) => x.sidebarHidden);
@@ -193,6 +194,7 @@ export default function App() {
       <Prompts />
       <ReconnectPrompt />
       <ConfirmHost />
+      {newWebsite && sessions[newWebsite] && <NewWebsiteDialog sid={newWebsite} />}
     </div>
     {/* Outside the grid: these draw floating layers, not columns. */}
     <Toasts />

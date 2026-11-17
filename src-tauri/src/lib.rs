@@ -185,6 +185,8 @@ pub fn run() {
             commands::copy_between,
             commands::detect_tools,
             commands::nginx_config,
+            commands::website_plan,
+            commands::create_website,
             commands::listening_ports,
             commands::list_databases,
             commands::cron_report,

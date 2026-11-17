@@ -196,7 +196,7 @@ const tools = [
   { id: "redis", name: "Redis", category: "Database", running: false, binary: "/usr/bin/redis-server", unit: "redis-server.service", unitState: "inactive", paths: [{ path: "/etc/redis/redis.conf", isDir: false }] },
 ];
 
-const nginxConfig = {
+const nginxConfig: { testOk: boolean; testOutput: string; files: { path: string; lines: number }[]; upstreams: any[]; sites: any[] } = {
   testOk: true,
   testOutput: "nginx: the configuration file /etc/nginx/nginx.conf syntax is ok\nnginx: configuration file /etc/nginx/nginx.conf test is successful",
   files: [
@@ -219,6 +219,63 @@ const nginxConfig = {
     { file: "/etc/nginx/conf.d/default.conf", line: 1, serverNames: [], listens: ["80 default_server"], ssl: false, sslCertificate: null, root: "/usr/share/nginx/html", redirect: null, locations: [] },
   ],
 };
+
+// ---- new website (the same rules and template as website.rs) ----
+const SYSTEM_DIRS = ["/", "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/opt", "/proc", "/root", "/run", "/sbin", "/srv", "/sys", "/tmp", "/usr", "/var", "/var/lib", "/var/log", "/var/www"];
+function websiteInput(input: any) {
+  const domain = String(input.domain).trim().toLowerCase().replace(/\.$/, "");
+  if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/.test(domain)) throw { kind: "InvalidInput", message: `"${domain}" is not a domain name` };
+  const site = input.site;
+  if (site.kind === "proxy") {
+    if (!site.port) throw { kind: "InvalidInput", message: "choose the port your app listens on (1–65535)" };
+    if (site.port === 80 || site.port === 443) throw { kind: "InvalidInput", message: `port ${site.port} is nginx itself; use the port your app listens on, for example 3000 or 8080` };
+    if (site.port === 22) throw { kind: "InvalidInput", message: "port 22 is SSH, not a web app" };
+  } else {
+    const r = String(site.root).trim().replace(/(.)\/+$/, "$1");
+    if (!/^(\/[A-Za-z0-9._@+-]+)+$/.test(r) || r.split("/").some((c) => c === "." || c === "..")) throw { kind: "InvalidInput", message: `"${r}": use an absolute folder path made of letters, digits and . _ - @ +, for example /var/www/example.com` };
+    if (SYSTEM_DIRS.includes(r) || /^\/(etc|proc|sys|dev|boot|root|run)\//.test(r)) throw { kind: "InvalidInput", message: `${r} is a system folder; serve the site from its own folder, for example /var/www/<domain>` };
+    site.root = r;
+  }
+  const names = input.includeWww && !domain.startsWith("www.") ? [domain, `www.${domain}`] : [domain];
+  return { domain, names, site };
+}
+function websitePlan(input: any) {
+  const { domain, names, site } = websiteInput(input);
+  const body = site.kind === "static"
+    ? `    root ${site.root};\n    index index.html index.htm;\n\n    location / {\n        try_files $uri $uri/ =404;\n    }\n`
+    : `    location / {\n        proxy_pass http://127.0.0.1:${site.port};\n        proxy_http_version 1.1;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        # WebSockets\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection "upgrade";\n        proxy_read_timeout 300s;\n    }\n`;
+  const content = `# ${domain}: created by Orbital. Edit it like any other nginx file;\n# HTTPS is added by certbot once the certificate is issued.\nserver {\n    listen 80;\n    listen [::]:80;\n    server_name ${names.join(" ")};\n\n${body}}\n`;
+  const file = `/etc/nginx/sites-available/${domain}`;
+  const link = `/etc/nginx/sites-enabled/${domain}`;
+  const blockers = [
+    ...nginxConfig.files.filter((f) => f.path === link).map((f) => `${f.path} already exists`),
+    ...nginxConfig.sites.flatMap((x) => x.serverNames.filter((n: string) => names.includes(n.toLowerCase())).map((n: string) => `${n} is already served by ${x.file}:${x.line}`)),
+  ];
+  const root = site.kind === "static" ? site.root : null;
+  return { domain, names, layout: "sitesAvailable", file, enabledLink: link, root, rootExists: root === "/var/www/html" || root?.startsWith("/srv/") === true, content, blockers };
+}
+function createWebsite(input: any) {
+  const plan = websitePlan(input);
+  if (plan.blockers.length) throw { kind: "InvalidInput", message: plan.blockers.join("\n") };
+  nginxConfig.files.push({ path: plan.enabledLink, lines: plan.content.split("\n").length - 1 });
+  nginxConfig.sites.push({ file: plan.enabledLink, line: 3, serverNames: plan.names, listens: ["80", "[::]:80"], ssl: false, sslCertificate: null, root: plan.root, redirect: null,
+    locations: [{ path: "/", proxyPass: input.site.kind === "proxy" ? `http://127.0.0.1:${input.site.port}` : null, root: null, line: plan.root ? 12 : 9 }] });
+  return {
+    plan,
+    write: { path: plan.file, bytes: plan.content.length, privileged: true, backupPath: null, validator: "nginx", validatorOutput: "nginx: the configuration file /etc/nginx/nginx.conf syntax is ok\nnginx: configuration file /etc/nginx/nginx.conf test is successful", newMtime: now(), suggestedReload: "nginx.service" },
+    rootCreated: !!plan.root && !plan.rootExists,
+    reloaded: true,
+    reloadOutput: "",
+  };
+}
+/** After certbot --nginx: the site gets its HTTPS server block and the http one redirects. */
+function addHttps(domains: string[]) {
+  const site = nginxConfig.sites.find((x) => x.serverNames.includes(domains[0]) && !x.ssl);
+  if (!site) return;
+  const cert = `/etc/letsencrypt/live/${domains[0]}/fullchain.pem`;
+  nginxConfig.sites.push({ ...site, line: site.line + 20, listens: ["443 ssl", "[::]:443 ssl"], ssl: true, sslCertificate: cert });
+  Object.assign(site, { redirect: "301 https://$host$request_uri", root: null, locations: [] });
+}
 
 // ---- security tools ----
 const raw = (to: string, action: string, from: string, comment?: string) => `${to} ${action} ${from}${comment ? ` # ${comment}` : ""}`;
@@ -626,7 +683,9 @@ export function install() {
       case "write_file": return now();
       case "metrics": return metric();
       case "detect_tools": return tools;
-      case "nginx_config": return nginxConfig;
+      case "nginx_config": return structuredClone(nginxConfig);
+      case "website_plan": await new Promise((r) => setTimeout(r, 250)); return websitePlan(structuredClone(args.input));
+      case "create_website": await new Promise((r) => setTimeout(r, 900)); return createWebsite(structuredClone(args.input));
       case "listening_ports": return ports;
       case "cron_report": return cron();
       case "cron_preview": return /^(@reboot|[0-9*/,\-a-z]+( [0-9*/,\-a-z]+){4})$/i.test(args.schedule.trim()) ? { description: describe(args.schedule), nextRuns: [inMin(60), inMin(24 * 60)], error: null } : { description: "", nextRuns: [], error: "a schedule has five fields: minute hour day-of-month month day-of-week (for example 0 3 * * *)" };
@@ -706,7 +765,7 @@ export function install() {
         if (args.ip === "203.0.113.9") throw { ...lockout, data: { check: "SSH access", output: "203.0.113.9 is the address this connection comes from; banning it would lock you out." } };
         banned[args.jail] = [...banned[args.jail], args.ip]; return f2b();
       case "certbot_status": return certs();
-      case "certbot_issue": return certbotOut(`Requesting a certificate for ${args.request.domains.join(" and ")}\n\nSuccessfully received certificate.\nCertificate is saved at: /etc/letsencrypt/live/${args.request.domains[0]}/fullchain.pem\nSuccessfully deployed certificate for ${args.request.domains[0]} to /etc/nginx/sites-enabled/blog`);
+      case "certbot_issue": addHttps(args.request.domains); return certbotOut(`Requesting a certificate for ${args.request.domains.join(" and ")}\n\nSuccessfully received certificate.\nCertificate is saved at: /etc/letsencrypt/live/${args.request.domains[0]}/fullchain.pem\nSuccessfully deployed certificate for ${args.request.domains[0]} to ${nginxConfig.sites.find((x) => x.serverNames.includes(args.request.domains[0]))?.file ?? "/etc/nginx/sites-enabled/blog"}`);
       case "certbot_renew": return certbotOut(args.mode === "dryRun" ? "Processing /etc/letsencrypt/renewal/shop.example.com.conf\nSimulating renewal of an existing certificate for shop.example.com\n\nCongratulations, all simulated renewals succeeded" : `Renewing an existing certificate for ${args.name}`);
       case "certbot_delete":
         if (!args.force) throw { kind: "PreflightFailed", message: "Pre-flight check failed", data: { check: "web server config", output: `These files still use this certificate, so the web server would fail to start without it:\n/etc/nginx/sites-enabled/${args.name.split(".")[0]}` } };

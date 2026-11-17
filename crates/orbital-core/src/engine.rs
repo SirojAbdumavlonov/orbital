@@ -37,6 +37,7 @@ use crate::uptime::{self, Change, Check, CheckInput, CheckResult, CheckStatus, U
 use crate::usage::{DiskUsage, ProcessReport};
 use crate::users::{self, NewUser, UserChange, UsersReport};
 use crate::webservers::{self, ApacheStatus, HaServerState, HaproxyStatus};
+use crate::website::{SiteKind, WebsiteInput, WebsitePlan, WebsiteReport};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -1104,6 +1105,70 @@ impl Engine {
     /// Test and read the live nginx configuration (read-only).
     pub async fn nginx_config(&self, sid: &str) -> Result<NginxConfig> {
         self.session(sid).await?.nginx_config().await
+    }
+
+    /// What "New website" would write and where (read-only).
+    pub async fn website_plan(&self, sid: &str, input: &WebsiteInput) -> Result<WebsitePlan> {
+        self.session(sid).await?.website_plan(input).await
+    }
+
+    /// Create an nginx site for one domain: the folder (static sites), the
+    /// server block through safe save with `nginx -t` and rollback, the
+    /// sites-enabled link where that's the layout, then a reload.
+    pub async fn create_website(&self, sid: &str, input: &WebsiteInput) -> Result<WebsiteReport> {
+        let s = self.session(sid).await?;
+        const ACTION: &str = "website.create";
+        let target = input.domain.trim().to_ascii_lowercase();
+        let t = Instant::now();
+        let r = async {
+            let plan = s.website_plan(input).await?;
+            if !plan.blockers.is_empty() {
+                return Err(Error::InvalidInput(plan.blockers.join("\n")));
+            }
+            let mut root_created = false;
+            if let (Some(root), false) = (&plan.root, plan.root_exists) {
+                s.create_site_root(root, &plan.domain).await?;
+                root_created = true;
+            }
+            let write = s.install_site(&plan.file, plan.enabled_link.as_deref(), &plan.content).await?;
+            let (reloaded, reload_output) = s.reload_nginx().await?;
+            Ok(WebsiteReport {
+                plan,
+                write,
+                root_created,
+                reloaded,
+                reload_output,
+            })
+        }
+        .await;
+        let kind = match &input.site {
+            SiteKind::Static { .. } => "static",
+            SiteKind::Proxy { .. } => "proxy",
+        };
+        match &r {
+            Ok(rep) => self.record(
+                Some(&s),
+                NewEvent {
+                    category: Some(Category::Config),
+                    action: ACTION.into(),
+                    target: Some(rep.plan.domain.clone()),
+                    outcome: Some(Outcome::Success),
+                    duration_ms: Some(t.elapsed().as_millis() as i64),
+                    details: Some(serde_json::json!({
+                        "kind": kind,
+                        "file": rep.plan.file,
+                        "link": rep.plan.enabled_link,
+                        "root": rep.plan.root,
+                        "rootCreated": rep.root_created,
+                        "sha256": sha256(rep.plan.content.as_bytes()),
+                        "reloaded": rep.reloaded,
+                    })),
+                    ..Default::default()
+                },
+            ),
+            Err(e) => self.record_error(&s, Category::Config, ACTION, &target, None, e),
+        }
+        r
     }
 
     /// Which ports are open and which program listens on each (read-only).
