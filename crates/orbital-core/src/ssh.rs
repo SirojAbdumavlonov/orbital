@@ -458,11 +458,13 @@ impl SshSession {
             let mut code: Option<i32> = None;
             // Inside a job that shows command output, each line goes to the UI
             // as it is printed (see `progress`).
-            let mut lines = crate::progress::live().then(|| crate::progress::Lines::new(self.sudo_password.as_ref().map(|p| p.as_str())));
+            // One buffer per stream, so a partial line on one isn't joined to the other's.
+            let pw = self.sudo_password.as_ref().map(|p| p.as_str());
+            let mut lines = crate::progress::live().then(|| (crate::progress::Lines::new(pw), crate::progress::Lines::new(pw)));
             while let Some(msg) = ch.wait().await {
                 match msg {
                     ChannelMsg::Data { data } => {
-                        if let Some(l) = lines.as_mut() {
+                        if let Some((l, _)) = lines.as_mut() {
                             l.push(&data);
                         }
                         if out.len() < MAX_OUTPUT {
@@ -470,7 +472,7 @@ impl SshSession {
                         }
                     }
                     ChannelMsg::ExtendedData { data, ext: 1 } => {
-                        if let Some(l) = lines.as_mut() {
+                        if let Some((_, l)) = lines.as_mut() {
                             l.push(&data);
                         }
                         if err.len() < MAX_OUTPUT {
@@ -482,8 +484,9 @@ impl SshSession {
                     _ => {}
                 }
             }
-            if let Some(l) = lines.as_mut() {
-                l.finish();
+            if let Some((out, err)) = lines.as_mut() {
+                out.finish();
+                err.finish();
             }
             Ok::<_, Error>(ExecOutput {
                 stdout: String::from_utf8_lossy(&out).into_owned(),
