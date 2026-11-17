@@ -3,10 +3,15 @@ name: Release
 # Push a tag like v1.0.0 to build the macOS app, the Windows installer and the
 # Linux packages (.deb, .rpm, AppImage) and attach them to a draft GitHub Release. Review the draft, then publish it.
 #
-# Signing and notarization run when these repository secrets are set
-# (Settings → Secrets and variables → Actions); without them the build is
-# unsigned and macOS will warn on first open:
-#   APPLE_CERTIFICATE           base64 of the Developer ID Application .p12
+# Without any APPLE_* secrets (the free default) the app is ad-hoc signed:
+# it runs, but isn't notarized, so macOS asks once before the first open
+# (System Settings → Privacy & Security → Open Anyway). A paid Apple
+# Developer account adds Developer ID signing and notarization via these
+# repository secrets (Settings → Secrets and variables → Actions):
+#   APPLE_CERTIFICATE           base64 of the Developer ID Application .p12:
+#                               Keychain Access → My Certificates → right-click
+#                               the certificate (with its key) → Export → .p12,
+#                               then `base64 -i Certificate.p12 | pbcopy`
 #   APPLE_CERTIFICATE_PASSWORD  password of that .p12
 #   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Name (TEAMID)"
 #   APPLE_ID, APPLE_PASSWORD    Apple ID and an app-specific password
@@ -77,18 +82,70 @@ jobs:
           notes=$(awk -v v="$version" '$0 ~ "^## \\[?"v"[] ]" {on=1; next} on && /^## / {exit} on' CHANGELOG.md)
           [ -n "$notes" ] || notes="See CHANGELOG.md for what changed."
           { echo "notes<<NOTES_END"; echo "$notes"; echo "NOTES_END"; } >> "$GITHUB_OUTPUT"
+      # Checks the signing secrets the way the bundler will use them, so a bad
+      # one fails here with a plain explanation instead of deep inside the
+      # build. Only a certificate that imports and holds a codesigning identity
+      # is handed to the build (via $GITHUB_ENV); with none set the app is
+      # built unsigned, as before. Notarization is passed on only with all of
+      # APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID.
+      - name: Signing certificate
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          NOTARY_ID: ${{ secrets.APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          NOTARY_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          fail() { echo "::error title=Signing certificate::$1"; exit 1; }
+          if [ -z "$CERT" ]; then
+            # Ad-hoc signature ("-"): free, no Apple account. Without any
+            # signature a downloaded app on Apple Silicon is reported as
+            # "damaged"; ad-hoc signed, macOS only asks once (System Settings →
+            # Privacy & Security → Open Anyway).
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "::notice title=Ad-hoc signed::APPLE_CERTIFICATE is not set: the app is ad-hoc signed, not notarized, and macOS asks once before opening it."
+            exit 0
+          fi
+          p12="$RUNNER_TEMP/signing.p12"
+          kc="$RUNNER_TEMP/signing-check.keychain-db"
+          trap 'rm -f "$p12"; security delete-keychain "$kc" 2>/dev/null || true' EXIT
+          b64=$(printf %s "$CERT" | tr -d ' \r\n')
+          printf %s "$b64" | base64 --decode > "$p12" 2>/dev/null && [ -s "$p12" ] \
+            || fail "APPLE_CERTIFICATE is not base64. Export the certificate as a .p12 and set the secret to the output of: base64 -i Certificate.p12 | pbcopy"
+          head -c 64 "$p12" | grep -q -- "-----BEGIN" \
+            && fail "APPLE_CERTIFICATE is a base64'd PEM/.cer file. It must be a .p12 exported from Keychain Access with its private key (My Certificates → right-click the Developer ID Application certificate → Export → .p12)."
+          security create-keychain -p check "$kc"
+          security unlock-keychain -p check "$kc"
+          security import "$p12" -k "$kc" -f pkcs12 -P "$CERT_PASSWORD" -T /usr/bin/codesign >/dev/null 2>&1 \
+            || fail "APPLE_CERTIFICATE is not a .p12 this password opens. Either APPLE_CERTIFICATE_PASSWORD is not the password chosen when exporting it, or the file isn't a .p12 (a .cer downloaded from developer.apple.com has no private key and can't sign)."
+          # Without -v: the runner may not trust the chain, and the bundler doesn't need it to.
+          ids=$(security find-identity -p codesigning "$kc" | grep '"' | sed 's/^ *[0-9]*) [0-9A-F]* //' | sort -u)
+          echo "$ids" | grep -q '"' \
+            || fail "The .p12 opened but holds no signing identity: export it from My Certificates with the private key included."
+          echo "Identities in the certificate:"; echo "$ids" | sed 's/^/  /'
+          [ -n "$IDENTITY" ] || fail "APPLE_SIGNING_IDENTITY is not set. Use one of the names above, e.g. \"Developer ID Application: Name (TEAMID)\"."
+          echo "$ids" | grep -qF "\"$IDENTITY\"" \
+            || fail "APPLE_SIGNING_IDENTITY (\"$IDENTITY\") is not in the certificate. Use one of the names listed above."
+          echo "$IDENTITY" | grep -q "^Developer ID Application" \
+            || echo "::warning title=Signing certificate::\"$IDENTITY\" is not a Developer ID Application certificate; apps signed with it can't be notarized or opened without a warning outside this Mac."
+          {
+            echo "APPLE_CERTIFICATE=$b64"
+            echo "APPLE_CERTIFICATE_PASSWORD<<APPLE_PW_END"; echo "$CERT_PASSWORD"; echo "APPLE_PW_END"
+            echo "APPLE_SIGNING_IDENTITY=$IDENTITY"
+          } >> "$GITHUB_ENV"
+          if [ -n "$NOTARY_ID" ] && [ -n "$NOTARY_PASSWORD" ] && [ -n "$NOTARY_TEAM" ]; then
+            { echo "APPLE_ID=$NOTARY_ID"; echo "APPLE_PASSWORD=$NOTARY_PASSWORD"; echo "APPLE_TEAM_ID=$NOTARY_TEAM"; } >> "$GITHUB_ENV"
+          else
+            echo "::warning title=Not notarized::Set APPLE_ID, APPLE_PASSWORD (an app-specific password) and APPLE_TEAM_ID to notarize; without it Gatekeeper still warns on first open."
+          fi
       - uses: tauri-apps/tauri-action@v0
         id: build
         env:
           GITHUB_TOKEN: ${{ vars.RELEASES_REPO && secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # APPLE_* come from the "Signing certificate" step, only when usable.
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Orbital ${{ github.ref_name }}"

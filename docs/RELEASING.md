@@ -46,9 +46,12 @@ offered: send the `.dmg` to whoever tests them.
 4. Optional: Windows code signing, so SmartScreen doesn't warn (Azure
    Trusted Signing or a code-signing certificate, set up under
    `bundle.windows` in `src-tauri/tauri.windows.conf.json`).
-5. Optional: the `APPLE_*` secrets listed in `.github/workflows/release.yml`
-   for a signed and notarized app. Without them macOS warns on first open
-   (System Settings → Privacy & Security → Open Anyway, once).
+5. Optional, needs the paid Apple Developer Program: the `APPLE_*` secrets
+   listed in `.github/workflows/release.yml` for a Developer ID signed and
+   notarized app. Without them (the default) the app is ad-hoc signed and
+   macOS asks once before the first open: System Settings → Privacy &
+   Security → Open Anyway. Leave all `APPLE_*` secrets unset, not empty or
+   half set: a bad certificate stops the release.
 
 The address installed copies check is written into each build by the release
 workflow, from the repository it publishes to. A copy built before a move
