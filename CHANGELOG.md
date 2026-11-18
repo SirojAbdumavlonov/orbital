@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.2.0 (2026-11-18)
+
 ### Added
 - **Port forwarding is easy to find and use**: the Tunnels tab is now **Port forwarding**, and opens with a **From** (port on the server) → **To** (port on this computer) form, for example a container started with `-p 127.0.0.1:8080:8080` at `http://localhost:8080`. Docker shows each running container's published ports with a one-click forward (server-only ones marked); ⌘K has "Forward a port…".
 - **tmux**: the Terminal tab's tmux menu lists the server's tmux sessions to reattach and opens a new named one; a tmux session keeps running when Orbital disconnects. Settings → "Open terminals in tmux" makes every new terminal a tmux session (orbital-1, orbital-2, …, so after a restart the first terminal picks its session up again). Without tmux on the server you get a normal shell and a note.
