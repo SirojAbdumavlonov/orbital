@@ -260,7 +260,7 @@ async fn full_workflow_password_auth() {
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
     let b2 = buf.clone();
     let tid = engine
-        .open_terminal(&sid, 120, 30, Some(dir.clone()), false, move |ev| {
+        .open_terminal(&sid, 120, 30, Some(dir.clone()), false, Default::default(), move |ev| {
             if let TermEvent::Data(d) = ev {
                 b2.lock().unwrap().extend(d)
             }
@@ -1139,7 +1139,7 @@ async fn root_terminal_uses_saved_sudo_password_invisibly() {
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
     let b2 = buf.clone();
     let tid = engine
-        .open_terminal(&s.id, 120, 30, Some("/tmp".into()), true, move |ev| {
+        .open_terminal(&s.id, 120, 30, Some("/tmp".into()), true, Default::default(), move |ev| {
             if let TermEvent::Data(d) = ev {
                 b2.lock().unwrap().extend(d)
             }
@@ -1828,4 +1828,72 @@ async fn updates_list_and_refresh() {
         log.iter().any(|ev| ev.action == "updates.refresh"),
         "the refresh is in the activity log"
     );
+}
+
+/// A tmux terminal keeps running after it is closed, and is listed to reattach.
+#[tokio::test]
+async fn tmux_session_survives_closing_the_terminal() {
+    use orbital_core::terminal::Launch;
+    let Some(e) = env() else { return };
+    let Some(key) = e.key.clone() else { return };
+    let engine = engine();
+    let p = engine.create_profile(profile(&e, AuthMethod::Key, Some(key))).unwrap();
+    let a = connect(&engine, &p.id, None).await;
+    let has = engine.run_command(&a.id, "command -v tmux || true", false).await.unwrap();
+    if has.stdout.trim().is_empty() {
+        return; // no tmux on this machine
+    }
+    let name = format!("orbital-it-{}", std::process::id());
+    let tid = engine
+        .open_terminal(&a.id, 100, 30, None, false, Launch::Tmux { session: name.clone() }, |_| {})
+        .await
+        .unwrap();
+    let mut listed = false;
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if engine.tmux_sessions(&a.id, false).await.unwrap().iter().any(|s| s.name == name) {
+            listed = true;
+            break;
+        }
+    }
+    assert!(listed, "the tmux session started");
+    engine.terminal_close(&tid).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let after = engine.tmux_sessions(&a.id, false).await.unwrap();
+    assert!(
+        after.iter().any(|s| s.name == name && !s.attached),
+        "still there, detached: {after:?}"
+    );
+    engine
+        .run_command(&a.id, &format!("tmux kill-session -t {name}"), false)
+        .await
+        .unwrap();
+}
+
+/// Disk cleanup scans without changing anything; Stop process ends a process
+/// and refuses PID 1.
+#[tokio::test]
+async fn cleanup_scan_and_stop_process() {
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_USERS").is_err() {
+        return; // needs sudo with a password (CI)
+    }
+    let engine = engine();
+    let a = sudo_session(&engine, &e).await;
+    let items = engine.cleanup_scan(&a.id).await.unwrap();
+    assert!(items.iter().any(|i| i.id == "oldlogs"), "{items:?}");
+
+    let out = engine
+        .run_command(&a.id, "nohup sleep 300 >/dev/null 2>&1 & echo $!", false)
+        .await
+        .unwrap();
+    let pid: u32 = out.stdout.trim().parse().unwrap();
+    engine.stop_process(&a.id, pid, false).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let alive = engine
+        .run_command(&a.id, &format!("kill -0 {pid} 2>/dev/null && echo yes || echo no"), false)
+        .await
+        .unwrap();
+    assert_eq!(alive.stdout.trim(), "no");
+    assert!(matches!(engine.stop_process(&a.id, 1, true).await, Err(Error::InvalidInput(_))));
 }

@@ -1,4 +1,4 @@
-import type { CertbotStatus, Metrics, SshdReport, SystemInfo, UfwStatus } from "./api";
+import type { CertbotStatus, Container, Metrics, SshdReport, SystemInfo, UfwStatus } from "./api";
 import { bytes } from "./format";
 
 // Server checkup: what needs attention on a server, in plain words, each with
@@ -22,6 +22,8 @@ export interface CheckupInput {
   ufw: UfwStatus | "absent" | null;
   /** null: couldn't read it or certbot isn't installed. */
   certs: CertbotStatus | null;
+  /** Docker containers; null without Docker. */
+  containers?: Container[] | null;
 }
 
 const ORDER: Record<Level, number> = { bad: 0, warn: 1, ok: 2 };
@@ -38,8 +40,8 @@ export function checkup(x: CheckupInput): Finding[] {
       add({
         level: d.usedPercent >= 90 ? "bad" : "warn",
         title: `Disk ${d.mount} is ${d.usedPercent.toFixed(0)}% full`,
-        detail: `${bytes(d.availableBytes)} left of ${bytes(d.totalBytes)}. When it fills up, databases and logs stop writing and services fail. Monitor shows which folders use the space.`,
-        go: monitor,
+        detail: `${bytes(d.availableBytes)} left of ${bytes(d.totalBytes)}. When it fills up, databases and logs stop writing and services fail. Disk cleanup frees the usual leftovers; Monitor shows which folders use the rest.`,
+        go: { label: "Free up space", tab: "tool:cleanup" },
       });
     }
     if (!full.length && x.metrics.disks.length) add({ level: "ok", title: "Disks have room", detail: `Every disk is under 80% full.` });
@@ -107,6 +109,17 @@ export function checkup(x: CheckupInput): Finding[] {
       add({ level: "warn", title: "Certificates don't renew automatically", detail: `${x.certs.autoRenew.via} is off, so certificates will expire in 90 days.`, go: { label: "Open certificates", tab: "tool:certbot" } });
     }
     if (!worry && x.certs.certificates.length) add({ level: "ok", title: "Certificates are fine", detail: `${x.certs.certificates.length} valid, renewing automatically.` });
+  }
+
+  // Containers that keep restarting or stopped with an error
+  if (x.containers) {
+    const docker = { label: "Open Docker", tab: "tool:docker" };
+    const code = (c: Container) => Number(/\((\d+)\)/.exec(c.status)?.[1] ?? NaN);
+    const looping = x.containers.filter((c) => c.state === "restarting");
+    const crashed = x.containers.filter((c) => c.state === "exited" && code(c) !== 0 && code(c) !== 143 && !Number.isNaN(code(c)));
+    for (const c of looping) add({ level: "bad", title: `Container ${c.names} keeps restarting`, detail: "It starts, fails and starts again. Docker → the container shows why it stops and its last log lines.", go: docker });
+    for (const c of crashed) add({ level: "warn", title: `Container ${c.names} stopped with an error`, detail: `${c.status}. Docker → the container explains the exit code and shows its last log lines.`, go: docker });
+    if (!looping.length && !crashed.length && x.containers.length) add({ level: "ok", title: "Containers are fine", detail: `${x.containers.filter((c) => c.state === "running").length} running, none restarting or crashed.` });
   }
 
   return out.sort((a, b) => ORDER[a.level] - ORDER[b.level]);

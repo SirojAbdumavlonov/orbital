@@ -1,6 +1,6 @@
 import { AlertTriangle, ArrowUp, CheckCircle2, File, Folder, FolderOpen, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Bar, LiveNumber, Sparkline } from "../components/ui";
+import { Bar, confirm, LiveNumber, Sparkline } from "../components/ui";
 import { api, DiskUsage, Metrics, ProcessReport } from "../lib/api";
 import { asApiError } from "../lib/api";
 import { useRemote } from "../lib/remote";
@@ -10,6 +10,28 @@ import { SessionState, useStore } from "../store";
 const VIRT: Record<string, string> = { none: "Physical machine", kvm: "Virtual machine (KVM)", qemu: "Virtual machine (QEMU)", xen: "Virtual machine (Xen)", vmware: "Virtual machine (VMware)", microsoft: "Virtual machine (Hyper-V)", oracle: "Virtual machine (VirtualBox)", amazon: "Virtual machine (AWS Nitro)", lxc: "Container (LXC)", docker: "Container (Docker)", openvz: "Container (OpenVZ)", wsl: "WSL" };
 
 type UsageView = "byProgram" | "byService" | "byUser" | "processes";
+
+/** Ask, then stop a process: SIGTERM, and SIGKILL if the user asks to force it. */
+async function stopProcess(s: SessionState, pid: number, name: string) {
+  const ok = await confirm({
+    title: `Stop ${name} (PID ${pid})?`,
+    body: "It is asked to quit (SIGTERM), like Ctrl+C. If it belongs to a service, systemd may start it again; stop the service from Services instead.",
+    confirmLabel: "Stop process",
+    danger: true,
+  });
+  if (!ok) return;
+  const { toast } = useStore.getState();
+  try {
+    await api.stopProcess(s.info.id, pid, false);
+    toast({ kind: "success", title: `Asked ${name} to stop`, body: "If it doesn't, stop it again; Orbital then offers to force it." });
+  } catch (e) {
+    const err = asApiError(e);
+    if (err.kind === "Remote") {
+      const force = await confirm({ title: `${name} didn't stop. Force it?`, body: "SIGKILL ends it at once, without letting it save anything.", confirmLabel: "Force stop", danger: true });
+      if (force) await api.stopProcess(s.info.id, pid, true).then(() => toast({ kind: "success", title: `${name} was forced to stop` }), (x) => toast({ kind: "error", title: "Couldn't stop it", body: asApiError(x).message }));
+    } else toast({ kind: "error", title: `Couldn't stop ${name}`, body: err.message });
+  }
+}
 
 /** What is using the CPU and memory right now, by program, service, user or process. */
 function UsageByProgram({ s, memTotal }: { s: SessionState; memTotal: number }) {
@@ -34,8 +56,8 @@ function UsageByProgram({ s, memTotal }: { s: SessionState; memTotal: number }) 
   }, [s.info.id]);
 
   const rows = !r ? [] : view === "processes"
-    ? r.processes.map((p) => ({ key: String(p.pid), name: p.command, detail: `PID ${p.pid} · ${p.user}${p.unit ? ` · ${p.unit}` : ""}`, cpu: p.cpu, rss: p.rssBytes, count: 1 }))
-    : r[view].map((g) => ({ key: g.name, name: g.name, detail: `${g.processes} process${g.processes === 1 ? "" : "es"}`, cpu: g.cpu, rss: g.rssBytes, count: g.processes }));
+    ? r.processes.map((p) => ({ key: String(p.pid), pid: p.pid as number | null, name: p.command, detail: `PID ${p.pid} · ${p.user}${p.unit ? ` · ${p.unit}` : ""}`, cpu: p.cpu, rss: p.rssBytes, count: 1 }))
+    : r[view].map((g) => ({ key: g.name, pid: null as number | null, name: g.name, detail: `${g.processes} process${g.processes === 1 ? "" : "es"}`, cpu: g.cpu, rss: g.rssBytes, count: g.processes }));
   const sorted = [...rows].sort((a, b) => (sort === "cpu" ? b.cpu - a.cpu || b.rss - a.rss : b.rss - a.rss)).slice(0, 15);
   const capacity = (r?.cores ?? 1) * 100;
   return (
@@ -57,13 +79,14 @@ function UsageByProgram({ s, memTotal }: { s: SessionState; memTotal: number }) 
       {!r && !error && <p className="faint">Measuring…</p>}
       {r && (
         <table className="table">
-          <thead><tr><th>{view === "byService" ? "Service" : view === "byUser" ? "User" : "Program"}</th><th style={{ width: "28%" }}>CPU</th><th style={{ width: "28%" }}>Memory</th></tr></thead>
+          <thead><tr><th>{view === "byService" ? "Service" : view === "byUser" ? "User" : "Program"}</th><th style={{ width: "28%" }}>CPU</th><th style={{ width: "28%" }}>Memory</th>{view === "processes" && <th />}</tr></thead>
           <tbody>
             {sorted.map((x) => (
               <tr key={x.key}>
                 <td><span className="mono">{x.name}</span> <span className="faint" style={{ fontSize: 12 }}>{x.detail}</span></td>
                 <td><div className="usage-cell"><Bar value={Math.min(100, (x.cpu / capacity) * 100)} hot={x.cpu / capacity > 0.8} /><span>{x.cpu.toFixed(1)}%</span></div></td>
                 <td><div className="usage-cell"><Bar value={memTotal ? (x.rss / memTotal) * 100 : 0} hot={memTotal > 0 && x.rss / memTotal > 0.5} /><span>{bytes(x.rss)}</span></div></td>
+                {view === "processes" && <td style={{ width: 70, textAlign: "right" }}>{x.pid !== null && <button className="btn ghost" style={{ height: 24 }} title="Stop this process (asks first)" onClick={() => stopProcess(s, x.pid!, x.name)}>Stop</button>}</td>}
               </tr>
             ))}
           </tbody>

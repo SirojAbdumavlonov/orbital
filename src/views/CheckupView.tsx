@@ -15,15 +15,16 @@ export function CheckupView({ s }: { s: SessionState }) {
   async function run() {
     setBusy(true);
     const ok = <T,>(p: Promise<T>) => p.catch(() => null);
-    const [info, sshd, ufw, certs] = await Promise.all([
+    const [info, sshd, ufw, certs, containers] = await Promise.all([
       ok(api.systemInfo(sid)),
       ok(api.sshdReport(sid)),
       s.tools === null ? Promise.resolve(null) : has("ufw") ? ok(api.ufwStatus(sid)) : Promise.resolve("absent" as const),
       has("certbot") ? ok(api.certbotStatus(sid)) : Promise.resolve(null),
+      s.info.dockerVersion ? ok(api.listContainers(sid)) : Promise.resolve(null),
     ]);
     const all = useStore.getState().sessions[sid]?.metrics ?? [];
     const metrics = all[all.length - 1] ?? null;
-    setFound(checkup({ info, metrics, sshd, ufw, certs }));
+    setFound(checkup({ info, metrics, sshd, ufw, certs, containers }));
     setAt(Date.now());
     setBusy(false);
   }
@@ -47,7 +48,7 @@ export function CheckupView({ s }: { s: SessionState }) {
         <button className="btn" disabled={busy} onClick={run}><RefreshCw size={13} className={busy ? "spin" : ""} /> Check again</button>
       </div>
       <div className="scroll">
-        {!found && <div className="empty"><div><RefreshCw size={22} className="spin faint" /><p>Looking at disks, memory, services, updates, the firewall, SSH and certificates…</p></div></div>}
+        {!found && <div className="empty"><div><RefreshCw size={22} className="spin faint" /><p>Looking at disks, memory, services, containers, updates, the firewall, SSH and certificates…</p></div></div>}
         <ul className="checkup">
           {found?.map((f, i) => {
             const Icon = f.level === "bad" ? XCircle : f.level === "warn" ? AlertTriangle : CheckCircle2;

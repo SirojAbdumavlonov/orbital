@@ -22,7 +22,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Start disposable sshd
         run: |
-          sudo apt-get update && sudo apt-get install -y openssh-server ufw fail2ban certbot python3-venv nginx
+          sudo apt-get update && sudo apt-get install -y openssh-server ufw fail2ban certbot python3-venv tmux nginx
           sudo KEYDIR=/tmp/orbital-it-keys bash scripts/it-sshd.sh | tee /tmp/it-env
       - name: Start FTP, WebDAV and S3 test servers
         run: bash scripts/it-storage.sh | tail -n 1 | tee -a /tmp/it-env

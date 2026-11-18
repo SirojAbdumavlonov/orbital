@@ -1,9 +1,10 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
-import { CornerDownLeft, Plus, ShieldAlert, Sparkles, SquareTerminal, User, X } from "lucide-react";
+import { CornerDownLeft, Layers, Plus, ShieldAlert, Sparkles, SquareTerminal, User, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, asApiError } from "../lib/api";
+import { api, asApiError, TmuxSession } from "../lib/api";
+import { relativeTime } from "../lib/format";
 import { useAccentColor, useResolvedTheme, useSettings } from "../lib/settings";
 import { SessionState, TermTab, useStore } from "../store";
 import { LineTracker, suggest } from "../lib/suggest";
@@ -32,6 +33,7 @@ export function TerminalView({ s }: { s: SessionState }) {
               <button className="btn primary" onClick={() => openTerminal(sid, null)}><Plus size={14} /> New terminal</button>
             )}
           </div>
+          <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}><TmuxMenu s={s} label /></div>
           {canRoot && <p className="faint" style={{ marginTop: 12, fontSize: 12 }}>This server's settings allow sudo, so terminals can open as root. Change the default in Settings.</p>}
         </div>
       </div>
@@ -67,12 +69,69 @@ export function TerminalView({ s }: { s: SessionState }) {
             {asRoot ? <User size={14} /> : <ShieldAlert size={14} />}
           </button>
         )}
+        <TmuxMenu s={s} />
       </div>
       <div className="term-host">
         {s.terminals.map((t) => (
           <TerminalPane key={t.key} sid={sid} tab={t} visible={s.tab === "terminal" && t.key === s.activeTerminal} />
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * tmux: sessions on the server (to reattach after a disconnect, or from
+ * another computer) and a new named one. A tmux session keeps running when
+ * Orbital disconnects.
+ */
+function TmuxMenu({ s, label }: { s: SessionState; label?: boolean }) {
+  const openTerminal = useStore((x) => x.openTerminal);
+  const asRoot = useSettings((x) => x.terminalAsRoot) && s.info.elevation;
+  const [open, setOpen] = useState(false);
+  const [list, setList] = useState<TmuxSession[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    setList(null);
+    setErr(null);
+    api.tmuxSessions(s.info.id, asRoot).then(setList, (e) => setErr(asApiError(e).message));
+    const away = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, [open]);
+  const valid = /^[A-Za-z0-9_.][A-Za-z0-9_.-]{0,39}$/.test(name);
+  const go = (session: string) => {
+    openTerminal(s.info.id, null, asRoot, { kind: "tmux", session });
+    setOpen(false);
+    setName("");
+  };
+  return (
+    <div className="tmux-menu" ref={box}>
+      <button className={label ? "btn" : "icon-btn"} aria-label="tmux sessions" title="tmux: sessions that keep running when you disconnect" onClick={() => setOpen(!open)}>
+        <Layers size={14} />{label && " tmux sessions"}
+      </button>
+      {open && (
+        <div className="tmux-pop" role="dialog" aria-label="tmux sessions">
+          <b>tmux sessions{asRoot ? " (root)" : ""}</b>
+          <p className="faint">Keep running when Orbital disconnects; open one again to pick up where you left off.</p>
+          {err && <div className="alert">{err}</div>}
+          {!list && !err && <div className="faint">Looking…</div>}
+          {list?.length === 0 && <div className="faint">None running on this server.</div>}
+          {list?.map((t) => (
+            <button key={t.name} className="tmux-row" onClick={() => go(t.name)}>
+              <span className="mono">{t.name}</span>
+              <span className="faint">{t.windows} {t.windows === 1 ? "window" : "windows"}{t.created ? ` · ${relativeTime(t.created)}` : ""}{t.attached ? " · open elsewhere" : ""}</span>
+            </button>
+          ))}
+          <form className="tmux-new" onSubmit={(e) => { e.preventDefault(); if (valid) go(name); }}>
+            <input className="input mono" placeholder="new session name" value={name} onChange={(e) => setName(e.target.value)} />
+            <button className="btn primary" disabled={!valid}>Open</button>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
@@ -218,7 +277,7 @@ function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visibl
       .openTerminal(sid, term.cols || 100, term.rows || 30, tab.cwd, tab.root, (m) => {
         if (m.type === "data") term.write(decode(m.data));
         else term.write(`\r\n\x1b[2m[session ended${m.code != null ? ` with code ${m.code}` : ""}]\x1b[0m\r\n`);
-      })
+      }, tab.launch)
       .then((tid) => {
         if (disposed) return api.terminalClose(tid);
         tidRef.current = tid;

@@ -9,7 +9,7 @@
 //! sudo has accepted it are held back (`InputGate`): sudo would otherwise read
 //! them as the password, and the real password would then reach the shell.
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::profiles::SudoMode;
 use crate::secrets::Secret;
 use crate::shell::quote;
@@ -78,6 +78,98 @@ pub(crate) fn shell_command(cwd: Option<&str>, root: Option<SudoMode>) -> Option
             cd.unwrap_or_default()
         )),
     }
+}
+
+/// What a terminal runs.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Launch {
+    /// The login shell (or a root shell).
+    #[default]
+    Shell,
+    /// A tmux session, created or reattached by name: it keeps running when
+    /// Orbital disconnects, and the next terminal with that name picks it up.
+    Tmux { session: String },
+    /// A shell inside a Docker container (bash when it has one, else sh).
+    Container { id: String },
+}
+
+/// tmux session names Orbital accepts: letters, digits, `-`, `_` and `.`.
+pub fn validate_tmux_name(n: &str) -> Result<&str> {
+    let ok = !n.is_empty() && n.len() <= 40 && n.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) && !n.starts_with('-');
+    if ok {
+        Ok(n)
+    } else {
+        Err(Error::InvalidInput(
+            "a tmux session name is letters, digits, '-', '_' or '.' (up to 40)".into(),
+        ))
+    }
+}
+
+const NO_TMUX: &str = "Orbital: tmux is not installed on this server (apt install tmux, or dnf install tmux), so this is a plain shell.";
+
+/// The command a terminal runs, or None for the login shell as it is.
+pub(crate) fn launch_command(cwd: Option<&str>, root: Option<SudoMode>, launch: &Launch) -> Result<Option<String>> {
+    // How root commands are started: sudo with Orbital's marker prompt (answered
+    // with the saved password), or passwordless sudo.
+    let sudo = |cmd: &str| match root {
+        None => format!("exec {cmd}"),
+        Some(SudoMode::Password) => format!("exec sudo -p {} {cmd}", quote(SUDO_MARKER)),
+        Some(_) => format!("exec sudo -n {cmd}"),
+    };
+    let cd = cwd.map(|d| format!("cd -- {} 2>/dev/null || cd; ", quote(d))).unwrap_or_default();
+    match launch {
+        Launch::Shell => Ok(shell_command(cwd, root)),
+        Launch::Tmux { session } => {
+            let name = quote(validate_tmux_name(session)?);
+            let fallback = shell_command(cwd, root).unwrap_or_else(|| "exec \"${SHELL:-/bin/sh}\" -l".into());
+            // The fallback repeats the cd; harmless.
+            let fallback = fallback.split("; ").last().unwrap_or(&fallback).to_string();
+            Ok(Some(format!(
+                "{cd}if command -v tmux >/dev/null 2>&1; then {}; fi; printf '%s\\r\\n' {}; {fallback}",
+                sudo(&format!("tmux new-session -A -s {name}")),
+                quote(NO_TMUX)
+            )))
+        }
+        Launch::Container { id } => {
+            let id = crate::shell::validate_container(id)?;
+            let inner = quote("command -v bash >/dev/null 2>&1 && exec bash || exec sh");
+            Ok(Some(sudo(&format!("docker exec -it {} sh -c {inner}", quote(id)))))
+        }
+    }
+}
+
+/// A tmux session on the server.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TmuxSession {
+    pub name: String,
+    pub windows: u32,
+    /// Shown in another terminal right now.
+    pub attached: bool,
+    /// Unix seconds.
+    pub created: Option<i64>,
+}
+
+pub(crate) const TMUX_LIST: &str =
+    "tmux ls -F '#{session_name}|#{session_windows}|#{session_attached}|#{session_created}' 2>/dev/null; true";
+
+pub fn parse_tmux_ls(out: &str) -> Vec<TmuxSession> {
+    out.lines()
+        .filter_map(|l| {
+            let mut f = l.split('|');
+            let name = f.next()?.trim();
+            let windows = f.next()?.trim().parse().ok()?;
+            let attached = f.next()?.trim() != "0";
+            let created = f.next().and_then(|c| c.trim().parse().ok());
+            (!name.is_empty()).then(|| TmuxSession {
+                name: name.to_string(),
+                windows,
+                attached,
+                created,
+            })
+        })
+        .collect()
 }
 
 /// Keys typed while a root shell is still being set up. Most of the time it
@@ -233,7 +325,25 @@ impl SshSession {
         self.elevation_needed()
     }
 
-    pub async fn open_terminal<F>(&self, cols: u32, rows: u32, cwd: Option<String>, as_root: bool, sink: F) -> Result<Terminal>
+    /// tmux sessions on the server (root's when `root` and sudo works).
+    pub async fn tmux_sessions(&self, root: bool) -> Result<Vec<TmuxSession>> {
+        let out = if root && self.elevation_needed() {
+            self.exec_privileged(TMUX_LIST).await?
+        } else {
+            self.exec(TMUX_LIST).await?
+        };
+        Ok(parse_tmux_ls(&out.stdout))
+    }
+
+    pub async fn open_terminal<F>(
+        &self,
+        cols: u32,
+        rows: u32,
+        cwd: Option<String>,
+        as_root: bool,
+        launch: &Launch,
+        sink: F,
+    ) -> Result<Terminal>
     where
         F: Fn(TermEvent) + Send + Sync + 'static,
     {
@@ -243,7 +353,7 @@ impl SshSession {
         let ch = self.handle().channel_open_session().await?;
         ch.request_pty(true, "xterm-256color", cols.max(1), rows.max(1), 0, 0, &[]).await?;
         ch.set_env(true, "COLORTERM", "truecolor").await.ok();
-        match shell_command(cwd.as_deref(), root_mode) {
+        match launch_command(cwd.as_deref(), root_mode, launch)? {
             Some(cmd) => ch.exec(true, cmd).await?,
             None => ch.request_shell(true).await?,
         }
@@ -380,6 +490,48 @@ impl SshSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_commands() {
+        let tmux = |n: &str| Launch::Tmux { session: n.into() };
+        let user = launch_command(None, None, &tmux("work")).unwrap().unwrap();
+        assert!(
+            user.starts_with("if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s work; fi;"),
+            "{user}"
+        );
+        assert!(user.ends_with("exec \"${SHELL:-/bin/sh}\" -l"), "falls back to a shell: {user}");
+        let root = launch_command(Some("/srv/app"), Some(SudoMode::Password), &tmux("deploy-1"))
+            .unwrap()
+            .unwrap();
+        assert!(root.starts_with("cd -- /srv/app 2>/dev/null || cd; if command -v tmux"), "{root}");
+        assert!(
+            root.contains("exec sudo -p '[orbital:sudo]' tmux new-session -A -s deploy-1"),
+            "{root}"
+        );
+        assert!(launch_command(None, None, &tmux("x; rm -rf /")).is_err());
+        assert!(launch_command(None, None, &tmux("-t")).is_err());
+
+        let c = launch_command(None, Some(SudoMode::NoPassword), &Launch::Container { id: "shop-web-1".into() })
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            c,
+            "exec sudo -n docker exec -it shop-web-1 sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'"
+        );
+        assert!(launch_command(None, None, &Launch::Container { id: "a;b".into() }).is_err());
+        assert_eq!(launch_command(None, None, &Launch::Shell).unwrap(), None);
+    }
+
+    #[test]
+    fn parses_tmux_ls() {
+        let s = parse_tmux_ls("work|3|1|1763300000\nbuild|1|0|1763303600\n\nnoise\n");
+        assert_eq!(s.len(), 2);
+        assert_eq!((s[0].name.as_str(), s[0].windows, s[0].attached), ("work", 3, true));
+        assert_eq!(
+            (s[1].name.as_str(), s[1].attached, s[1].created),
+            ("build", false, Some(1763303600))
+        );
+    }
 
     #[test]
     fn shell_commands() {

@@ -33,6 +33,8 @@ export interface Settings {
   sshConfigPath: string;
   /** Suggest commands under the terminal (from the server's shell history and common next steps). */
   terminalSuggestions: boolean;
+  /** New terminals run in tmux, so they survive disconnects and can be reattached. */
+  terminalTmux: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -48,6 +50,7 @@ const DEFAULTS: Settings = {
   autoUpdates: true,
   sshConfigPath: "",
   terminalSuggestions: true,
+  terminalTmux: false,
 };
 
 const KEY = "orbital.settings";

@@ -136,6 +136,9 @@ export function SettingsView() {
             <input type="checkbox" className="switch" checked={st.terminalAsRoot} onChange={(e) => st.set({ terminalAsRoot: e.target.checked })} />
           </Row>
           <Row title="Font size"><Stepper value={st.terminalFontSize} min={10} max={22} unit="pt" onChange={(v) => st.set({ terminalFontSize: v })} /></Row>
+          <Row title="Open terminals in tmux" hint="New terminals run inside tmux (sessions orbital-1, orbital-2, …), so a long command keeps going when the connection drops, and opening a terminal again picks the session up. Needs tmux on the server; without it you get a normal shell.">
+            <input type="checkbox" className="switch" checked={st.terminalTmux} onChange={(e) => st.set({ terminalTmux: e.target.checked })} />
+          </Row>
           <Row title="Suggest commands" hint="Under the terminal: commands from the server's shell history that start with what you typed, and common next steps (after nginx -t, reload nginx). → or a click types one; Enter is always yours. History lines that look like they hold a password are left out.">
             <input type="checkbox" className="switch" checked={st.terminalSuggestions} onChange={(e) => st.set({ terminalSuggestions: e.target.checked })} />
           </Row>

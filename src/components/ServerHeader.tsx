@@ -1,4 +1,4 @@
-import { PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound } from "lucide-react";
+import { HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound } from "lucide-react";
 import { Activity, Boxes, Cable, Clock, Cpu, Database, FolderTree, Gauge, Globe, ListChecks, LockKeyhole, Network, Plus, RefreshCw, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, asApiError, DetectedTool } from "../lib/api";
@@ -24,10 +24,11 @@ export const toolIcon = (t?: DetectedTool) => (t && CATEGORY_ICON[t.category]) |
 /** Tabs that exist on every server, with no detected software behind them. */
 const BUILTIN: Record<string, { name: string; hint: string; icon: typeof Gauge }> = {
   checkup: { name: "Checkup", hint: "What needs attention on this server, and how to fix it", icon: Stethoscope },
+  cleanup: { name: "Disk cleanup", hint: "Free space: old journal, package cache, Docker leftovers", icon: HardDrive },
   updates: { name: "Updates", hint: "Install package and security updates; reboot", icon: PackageCheck },
   deploy: { name: "Deploy", hint: "Pull, build and restart your app; roll back", icon: Rocket },
   logs: { name: "Logs", hint: "Follow log files, services and containers live", icon: ScrollText },
-  tunnels: { name: "Tunnels", hint: "Use the server's ports from this computer", icon: ArrowLeftRight },
+  tunnels: { name: "Port forwarding", hint: "Use a server port (or a container on 127.0.0.1) at localhost here", icon: ArrowLeftRight },
   ports: { name: "Open ports", hint: "What listens where, and who can reach it", icon: Cable },
   users: { name: "Users", hint: "Accounts, groups, sudo and SSH keys", icon: UsersIcon },
   sshkeys: { name: "SSH keys", hint: "Who can sign in with a key; make and install keys", icon: KeyRound },

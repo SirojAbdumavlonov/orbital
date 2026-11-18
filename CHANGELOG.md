@@ -4,6 +4,19 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Port forwarding is easy to find and use**: the Tunnels tab is now **Port forwarding**, and opens with a **From** (port on the server) → **To** (port on this computer) form, for example a container started with `-p 127.0.0.1:8080:8080` at `http://localhost:8080`. Docker shows each running container's published ports with a one-click forward (server-only ones marked); ⌘K has "Forward a port…".
+- **tmux**: the Terminal tab's tmux menu lists the server's tmux sessions to reattach and opens a new named one; a tmux session keeps running when Orbital disconnects. Settings → "Open terminals in tmux" makes every new terminal a tmux session (orbital-1, orbital-2, …, so after a restart the first terminal picks its session up again). Without tmux on the server you get a normal shell and a note.
+- **"Why did it stop?" for containers**: a container that crashed, keeps restarting or fails its health check gets a panel in Docker that explains it in plain words: the exit code (137 killed, often out of memory; 139 crashed; 127 command not found; …), whether Docker killed it for using too much memory and its memory limit, how many times it was restarted, and the usual causes found in its last log lines (a port already in use, a database it can't reach, a missing file or environment variable, permission denied), with those lines below. Checkup lists containers that keep restarting or stopped with an error.
+- **Shell inside a container**: Docker → a running container → **Shell** opens a terminal in it (`docker exec`, bash if it has it, else sh).
+- **Disk cleanup** tab: how much the system journal (beyond 7 days), the package download cache, rotated old logs and Docker leftovers use, and **Free** for each, as a job with live output. Files, databases, current logs and Docker volumes are never touched. Checkup's "disk full" now points here.
+- **Stop a process** from Monitor → What uses the CPU and memory → Processes: asks, sends SIGTERM, and offers to force it if it doesn't stop. PID 1 and sshd are refused.
+- **Mouse back and forward buttons** go back and forward through folders in Files too (and between tabs and pages as before). On macOS Orbital catches the buttons itself, since the web view doesn't pass them on reliably.
+
+### Fixed
+- Clicking a server several times while it was connecting opened several connections and tabs for it; now only the first click connects.
+
+
 ## 1.1.1 (2026-11-17)
 
 ### Added

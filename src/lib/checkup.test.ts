@@ -39,6 +39,16 @@ describe("checkup", () => {
     expect(f.find((x) => x.title.startsWith("Only "))?.level).toBe("bad");
   });
 
+  it("flags containers that restart or crashed", () => {
+    const c = (names: string, state: string, status: string) => ({ id: names, names, image: "x", state, status, ports: "", createdAt: "", composeProject: null });
+    const f = checkup({ info: null, metrics: null, sshd: null, ufw: null, certs: null, containers: [c("web", "running", "Up 2 days"), c("worker", "restarting", "Restarting (1) 5 seconds ago"), c("job", "exited", "Exited (137) 1 hour ago"), c("old", "exited", "Exited (0) 3 days ago")] });
+    expect(f.map((x) => [x.level, x.title])).toEqual([
+      ["bad", "Container worker keeps restarting"],
+      ["warn", "Container job stopped with an error"],
+    ]);
+    expect(f[0].go?.tab).toBe("tool:docker");
+  });
+
   it("missing data is skipped, not reported as a problem", () => {
     expect(checkup({ info: null, metrics: null, sshd: null, ufw: null, certs: null })).toEqual([]);
   });

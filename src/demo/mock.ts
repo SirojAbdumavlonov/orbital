@@ -370,6 +370,14 @@ async function progress(ch: any, events: ([number, any] | [number, "step" | "lin
 const transferEvents = (files: number, total: number, names: string[], ms: number) =>
   Array.from({ length: 12 }, (_, i) => [ms / 12, { type: "transfer", files: Math.round(((i + 1) / 12) * files), bytes: Math.round(((i + 1) / 12) * total), current: names[i % names.length] }] as [number, any]);
 
+const cleaned = new Set<string>();
+const cleanupItems = () => [
+  { id: "journal", title: "System journal older than a week", detail: "systemd's log of everything. The last 7 days are kept.", bytes: cleaned.has("journal") ? 88 * MB : 700 * MB },
+  { id: "apt", title: "Downloaded package files (apt)", detail: "Installers apt kept after installing updates. Downloaded again if ever needed.", bytes: cleaned.has("apt") ? 0 : 214 * MB },
+  { id: "oldlogs", title: "Rotated old log files", detail: "Compressed and numbered logs in /var/log (*.gz, *.1, *.old). Current logs are kept.", bytes: cleaned.has("oldlogs") ? 0 : 96 * MB },
+  { id: "docker", title: "Docker leftovers", detail: "Stopped containers, unused networks, dangling images and build cache. Running containers and volumes (data) are kept.", bytes: cleaned.has("docker") ? 0 : 1900 * MB },
+  { id: "dockerimages", title: "Docker images no container uses", detail: "Pulled again when a container needs one. Can take a while to download later.", bytes: cleaned.has("dockerimages") ? 0 : 3100 * MB },
+];
 let upgraded = false;
 const updatesReport = () => ({
   manager: "apt",
@@ -799,6 +807,13 @@ export function install() {
       }
       case "notify": return null;
       case "cancel_job": stopped.add(args.id); return true;
+      case "tmux_sessions": return [{ name: "orbital-1", windows: 2, attached: false, created: Math.floor(Date.now() / 1000) - 3 * 3600 }, { name: "deploy", windows: 1, attached: false, created: Math.floor(Date.now() / 1000) - 86400 }];
+      case "cleanup_scan": return cleanupItems();
+      case "cleanup_run":
+        await progress(args.progress, [[0, "step", "Freeing space …"], [700, "line", args.id === "journal" ? "Vacuuming done, freed 612.0M of archived journals from /var/log/journal/3f2a." : args.id.startsWith("docker") ? "Total reclaimed space: 1.9GB" : "Done."], [600, "step", "Measuring again …"]]);
+        cleaned.add(args.id);
+        return cleanupItems();
+      case "stop_process": if (args.pid <= 1) throw { kind: "InvalidInput", message: "Invalid input: PID 1 is the system itself" }; return null;
       case "updates": return updatesReport();
       case "refresh_updates":
         await progress(args.progress, [[0, "step", "Asking the package mirrors for new versions …"], [400, "line", "Hit:1 http://archive.ubuntu.com/ubuntu noble InRelease"], [700, "line", "Get:2 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]"], [900, "line", "Get:3 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]"], [1200, "line", "Fetched 1,822 kB in 2s (912 kB/s)"], [500, "line", "Reading package lists..."], [400, "step", "Listing what can be upgraded …"]]);
@@ -917,10 +932,13 @@ export function install() {
       };
       case "list_containers": return containers;
       case "container_stats": return containers.filter((c) => c.state === "running").map((c, i) => ({ id: c.id, name: c.names, cpuPercent: `${(0.4 + i * 3.7).toFixed(2)}%`, memUsage: `${120 + i * 210}MiB / 15.5GiB`, memPercent: "2.1%", netIo: "1.2GB / 900MB", blockIo: "0B / 0B", pids: "12" }));
-      case "container_logs": return "2026-11-15T01:02:11.120Z  INFO  Started ShopApiApplication in 6.81 seconds\n2026-11-15T01:02:12.004Z  INFO  Tomcat started on port 8081 (http)\n2026-11-15T01:04:40.551Z  WARN  Slow query: SELECT * FROM orders WHERE … (1840 ms)\n";
+      case "container_logs":
+        if (containers.find((x) => x.id === args.id)?.state === "restarting") return "2026-11-18T09:41:02.118Z  INFO  shop-worker 2.14.0 starting\n2026-11-18T09:41:02.410Z  INFO  Connecting to postgres://db:5432/shop\n2026-11-18T09:41:07.415Z  ERROR Error: connect ECONNREFUSED 127.0.0.1:5432\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1606:16)\n2026-11-18T09:41:07.416Z  FATAL worker can't start without the database, exiting\n";
+        return "2026-11-15T01:02:11.120Z  INFO  Started ShopApiApplication in 6.81 seconds\n2026-11-15T01:02:12.004Z  INFO  Tomcat started on port 8081 (http)\n2026-11-15T01:04:40.551Z  WARN  Slow query: SELECT * FROM orders WHERE … (1840 ms)\n";
       case "inspect_container": {
         const c = containers.find((x) => x.id === args.id);
         const labels = c?.composeProject ? { "com.docker.compose.project": c.composeProject, "com.docker.compose.service": c.names.replace(`${c.composeProject}-`, "").replace(/-\d+$/, ""), "com.docker.compose.project.config_files": `/srv/${c.composeProject}/docker-compose.yml`, "com.docker.compose.project.working_dir": `/srv/${c.composeProject}` } : {};
+        if (c?.state === "restarting") return { Id: args.id, RestartCount: 14, HostConfig: { RestartPolicy: { Name: "always" }, Memory: 0 }, Config: { Image: c.image, Env: ["TZ=Asia/Tashkent"], Labels: labels }, State: { Status: "restarting", Restarting: true, ExitCode: 1, OOMKilled: false, Error: "", FinishedAt: new Date(Date.now() - 12_000).toISOString() } };
         return { Id: args.id, Config: { Image: c?.image ?? "nginx:1.27-alpine", Env: ["TZ=Asia/Tashkent"], Labels: labels }, State: { Status: "running", Health: { Status: "healthy" } } };
       }
       case "compose_action":

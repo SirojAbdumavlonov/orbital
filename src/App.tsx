@@ -1,6 +1,7 @@
 import { PanelRightClose } from "lucide-react";
 import { CheckupView } from "./views/CheckupView";
 import { UpdatesView } from "./views/UpdatesView";
+import { CleanupView } from "./views/CleanupView";
 import { useEffect } from "react";
 import { Modal } from "./components/ui";
 import { useNavigationGestures } from "./lib/navigation";
@@ -61,6 +62,7 @@ const GLOBAL_TITLES = {
 const TOOL_VIEWS: Record<string, (p: { s: SessionState }) => JSX.Element> = {
   checkup: CheckupView,
   updates: UpdatesView,
+  cleanup: CleanupView,
   docker: DockerView,
   nginx: NginxView,
   ufw: FirewallView,

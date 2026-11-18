@@ -5,6 +5,7 @@
 
 pub mod audit;
 pub mod certbot;
+pub mod cleanup;
 pub mod config_edit;
 pub mod cron;
 pub mod databases;

@@ -87,9 +87,20 @@ export function TunnelsView({ s }: { s: SessionState }) {
   return (
     <div className="view">
       <div className="scroll">
-        <div className="section-title">Open on this computer</div>
+        <div className="section-title">Forward a port</div>
+        <form className="tunnel-form" onSubmit={(e) => { e.preventDefault(); if (remotePort) void open(Number(remotePort), remoteHost.trim() || "localhost", localPort ? Number(localPort) : null); }}>
+          <label className="field"><span>From: port on the server</span><input className="input mono" inputMode="numeric" autoFocus placeholder="8080" value={remotePort} onChange={(e) => setRemotePort(e.target.value.replace(/\D/g, ""))} /></label>
+          <ArrowRight size={16} className="faint" style={{ alignSelf: "flex-end", marginBottom: 8 }} />
+          <label className="field"><span>To: port on this computer</span><input className="input mono" inputMode="numeric" placeholder={remotePort || "same, if free"} value={localPort} onChange={(e) => setLocalPort(e.target.value.replace(/\D/g, ""))} /></label>
+          <label className="field"><span>Server-side host</span><input className="input mono" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} title="localhost for ports on the server itself (also containers published on 127.0.0.1); another address for machines only the server can reach" /></label>
+          <button className="btn primary" disabled={busy || !remotePort}><Cable size={13} /> Forward</button>
+        </form>
+        <p className="footnote" style={{ marginTop: 4 }}>
+          Example: a container started with <span className="mono">-p 127.0.0.1:8080:8080</span> is only reachable on the server. Forward 8080 → 8080 and open <span className="mono">http://localhost:8080</span> here.
+        </p>
+        <div className="section-title">Forwarded now</div>
         {tunnels.length === 0 ? (
-          <div className="empty" style={{ flex: "none", padding: 18 }}><div><Cable size={24} className="faint" /><p>No tunnels yet. Pick a port below to use it from apps on your computer, as if it ran locally.</p></div></div>
+          <div className="empty" style={{ flex: "none", padding: 18 }}><div><Cable size={24} className="faint" /><p>Nothing forwarded yet. Use the form above, or pick a port the server listens on below.</p></div></div>
         ) : (
           <table className="table">
             <thead><tr><th>On your computer</th><th /><th>On the server</th><th className="num">Connections</th><th className="num">Traffic</th><th /></tr></thead>
@@ -122,13 +133,6 @@ export function TunnelsView({ s }: { s: SessionState }) {
           </div>
         </>}
 
-        <div className="section-title">Forward any port</div>
-        <div className="tunnel-form">
-          <label className="field"><span>Port on the server</span><input className="input mono" inputMode="numeric" placeholder="5432" value={remotePort} onChange={(e) => setRemotePort(e.target.value.replace(/\D/g, ""))} /></label>
-          <label className="field"><span>Host, as the server sees it</span><input className="input mono" value={remoteHost} onChange={(e) => setRemoteHost(e.target.value)} /></label>
-          <label className="field"><span>Port on this computer</span><input className="input mono" inputMode="numeric" placeholder="same, if free" value={localPort} onChange={(e) => setLocalPort(e.target.value.replace(/\D/g, ""))} /></label>
-          <button className="btn primary" disabled={busy || !remotePort} onClick={() => open(Number(remotePort), remoteHost.trim() || "localhost", localPort ? Number(localPort) : null)}><Cable size={13} /> Open tunnel</button>
-        </div>
         <p className="footnote">
           A tunnel listens only on 127.0.0.1, so other computers on your network can't use it, and it travels inside the SSH connection: nothing is opened in the server's firewall.
           "Host as the server sees it" can also be another machine on the server's network, for example a database server only it can reach.

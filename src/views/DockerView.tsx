@@ -1,8 +1,11 @@
-import { ArrowDownWideNarrow, ArrowUpNarrowWide, Braces, Download, FileCode2, Pause, Pencil, Play, RefreshCw, RotateCw, ScrollText, Search, Square, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, Cable, SquareTerminal, ArrowDownWideNarrow, ArrowUpNarrowWide, Braces, Download, FileCode2, Pause, Pencil, Play, RefreshCw, RotateCw, ScrollText, Search, Square, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { confirm, StateDot, DrawerClose } from "../components/ui";
 import { Modal } from "../components/ui";
 import { api, asApiError, ComposeAction, ComposeTarget, Container, ContainerAction, ContainerStats, ExecOutput } from "../lib/api";
+import { crashFacts, explain, lastLines } from "../lib/containerCrash";
+import { publishedPorts } from "../lib/ports";
+import { forward } from "./TunnelsView";
 import { runJob, useRunningJob } from "../lib/jobs";
 import { JobProgress } from "../components/JobProgress";
 import { SessionState, useStore } from "../store";
@@ -270,8 +273,24 @@ export function DockerView({ s }: { s: SessionState }) {
                 {cur.state === "paused" && <button className="btn" disabled={busy} onClick={() => act("unpause")}><Play size={13} /> Resume</button>}
                 {cur.state === "running" && <button className="btn danger" disabled={busy} onClick={() => act("stop")}><Square size={13} /> Stop</button>}
                 <button className="btn danger" disabled={busy} onClick={() => act(cur.state === "running" ? "forceRemove" : "remove")}><Trash2 size={13} /> Remove</button>
+                {cur.state === "running" && (
+                  <button className="btn" title="Open a shell inside this container (docker exec)" onClick={() => useStore.getState().openTerminal(sid, null, s.info.elevation, { kind: "container", id: cur.names.split(",")[0] })}>
+                    <SquareTerminal size={13} /> Shell
+                  </button>
+                )}
               </div>
+              {cur.state === "running" && publishedPorts(cur.ports).length > 0 && (
+                <div className="port-forward">
+                  <span className="faint">Use on this computer:</span>
+                  {publishedPorts(cur.ports).map((p) => (
+                    <button key={`${p.host}:${p.port}`} className="chip" title={`Forward port ${p.port} on the server to localhost on this computer, through SSH${p.localOnly ? " (it only listens on the server itself)" : ""}`} onClick={() => void forward(s, p.port)}>
+                      <Cable size={12} /> {p.port}{p.localOnly ? " · server-only" : ""}
+                    </button>
+                  ))}
+                </div>
+              )}
               {job && <JobProgress job={job} compact />}
+              <CrashPanel inspect={inspect} logs={logs} onLogs={() => setPane("logs")} />
               <div className="toolbar">
                 <div className="segmented">
                   <button className={pane === "logs" ? "on" : ""} onClick={() => setPane("logs")}><ScrollText size={12} /> Logs</button>
@@ -288,6 +307,27 @@ export function DockerView({ s }: { s: SessionState }) {
           )}
         </aside>
       </div>
+    </div>
+  );
+}
+
+
+/** "Why did it stop?": shown for a container that crashed, restarts or is unhealthy. */
+function CrashPanel({ inspect, logs, onLogs }: { inspect: any; logs: string; onLogs: () => void }) {
+  const facts = crashFacts(inspect);
+  const e = facts && explain(facts, logs);
+  if (!facts || !e) return null;
+  const tail = lastLines(logs, 12);
+  return (
+    <div className={`crash ${e.level}`}>
+      <div className="crash-head"><AlertTriangle size={15} /> <b>{e.headline}</b>{facts.finishedAt && <span className="faint"> · {new Date(facts.finishedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>}</div>
+      <ul>{e.hints.map((h, i) => <li key={i}>{h}</li>)}</ul>
+      {tail && tail !== "Loading…" && (
+        <>
+          <div className="faint crash-sub">Last log lines <button className="link" onClick={onLogs}>all logs</button></div>
+          <pre className="crash-log mono">{tail}</pre>
+        </>
+      )}
     </div>
   );
 }

@@ -895,6 +895,27 @@ export interface UpdatesReport {
   refreshedAt: number | null;
 }
 
+// ---------- disk cleanup ----------
+
+export interface CleanupItem {
+  id: string;
+  title: string;
+  detail: string;
+  bytes: number | null;
+}
+
+// ---------- terminals: what they run ----------
+
+/** A login shell, a tmux session (created or reattached by name), or a shell inside a Docker container. */
+export type TermLaunch = { kind: "shell" } | { kind: "tmux"; session: string } | { kind: "container"; id: string };
+
+export interface TmuxSession {
+  name: string;
+  windows: number;
+  attached: boolean;
+  created: number | null;
+}
+
 // ---------- job progress (orbital_core::progress) ----------
 
 /** What a long operation reports while it runs. */
@@ -916,6 +937,10 @@ function progressChannel(onProgress?: OnProgress) {
 }
 
 export const api = {
+  cleanupScan: (sessionId: string) => invoke<CleanupItem[]>("cleanup_scan", { sessionId }),
+  cleanupRun: (sessionId: string, id: string, onProgress?: OnProgress) => invoke<CleanupItem[]>("cleanup_run", { sessionId, id, progress: progressChannel(onProgress) }),
+  /** SIGTERM (or SIGKILL with force). PID 1 and sshd are refused. */
+  stopProcess: (sessionId: string, pid: number, force: boolean) => invoke<void>("stop_process", { sessionId, pid, force }),
   updates: (sessionId: string) => invoke<UpdatesReport>("updates", { sessionId }),
   refreshUpdates: (sessionId: string, onProgress?: OnProgress) => invoke<UpdatesReport>("refresh_updates", { sessionId, progress: progressChannel(onProgress) }),
   installUpdates: (sessionId: string, onProgress?: OnProgress) => invoke<ExecOutput>("install_updates", { sessionId, progress: progressChannel(onProgress) }),
@@ -1065,11 +1090,13 @@ export const api = {
   runCommand: (sessionId: string, command: string, privileged: boolean) =>
     invoke<ExecOutput>("run_command", { sessionId, command, privileged }),
 
-  openTerminal: (sessionId: string, cols: number, rows: number, cwd: string | null, asRoot: boolean, onEvent: (m: TermMessage) => void) => {
+  openTerminal: (sessionId: string, cols: number, rows: number, cwd: string | null, asRoot: boolean, onEvent: (m: TermMessage) => void, launch: TermLaunch = { kind: "shell" }) => {
     const ch = new Channel<TermMessage>();
     ch.onmessage = onEvent;
-    return invoke<string>("open_terminal", { sessionId, cols, rows, cwd, asRoot, onEvent: ch });
+    return invoke<string>("open_terminal", { sessionId, cols, rows, cwd, asRoot, launch, onEvent: ch });
   },
+  /** tmux sessions on the server, to reattach (root's for root terminals). */
+  tmuxSessions: (sessionId: string, root: boolean) => invoke<TmuxSession[]>("tmux_sessions", { sessionId, root }),
   terminalWrite: (terminalId: string, data: string) => invoke<void>("terminal_write", { terminalId, data }),
   terminalResize: (terminalId: string, cols: number, rows: number) => invoke<void>("terminal_resize", { terminalId, cols, rows }),
   terminalClose: (terminalId: string) => invoke<void>("terminal_close", { terminalId }),

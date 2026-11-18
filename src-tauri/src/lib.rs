@@ -152,6 +152,32 @@ fn set_app_icon() {
     }
 }
 
+/// The mouse's back and forward buttons (buttons 3 and 4). WKWebView doesn't
+/// pass them to the page reliably, so they are caught here and sent to the
+/// UI as a "mouse-nav" event (-1 back, 1 forward); the page then doesn't see
+/// them, so they never count twice. Windows and Linux web views deliver them
+/// to the page, which handles them itself (lib/navigation.ts).
+#[cfg(target_os = "macos")]
+fn watch_mouse_buttons(app: tauri::AppHandle) {
+    use block2::RcBlock;
+    use objc2_app_kit::{NSEvent, NSEventMask};
+    use std::ptr::NonNull;
+    use tauri::Emitter;
+    let block = RcBlock::new(move |ev: NonNull<NSEvent>| -> *mut NSEvent {
+        let event = unsafe { ev.as_ref() };
+        let dir = match event.buttonNumber() {
+            3 => -1,
+            4 => 1,
+            _ => return ev.as_ptr(),
+        };
+        let _ = app.emit("mouse-nav", dir);
+        std::ptr::null_mut()
+    });
+    let monitor = unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::OtherMouseDown, &block) };
+    // The monitor lives as long as the app.
+    std::mem::forget(monitor);
+}
+
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -168,6 +194,8 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             set_app_icon();
+            #[cfg(target_os = "macos")]
+            watch_mouse_buttons(app.handle().clone());
             let dir = data_dir(app)?;
             tracing::info!("data folder: {}", dir.display());
             // Only the installed app takes over data from earlier folders; a
@@ -312,6 +340,10 @@ pub fn run() {
             commands::uptime_watch,
             commands::notify,
             commands::cancel_job,
+            commands::tmux_sessions,
+            commands::cleanup_scan,
+            commands::cleanup_run,
+            commands::stop_process,
             commands::updates,
             commands::refresh_updates,
             commands::install_updates,

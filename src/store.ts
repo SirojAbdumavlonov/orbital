@@ -1,3 +1,4 @@
+import type { TermLaunch } from "./lib/api";
 import { toast as sonner } from "sonner";
 import { useSettings } from "./lib/settings";
 import { create } from "zustand";
@@ -10,7 +11,7 @@ export const isSsh = (s: { info: { protocol?: string } }) => (s.info.protocol ??
 export type Tab = "files" | "services" | "monitor" | "terminal" | "activity" | `tool:${string}`;
 
 /** Tabs offered on every server, whatever software it runs. */
-export const ALWAYS_TOOLS = ["checkup", "updates", "deploy", "logs", "tunnels", "ports", "users", "sshkeys"];
+export const ALWAYS_TOOLS = ["checkup", "updates", "cleanup", "deploy", "logs", "tunnels", "ports", "users", "sshkeys"];
 
 export interface OpenFile {
   path: string;
@@ -27,6 +28,8 @@ export interface TermTab {
   cwd: string | null;
   /** Runs as root through sudo. */
   root: boolean;
+  /** What it runs: a shell (default), a tmux session or a container's shell. */
+  launch?: TermLaunch;
 }
 
 export interface SessionState {
@@ -55,10 +58,11 @@ export interface SessionState {
 }
 
 /** Where the user is: a server's tab, a global page, or the start page. */
-export type Loc = { sid: string; tab: Tab } | { global: NonNullable<State["globalView"]> } | null;
+/** A place to go back to: a server's tab (and, in Files, the folder) or a global page. */
+export type Loc = { sid: string; tab: Tab; cwd?: string } | { global: NonNullable<State["globalView"]> } | null;
 
 /** Software with its own tab view (the rest get the generic one). */
-export const DEDICATED_TOOLS = ["checkup", "updates", "docker", "nginx", "ufw", "fail2ban", "certbot", "sshd", "ports", "postgresql", "mysql", "mongodb", "redis", "apache", "haproxy", "users", "cron", "deploy", "logs", "tunnels", "sshkeys"];
+export const DEDICATED_TOOLS = ["checkup", "updates", "cleanup", "docker", "nginx", "ufw", "fail2ban", "certbot", "sshd", "ports", "postgresql", "mysql", "mongodb", "redis", "apache", "haproxy", "users", "cron", "deploy", "logs", "tunnels", "sshkeys"];
 
 /** Profile fields that only take effect on a new connection. */
 const CONNECTION_FIELDS = ["host", "port", "username", "authMethod", "keyPath", "sudoMode", "initialPath", "jumpProfileId"] as const;
@@ -120,7 +124,7 @@ interface State {
   setTab(sessionId: string, tab: Tab): void;
   patch(sessionId: string, p: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)): void;
   /** Open a shell. `asRoot` defaults to the "terminals as root" setting when this server has sudo. */
-  openTerminal(sessionId: string, cwd?: string | null, asRoot?: boolean): void;
+  openTerminal(sessionId: string, cwd?: string | null, asRoot?: boolean, launch?: TermLaunch): void;
   closeTerminal(sessionId: string, key: string): void;
   pushMetrics(sessionId: string, m: Metrics): void;
   detectTools(sessionId: string): Promise<void>;
@@ -243,6 +247,9 @@ export const useStore = create<State>((set, get) => ({
     }
     const profile = get().profiles.find((p) => p.id === profileId);
     if (!profile) return;
+    // Clicking the server again while it connects doesn't start a second
+    // connection (and a second tab for it): the first one carries on.
+    if (get().connecting[profileId] && !opts) return;
     set((s) => ({ connecting: { ...s.connecting, [profileId]: true } }));
     try {
       const info = await api.connect(profileId, opts);
@@ -304,16 +311,21 @@ export const useStore = create<State>((set, get) => ({
     });
   },
 
-  openTerminal(sessionId, cwd = null, asRoot) {
-    const key = `t${++termSeq}`;
+  openTerminal(sessionId, cwd = null, asRoot, launch) {
+    const n = ++termSeq;
+    const key = `t${n}`;
     const sess = get().sessions[sessionId];
     if (!sess) return;
     const canRoot = sess.info.elevation;
     const root = (asRoot ?? useSettings.getState().terminalAsRoot) && canRoot;
+    // With "Open terminals in tmux", plain terminals become tmux sessions
+    // orbital-1, orbital-2, …: after a restart the first one picks its session up again.
+    const run: TermLaunch = launch ?? (useSettings.getState().terminalTmux ? { kind: "tmux", session: `orbital-${n}` } : { kind: "shell" });
     const where = cwd ? cwd.split("/").filter(Boolean).pop() ?? "/" : null;
-    const title = where ?? (root || sess.profile.username === "root" ? "root" : "shell");
+    const title =
+      run.kind === "tmux" ? `tmux ${run.session}` : run.kind === "container" ? run.id : where ?? (root || sess.profile.username === "root" ? "root" : "shell");
     get().patch(sessionId, (s) => ({
-      terminals: [...s.terminals, { key, title, cwd, root: root || s.profile.username === "root" }],
+      terminals: [...s.terminals, { key, title, cwd, root: root || s.profile.username === "root", launch: run }],
       activeTerminal: key,
       tab: "terminal",
     }));
@@ -427,7 +439,8 @@ let navigating = false;
 
 export function currentLoc(st: State = useStore.getState()): Loc {
   if (st.globalView) return { global: st.globalView };
-  if (st.active && st.sessions[st.active]) return { sid: st.active, tab: st.sessions[st.active].tab };
+  const s = st.active ? st.sessions[st.active] : undefined;
+  if (st.active && s) return s.tab === "files" ? { sid: st.active, tab: s.tab, cwd: s.cwd } : { sid: st.active, tab: s.tab };
   return null;
 }
 
@@ -448,7 +461,7 @@ export function goTo(l: Loc) {
   else if ("global" in l) useStore.setState({ globalView: l.global });
   else {
     useStore.setState({ globalView: null, active: l.sid });
-    st.patch(l.sid, { tab: l.tab });
+    st.patch(l.sid, l.cwd ? { tab: l.tab, cwd: l.cwd } : { tab: l.tab });
   }
 }
 

@@ -17,7 +17,9 @@ function scrollsSideways(el: Element | null, dx: number): boolean {
 
 /**
  * Back and forward like other Mac apps: a two-finger swipe right on the
- * trackpad (left for forward), ⌘[ and ⌘], and the mouse's back and forward buttons.
+ * trackpad (left for forward), ⌘[ and ⌘], and the mouse's back and forward
+ * buttons. Folders opened in Files are steps too, so back returns to the
+ * previous folder.
  */
 export function useNavigationGestures() {
   useEffect(() => {
@@ -51,7 +53,21 @@ export function useNavigationGestures() {
     window.addEventListener("wheel", onWheel, { passive: true });
     window.addEventListener("keydown", onKey);
     window.addEventListener("mouseup", onMouse);
+    // On macOS the app catches the mouse's side buttons itself (WKWebView
+    // doesn't pass them on reliably) and sends them here.
+    let unlisten: (() => void) | undefined;
+    let gone = false;
+    if ("__TAURI_INTERNALS__" in window) {
+      void import("@tauri-apps/api/event").then(({ listen }) =>
+        listen<number>("mouse-nav", (e) => (e.payload < 0 ? useStore.getState().goBack() : useStore.getState().goForward())).then((u) => {
+          if (gone) u();
+          else unlisten = u;
+        }),
+      );
+    }
     return () => {
+      gone = true;
+      unlisten?.();
       window.removeEventListener("wheel", onWheel);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("mouseup", onMouse);

@@ -713,6 +713,7 @@ pub enum TermMessage {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn open_terminal(
     engine: Eng<'_>,
     session_id: String,
@@ -720,10 +721,11 @@ pub async fn open_terminal(
     rows: u32,
     cwd: Option<String>,
     as_root: bool,
+    launch: Option<orbital_core::terminal::Launch>,
     on_event: Channel<TermMessage>,
 ) -> R<String> {
     engine
-        .open_terminal(&session_id, cols, rows, cwd, as_root, move |ev| {
+        .open_terminal(&session_id, cols, rows, cwd, as_root, launch.unwrap_or_default(), move |ev| {
             let msg = match ev {
                 TermEvent::Data(d) => TermMessage::Data {
                     data: base64::engine::general_purpose::STANDARD.encode(d),
@@ -973,4 +975,29 @@ pub async fn install_updates(engine: Eng<'_>, session_id: String, progress: Chan
 #[tauri::command]
 pub async fn reboot_server(engine: Eng<'_>, session_id: String) -> R<()> {
     engine.reboot(&session_id).await
+}
+
+#[tauri::command]
+pub async fn tmux_sessions(engine: Eng<'_>, session_id: String, root: bool) -> R<Vec<orbital_core::terminal::TmuxSession>> {
+    engine.tmux_sessions(&session_id, root).await
+}
+
+#[tauri::command]
+pub async fn cleanup_scan(engine: Eng<'_>, session_id: String) -> R<Vec<orbital_core::cleanup::CleanupItem>> {
+    engine.cleanup_scan(&session_id).await
+}
+
+#[tauri::command]
+pub async fn cleanup_run(
+    engine: Eng<'_>,
+    session_id: String,
+    id: String,
+    progress: Channel<ProgressEvent>,
+) -> R<Vec<orbital_core::cleanup::CleanupItem>> {
+    progress::run_job(progress.id(), sink(progress), engine.cleanup_run(&session_id, &id)).await
+}
+
+#[tauri::command]
+pub async fn stop_process(engine: Eng<'_>, session_id: String, pid: u32, force: bool) -> R<()> {
+    engine.stop_process(&session_id, pid, force).await
 }

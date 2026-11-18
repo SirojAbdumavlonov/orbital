@@ -2343,6 +2343,63 @@ impl Engine {
         Ok(())
     }
 
+    // ---------- disk cleanup and processes ----------
+
+    /// What could be freed on the disk (read-only).
+    pub async fn cleanup_scan(&self, sid: &str) -> Result<Vec<crate::cleanup::CleanupItem>> {
+        self.session(sid).await?.cleanup_scan().await
+    }
+
+    /// Free one kind of space (`cleanup::command`), then scan again.
+    pub async fn cleanup_run(&self, sid: &str, id: &str) -> Result<Vec<crate::cleanup::CleanupItem>> {
+        let s = self.session(sid).await?;
+        let action = format!("cleanup.{id}");
+        let cmd = crate::cleanup::command(id).map_err(|e| self.refused_as(&s, Category::Command, &action, id, e))?;
+        progress::step("Freeing space …");
+        self.system_exec(&s, &action, id, cmd, std::time::Duration::from_secs(1800))
+            .await?
+            .check()?;
+        progress::step("Measuring again …");
+        s.cleanup_scan().await
+    }
+
+    /// Stop a process: SIGTERM, or SIGKILL when `force`. PID 1 and sshd are
+    /// refused (stopping sshd would cut this connection; restart it from
+    /// Services, which checks its config first).
+    pub async fn stop_process(&self, sid: &str, pid: u32, force: bool) -> Result<()> {
+        let s = self.session(sid).await?;
+        const ACTION: &str = "process.stop";
+        let target = format!("PID {pid}");
+        if pid <= 1 {
+            return Err(self.refused_as(
+                &s,
+                Category::Command,
+                ACTION,
+                &target,
+                Error::InvalidInput("PID 1 is the system itself".into()),
+            ));
+        }
+        let (o, _) = s.exec_inspect(&format!("ps -o comm= -p {pid}")).await?;
+        let name = o.stdout.trim().to_string();
+        if name.is_empty() {
+            return Err(Error::NotFound(format!("no process {pid} (it may have ended)")));
+        }
+        if name == "sshd" || name.starts_with("sshd:") {
+            return Err(self.refused_as(
+                &s,
+                Category::Command,
+                ACTION,
+                &target,
+                Error::InvalidInput("stopping sshd would cut this connection; restart ssh from Services instead".into()),
+            ));
+        }
+        let cmd = format!("kill -{} {pid}", if force { "KILL" } else { "TERM" });
+        self.system_exec(&s, ACTION, &format!("{name} ({target})"), &cmd, std::time::Duration::from_secs(30))
+            .await?
+            .check()?;
+        Ok(())
+    }
+
     // ---------- commands & terminals ----------
 
     /// The server's shell history (newest first, likely secrets left out), for
@@ -2372,13 +2429,28 @@ impl Engine {
 
     /// Open a PTY shell. With `as_root`, and when the profile can use sudo,
     /// the shell runs as root (`sudo -i`, or `sudo -s` in `cwd`).
-    pub async fn open_terminal<F>(&self, sid: &str, cols: u32, rows: u32, cwd: Option<String>, as_root: bool, sink: F) -> Result<String>
+    #[allow(clippy::too_many_arguments)]
+    pub async fn open_terminal<F>(
+        &self,
+        sid: &str,
+        cols: u32,
+        rows: u32,
+        cwd: Option<String>,
+        as_root: bool,
+        launch: crate::terminal::Launch,
+        sink: F,
+    ) -> Result<String>
     where
         F: Fn(TermEvent) + Send + Sync + 'static,
     {
         let s = self.session(sid).await?;
         let root = as_root && s.terminal_root_available();
-        let target = format!("{}{}", cwd.as_deref().unwrap_or("~"), if root { " (as root)" } else { "" });
+        let what = match &launch {
+            crate::terminal::Launch::Shell => cwd.as_deref().unwrap_or("~").to_string(),
+            crate::terminal::Launch::Tmux { session } => format!("tmux {session}"),
+            crate::terminal::Launch::Container { id } => format!("container {id}"),
+        };
+        let target = format!("{what}{}", if root { " (as root)" } else { "" });
         let t = self
             .audited(
                 &s,
@@ -2386,12 +2458,17 @@ impl Engine {
                 "terminal.open",
                 Some(&target),
                 None,
-                s.open_terminal(cols, rows, cwd.clone(), as_root, sink),
+                s.open_terminal(cols, rows, cwd.clone(), as_root, &launch, sink),
             )
             .await?;
         let id = t.id.clone();
         self.terminals.lock().await.insert(id.clone(), (sid.to_string(), Arc::new(t)));
         Ok(id)
+    }
+
+    /// tmux sessions on the server, to reattach (root's for root terminals). Read-only.
+    pub async fn tmux_sessions(&self, sid: &str, root: bool) -> Result<Vec<crate::terminal::TmuxSession>> {
+        self.session(sid).await?.tmux_sessions(root).await
     }
 
     async fn terminal(&self, tid: &str) -> Result<Arc<Terminal>> {
