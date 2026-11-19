@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.3.1 (2026-11-19)
+
 ### Added
 - **Live logs** for containers (Docker tab), services (Services tab) and the service of every tool tab: new lines appear as they're written, no Refresh needed; **Live** pauses and resumes. The view keeps the newest 2,000 lines and follows the end unless you scroll up.
 - **Logs between two times** (the calendar button next to Logs): pick from and to, or the last 15 minutes, hour, 6 or 24 hours, in this computer's time zone (`docker logs --since/--until`, `journalctl --since/--until`, up to 5,000 lines).
