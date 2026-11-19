@@ -1,4 +1,4 @@
-import { HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound } from "lucide-react";
+import { Bot, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound } from "lucide-react";
 import { Activity, Boxes, Cable, Clock, Cpu, Database, FolderTree, Gauge, Globe, ListChecks, LockKeyhole, Network, Plus, RefreshCw, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, asApiError, DetectedTool } from "../lib/api";
@@ -24,6 +24,7 @@ export const toolIcon = (t?: DetectedTool) => (t && CATEGORY_ICON[t.category]) |
 /** Tabs that exist on every server, with no detected software behind them. */
 const BUILTIN: Record<string, { name: string; hint: string; icon: typeof Gauge }> = {
   checkup: { name: "Checkup", hint: "What needs attention on this server, and how to fix it", icon: Stethoscope },
+  agent: { name: "AI agent", hint: "Ask about this server from Telegram (Claude or ChatGPT), with alerts", icon: Bot },
   cleanup: { name: "Disk cleanup", hint: "Free space: old journal, package cache, Docker leftovers", icon: HardDrive },
   updates: { name: "Updates", hint: "Install package and security updates; reboot", icon: PackageCheck },
   deploy: { name: "Deploy", hint: "Pull, build and restart your app; roll back", icon: Rocket },

@@ -3,6 +3,7 @@
 //! The engine behind Orbital. Kept free of any UI/Tauri dependency so it can be
 //! unit- and integration-tested headless (see `tests/`).
 
+pub mod agent;
 pub mod audit;
 pub mod certbot;
 pub mod cleanup;

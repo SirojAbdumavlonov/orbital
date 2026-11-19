@@ -2281,8 +2281,22 @@ impl Engine {
     /// Run a root command for system maintenance, streaming its output to the
     /// job, with its own timeout, and record it.
     async fn system_exec(&self, s: &SshSession, action: &str, target: &str, cmd: &str, timeout: std::time::Duration) -> Result<ExecOutput> {
+        self.system_exec_with(s, action, target, cmd, None, timeout).await
+    }
+
+    /// [`system_exec`] with data on stdin (file contents, secrets): recorded
+    /// with the command only, never the data.
+    async fn system_exec_with(
+        &self,
+        s: &SshSession,
+        action: &str,
+        target: &str,
+        cmd: &str,
+        input: Option<&[u8]>,
+        timeout: std::time::Duration,
+    ) -> Result<ExecOutput> {
         let sent = s.privileged_command(cmd);
-        match progress::with_output(s.exec_privileged_with(cmd, None, timeout)).await {
+        match progress::with_output(s.exec_privileged_with(cmd, input, timeout)).await {
             Ok(o) => {
                 self.record_exec(s, Category::Command, action, target, &sent, &o);
                 Ok(o)
@@ -2337,6 +2351,163 @@ impl Engine {
             &s.profile.host,
             crate::updates::REBOOT_COMMAND,
             std::time::Duration::from_secs(30),
+        )
+        .await?
+        .check()?;
+        Ok(())
+    }
+
+    // ---------- AI agent (Telegram) ----------
+
+    /// The agent's state on a server (read-only).
+    pub async fn agent_status(&self, sid: &str) -> Result<crate::agent::AgentStatus> {
+        self.session(sid).await?.agent_status().await
+    }
+
+    /// Check the bot token and the AI key from this computer; the bot's @name.
+    pub async fn agent_check(&self, setup: &crate::agent::AgentSetup) -> Result<String> {
+        crate::agent::validate_setup(setup)?;
+        let bot = crate::agent::telegram_bot_name(&setup.telegram_token).await?;
+        crate::agent::check_ai_key(setup.provider, &setup.api_key).await?;
+        Ok(bot)
+    }
+
+    /// Install (or reconfigure) the agent: Python and the AI libraries, the
+    /// agent, its root-only config with the keys (through stdin), the
+    /// service, and a pairing code for Telegram.
+    pub async fn agent_install(&self, sid: &str, setup: &crate::agent::AgentSetup) -> Result<crate::agent::PairCode> {
+        use crate::agent as a;
+        let s = self.session(sid).await?;
+        progress::step("Checking the bot token and the API key …");
+        let bot = self
+            .agent_check(setup)
+            .await
+            .map_err(|e| self.refused_as(&s, Category::Command, "agent.install", "AI agent", e))?;
+        let target = format!("@{bot}");
+        let long = std::time::Duration::from_secs(900);
+        let short = std::time::Duration::from_secs(60);
+        progress::step("Preparing Python and the AI libraries (the first time takes a minute or two) …");
+        self.system_exec(&s, "agent.prepare", &target, a::PREPARE_SCRIPT, long)
+            .await?
+            .check()?;
+        progress::step("Uploading the agent …");
+        self.system_exec_with(&s, "agent.upload", &target, a::WRITE_AGENT, Some(a::AGENT_PY.as_bytes()), short)
+            .await?
+            .check()?;
+        progress::step("Saving the bot token and the API key (readable by root only) …");
+        let config = a::config_json(setup, &bot, &s.profile.name)?;
+        self.system_exec_with(&s, "agent.configure", &target, a::WRITE_CONFIG, Some(config.as_bytes()), short)
+            .await?
+            .check()?;
+        progress::step("Starting the agent service …");
+        self.system_exec_with(&s, "agent.start", &target, a::WRITE_UNIT, Some(a::UNIT.as_bytes()), short)
+            .await?
+            .check()?;
+        progress::step("Making a pairing code …");
+        let mut code = self.agent_pair_code_inner(&s).await?;
+        code.bot = Some(bot);
+        Ok(code)
+    }
+
+    async fn agent_pair_code_inner(&self, s: &SshSession) -> Result<crate::agent::PairCode> {
+        let code = crate::agent::new_pair_code();
+        let input = format!("{code}\n");
+        self.system_exec_with(
+            s,
+            "agent.pair",
+            "new pairing code",
+            crate::agent::SET_PAIR_CODE,
+            Some(input.as_bytes()),
+            std::time::Duration::from_secs(30),
+        )
+        .await?
+        .check()?;
+        Ok(crate::agent::PairCode {
+            code,
+            expires: chrono::Utc::now().timestamp() + 15 * 60,
+            bot: None,
+        })
+    }
+
+    /// A new pairing code (valid 15 minutes); the Telegram account paired now is unpaired.
+    pub async fn agent_pair_code(&self, sid: &str) -> Result<crate::agent::PairCode> {
+        let s = self.session(sid).await?;
+        let mut code = self.agent_pair_code_inner(&s).await?;
+        code.bot = s.agent_status().await.ok().and_then(|st| st.bot);
+        Ok(code)
+    }
+
+    /// Install this Orbital's version of the agent (and newer AI libraries), keeping its config.
+    pub async fn agent_update(&self, sid: &str) -> Result<()> {
+        use crate::agent as a;
+        let s = self.session(sid).await?;
+        progress::step("Updating Python's AI libraries …");
+        self.system_exec(
+            &s,
+            "agent.prepare",
+            "AI agent",
+            a::PREPARE_SCRIPT,
+            std::time::Duration::from_secs(900),
+        )
+        .await?
+        .check()?;
+        progress::step("Uploading the agent …");
+        self.system_exec_with(
+            &s,
+            "agent.upload",
+            "AI agent",
+            a::WRITE_AGENT,
+            Some(a::AGENT_PY.as_bytes()),
+            std::time::Duration::from_secs(60),
+        )
+        .await?
+        .check()?;
+        progress::step("Restarting it …");
+        self.system_exec(&s, "agent.start", "AI agent", a::RESTART, std::time::Duration::from_secs(60))
+            .await?
+            .check()?;
+        Ok(())
+    }
+
+    /// Start or stop the agent service.
+    pub async fn agent_set_running(&self, sid: &str, on: bool) -> Result<()> {
+        let s = self.session(sid).await?;
+        let (action, cmd) = if on {
+            ("agent.start", crate::agent::RESTART)
+        } else {
+            ("agent.stop", crate::agent::STOP)
+        };
+        self.system_exec(&s, action, "AI agent", cmd, std::time::Duration::from_secs(60))
+            .await?
+            .check()?;
+        Ok(())
+    }
+
+    /// Turn Telegram alerts (failed services, full disks, restarting containers) on or off.
+    pub async fn agent_set_alerts(&self, sid: &str, on: bool) -> Result<()> {
+        let s = self.session(sid).await?;
+        let cmd = if on { crate::agent::ALERTS_ON } else { crate::agent::ALERTS_OFF };
+        self.system_exec(
+            &s,
+            "agent.alerts",
+            if on { "on" } else { "off" },
+            cmd,
+            std::time::Duration::from_secs(30),
+        )
+        .await?
+        .check()?;
+        Ok(())
+    }
+
+    /// Remove the agent, its config (with the keys) and its log from the server.
+    pub async fn agent_remove(&self, sid: &str) -> Result<()> {
+        let s = self.session(sid).await?;
+        self.system_exec(
+            &s,
+            "agent.remove",
+            "AI agent",
+            crate::agent::REMOVE,
+            std::time::Duration::from_secs(60),
         )
         .await?
         .check()?;

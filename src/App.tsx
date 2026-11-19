@@ -2,6 +2,7 @@ import { PanelRightClose } from "lucide-react";
 import { CheckupView } from "./views/CheckupView";
 import { UpdatesView } from "./views/UpdatesView";
 import { CleanupView } from "./views/CleanupView";
+import { AgentView } from "./views/AgentView";
 import { useEffect } from "react";
 import { Modal } from "./components/ui";
 import { useNavigationGestures } from "./lib/navigation";
@@ -63,6 +64,7 @@ const TOOL_VIEWS: Record<string, (p: { s: SessionState }) => JSX.Element> = {
   checkup: CheckupView,
   updates: UpdatesView,
   cleanup: CleanupView,
+  agent: AgentView,
   docker: DockerView,
   nginx: NginxView,
   ufw: FirewallView,

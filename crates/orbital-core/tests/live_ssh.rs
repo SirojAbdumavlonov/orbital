@@ -1897,3 +1897,78 @@ async fn cleanup_scan_and_stop_process() {
     assert_eq!(alive.stdout.trim(), "no");
     assert!(matches!(engine.stop_process(&a.id, 1, true).await, Err(Error::InvalidInput(_))));
 }
+
+/// The AI agent's server side, with a fake bot token (Telegram isn't
+/// reachable with it, so the agent keeps retrying while running): Python and
+/// the AI libraries install, the config is root-only, the service runs,
+/// pairing codes are taken, status hides the keys, and remove leaves nothing.
+#[tokio::test]
+async fn ai_agent_installs_pairs_and_removes() {
+    use base64::Engine as _;
+    use orbital_core::agent as a;
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_USERS").is_err() {
+        return; // needs root via sudo and systemd (CI)
+    }
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    assert!(!engine.agent_status(&s.id).await.unwrap().installed);
+
+    let root = |cmd: String| {
+        let engine = &engine;
+        let sid = s.id.clone();
+        async move {
+            let o = engine.run_command(&sid, &cmd, true).await.unwrap();
+            assert_eq!(o.exit_code, 0, "{cmd}\n{}\n{}", o.stdout, o.stderr);
+            o
+        }
+    };
+    let b64 = |t: &str| base64::engine::general_purpose::STANDARD.encode(t);
+    root(a::PREPARE_SCRIPT.to_string()).await;
+    root(format!(
+        "echo {} | base64 -d | sh -c {}",
+        b64(a::AGENT_PY),
+        orbital_core::shell::quote(a::WRITE_AGENT)
+    ))
+    .await;
+    let setup = a::AgentSetup {
+        telegram_token: "123456789:AAH-fakefakefakefakefakefakefakefake".into(),
+        provider: a::Provider::Claude,
+        api_key: "sk-ant-api03-fakefakefakefakefakefakefake".into(),
+        model: None,
+        alerts: true,
+    };
+    let cfg = a::config_json(&setup, "orbital_it_bot", "it").unwrap();
+    root(format!(
+        "echo {} | base64 -d | sh -c {}",
+        b64(&cfg),
+        orbital_core::shell::quote(a::WRITE_CONFIG)
+    ))
+    .await;
+    let mode = root("stat -c %a /etc/orbital-agent/config.json".into()).await;
+    assert_eq!(mode.stdout.trim(), "600", "the keys are readable by root only");
+    root(format!(
+        "echo {} | base64 -d | sh -c {}",
+        b64(a::UNIT),
+        orbital_core::shell::quote(a::WRITE_UNIT)
+    ))
+    .await;
+    root("/opt/orbital-agent/venv/bin/python -c 'import anthropic, openai'".into()).await;
+
+    let code = engine.agent_pair_code(&s.id).await.unwrap();
+    assert_eq!(code.code.len(), 8);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let st = engine.agent_status(&s.id).await.unwrap();
+    assert!(st.installed && st.running, "{st:?}");
+    assert_eq!(st.bot.as_deref(), Some("orbital_it_bot"));
+    assert_eq!(st.version.as_deref(), Some(a::VERSION));
+    assert!(st.pair_code_active && st.owner.is_none());
+    assert!(!format!("{st:?}").contains("fakefake"), "status never shows the keys");
+
+    engine.agent_set_alerts(&s.id, false).await.unwrap();
+    assert!(!engine.agent_status(&s.id).await.unwrap().alerts);
+    engine.agent_remove(&s.id).await.unwrap();
+    let gone = root("ls /opt/orbital-agent /etc/orbital-agent 2>&1 || true".into()).await;
+    assert!(gone.stdout.contains("No such file"), "{}", gone.stdout);
+    assert!(!engine.agent_status(&s.id).await.unwrap().installed);
+}

@@ -895,6 +895,42 @@ export interface UpdatesReport {
   refreshedAt: number | null;
 }
 
+// ---------- AI agent (Telegram bot on the server) ----------
+
+export type AiProvider = "claude" | "openai";
+
+/** Typed once; the token and key go to the server only (root-only file), never kept in Orbital. */
+export interface AgentSetup {
+  telegramToken: string;
+  provider: AiProvider;
+  apiKey: string;
+  model: string | null;
+  alerts: boolean;
+}
+
+export interface AgentStatus {
+  installed: boolean;
+  running: boolean;
+  version: string | null;
+  provider: string | null;
+  model: string | null;
+  bot: string | null;
+  alerts: boolean;
+  pairCodeActive: boolean;
+  owner: string | null;
+  pairedAt: number | null;
+  alerting: string[];
+  /** JSON lines from the agent's activity log. */
+  recent: string[];
+  updateAvailable: boolean;
+}
+
+export interface PairCode {
+  code: string;
+  expires: number;
+  bot: string | null;
+}
+
 // ---------- disk cleanup ----------
 
 export interface CleanupItem {
@@ -937,6 +973,15 @@ function progressChannel(onProgress?: OnProgress) {
 }
 
 export const api = {
+  agentStatus: (sessionId: string) => invoke<AgentStatus>("agent_status", { sessionId }),
+  /** Checks the bot token with Telegram and the AI key with its provider; returns the bot's @name. */
+  agentCheck: (setup: AgentSetup) => invoke<string>("agent_check", { setup }),
+  agentInstall: (sessionId: string, setup: AgentSetup, onProgress?: OnProgress) => invoke<PairCode>("agent_install", { sessionId, setup, progress: progressChannel(onProgress) }),
+  agentPairCode: (sessionId: string) => invoke<PairCode>("agent_pair_code", { sessionId }),
+  agentUpdate: (sessionId: string, onProgress?: OnProgress) => invoke<void>("agent_update", { sessionId, progress: progressChannel(onProgress) }),
+  agentSetRunning: (sessionId: string, on: boolean) => invoke<void>("agent_set_running", { sessionId, on }),
+  agentSetAlerts: (sessionId: string, on: boolean) => invoke<void>("agent_set_alerts", { sessionId, on }),
+  agentRemove: (sessionId: string) => invoke<void>("agent_remove", { sessionId }),
   cleanupScan: (sessionId: string) => invoke<CleanupItem[]>("cleanup_scan", { sessionId }),
   cleanupRun: (sessionId: string, id: string, onProgress?: OnProgress) => invoke<CleanupItem[]>("cleanup_run", { sessionId, id, progress: progressChannel(onProgress) }),
   /** SIGTERM (or SIGKILL with force). PID 1 and sshd are refused. */

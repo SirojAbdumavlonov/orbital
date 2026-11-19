@@ -1001,3 +1001,48 @@ pub async fn cleanup_run(
 pub async fn stop_process(engine: Eng<'_>, session_id: String, pid: u32, force: bool) -> R<()> {
     engine.stop_process(&session_id, pid, force).await
 }
+
+#[tauri::command]
+pub async fn agent_status(engine: Eng<'_>, session_id: String) -> R<orbital_core::agent::AgentStatus> {
+    engine.agent_status(&session_id).await
+}
+
+#[tauri::command]
+pub async fn agent_check(engine: Eng<'_>, setup: orbital_core::agent::AgentSetup) -> R<String> {
+    engine.agent_check(&setup).await
+}
+
+#[tauri::command]
+pub async fn agent_install(
+    engine: Eng<'_>,
+    session_id: String,
+    setup: orbital_core::agent::AgentSetup,
+    progress: Channel<ProgressEvent>,
+) -> R<orbital_core::agent::PairCode> {
+    progress::run_job(progress.id(), sink(progress), engine.agent_install(&session_id, &setup)).await
+}
+
+#[tauri::command]
+pub async fn agent_pair_code(engine: Eng<'_>, session_id: String) -> R<orbital_core::agent::PairCode> {
+    engine.agent_pair_code(&session_id).await
+}
+
+#[tauri::command]
+pub async fn agent_update(engine: Eng<'_>, session_id: String, progress: Channel<ProgressEvent>) -> R<()> {
+    progress::run_job(progress.id(), sink(progress), engine.agent_update(&session_id)).await
+}
+
+#[tauri::command]
+pub async fn agent_set_running(engine: Eng<'_>, session_id: String, on: bool) -> R<()> {
+    engine.agent_set_running(&session_id, on).await
+}
+
+#[tauri::command]
+pub async fn agent_set_alerts(engine: Eng<'_>, session_id: String, on: bool) -> R<()> {
+    engine.agent_set_alerts(&session_id, on).await
+}
+
+#[tauri::command]
+pub async fn agent_remove(engine: Eng<'_>, session_id: String) -> R<()> {
+    engine.agent_remove(&session_id).await
+}

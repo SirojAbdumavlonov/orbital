@@ -378,6 +378,19 @@ const cleanupItems = () => [
   { id: "docker", title: "Docker leftovers", detail: "Stopped containers, unused networks, dangling images and build cache. Running containers and volumes (data) are kept.", bytes: cleaned.has("docker") ? 0 : 1900 * MB },
   { id: "dockerimages", title: "Docker images no container uses", detail: "Pulled again when a container needs one. Can take a while to download later.", bytes: cleaned.has("dockerimages") ? 0 : 3100 * MB },
 ];
+const agent: any = { installed: false, running: false, version: null, provider: null, model: null, bot: null, alerts: true, pairCodeActive: false, owner: null, pairedAt: null, alerting: [], recent: [], updateAvailable: false };
+const agentLog: any[] = [];
+/** A pairing code; in the demo, "you" send it from Telegram 8 seconds later. */
+function agentCode() {
+  const code = "K7RW4QZP";
+  const stamp = () => new Date().toISOString().slice(0, 19);
+  setTimeout(() => {
+    if (!agent.installed) return;
+    Object.assign(agent, { owner: "sirojiddin", pairedAt: Math.floor(Date.now() / 1000), pairCodeActive: false });
+    agentLog.push({ time: stamp(), event: "paired", name: "sirojiddin" }, { time: stamp(), event: "question", chars: 18 }, { time: stamp(), event: "tool", tool: "server_overview" }, { time: stamp(), event: "tool", tool: "container_logs" }, { time: stamp(), event: "approval_asked", tool: "container_action", action: "docker restart shop-worker-1" }, { time: stamp(), event: "approved", tool: "container_action", action: "docker restart shop-worker-1" }, { time: stamp(), event: "action_done", tool: "container_action", action: "docker restart shop-worker-1" });
+  }, 8000);
+  return { code, expires: Math.floor(Date.now() / 1000) + 15 * 60, bot: "my_server_helper_bot" };
+}
 let upgraded = false;
 const updatesReport = () => ({
   manager: "apt",
@@ -807,6 +820,22 @@ export function install() {
       }
       case "notify": return null;
       case "cancel_job": stopped.add(args.id); return true;
+      case "agent_status": return { ...agent, recent: agentLog.map((l) => JSON.stringify(l)) };
+      case "agent_check":
+        await new Promise((r) => setTimeout(r, 700));
+        if (!/^\d+:[\w-]{30,}$/.test(args.setup.telegramToken)) throw { kind: "InvalidInput", message: "Invalid input: Telegram doesn't accept this bot token: copy it again from @BotFather" };
+        return "my_server_helper_bot";
+      case "agent_install": {
+        await progress(args.progress, [[0, "step", "Checking the bot token and the API key …"], [700, "step", "Preparing Python and the AI libraries (the first time takes a minute or two) …"], [600, "line", "Installing the AI libraries (anthropic, openai) …"], [1800, "line", "Successfully installed anthropic-1.4.0 openai-2.9.1 httpx-0.28.1"], [400, "line", "Python ready"], [400, "step", "Uploading the agent …"], [500, "step", "Saving the bot token and the API key (readable by root only) …"], [500, "step", "Starting the agent service …"], [600, "step", "Making a pairing code …"]]);
+        Object.assign(agent, { installed: true, running: true, version: "1.3.0", provider: args.setup.provider, model: args.setup.model || (args.setup.provider === "openai" ? "gpt-5" : "claude-opus-5-5"), bot: "my_server_helper_bot", alerts: args.setup.alerts, owner: null, pairedAt: null, pairCodeActive: true });
+        agentLog.push({ time: new Date().toISOString().slice(0, 19), event: "start", version: "1.3.0" });
+        return agentCode();
+      }
+      case "agent_pair_code": Object.assign(agent, { owner: null, pairedAt: null, pairCodeActive: true }); return agentCode();
+      case "agent_update": await progress(args.progress, [[0, "step", "Updating Python's AI libraries …"], [1200, "step", "Uploading the agent …"], [500, "step", "Restarting it …"]]); agent.version = "1.3.0"; agent.updateAvailable = false; return null;
+      case "agent_set_running": agent.running = args.on; return null;
+      case "agent_set_alerts": agent.alerts = args.on; return null;
+      case "agent_remove": Object.assign(agent, { installed: false, running: false, owner: null }); agentLog.length = 0; return null;
       case "tmux_sessions": return [{ name: "orbital-1", windows: 2, attached: false, created: Math.floor(Date.now() / 1000) - 3 * 3600 }, { name: "deploy", windows: 1, attached: false, created: Math.floor(Date.now() / 1000) - 86400 }];
       case "cleanup_scan": return cleanupItems();
       case "cleanup_run":

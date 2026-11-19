@@ -72,7 +72,7 @@ export function CommandMenu() {
             {s.toolTabs.map((id) => {
               const t = s.tools?.find((x) => x.id === id);
               const Icon = toolIcon(t);
-              return <Command.Item key={id} value={`tab ${t?.name ?? id}`} onSelect={run(() => go(`tool:${id}`))}><Icon size={14} /> {t?.name ?? ({ checkup: "Checkup", updates: "Updates", cleanup: "Disk cleanup", ports: "Open ports", users: "Users", docker: "Docker", deploy: "Deploy", logs: "Logs", tunnels: "Port forwarding", sshkeys: "SSH keys" } as Record<string, string>)[id] ?? id}</Command.Item>;
+              return <Command.Item key={id} value={`tab ${t?.name ?? id}`} onSelect={run(() => go(`tool:${id}`))}><Icon size={14} /> {t?.name ?? ({ checkup: "Checkup", updates: "Updates", agent: "AI agent", cleanup: "Disk cleanup", ports: "Open ports", users: "Users", docker: "Docker", deploy: "Deploy", logs: "Logs", tunnels: "Port forwarding", sshkeys: "SSH keys" } as Record<string, string>)[id] ?? id}</Command.Item>;
             })}
             {(s.tools ?? []).filter((t) => !s.toolTabs.includes(t.id)).map((t) => {
               const Icon = toolIcon(t);
