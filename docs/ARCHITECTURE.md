@@ -3,7 +3,7 @@
 ```
 ┌──────────────────────── Orbital.app ────────────────────────┐
 │  React UI (WKWebView)                                        │
-│  Files · Editor · Services · Monitor · Terminal · Activity   │
+│  Files · Editor · Monitor · Terminal · Services · Activity   │
 │  + tool tabs (Nginx, Docker, Firewall, Fail2ban, HTTPS       │
 │    certificates, SSH server, Open ports, …)                  │
 │        │ invoke() / Channel (typed, src/lib/api.ts)          │

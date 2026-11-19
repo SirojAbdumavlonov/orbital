@@ -151,7 +151,19 @@ impl SshSession {
             ))
             .await?
             .check()?;
-        let jcmd = format!("journalctl -u {q} -n {} --no-pager -o short-iso 2>&1", log_lines.min(5000));
+        let logs = self.unit_logs(unit, log_lines, None, None).await?;
+        Ok(ServiceDetail {
+            unit: unit.to_string(),
+            properties: parse_show(&props.stdout),
+            logs,
+        })
+    }
+
+    /// The unit's journal: the last `tail` lines, or with `since`/`until`
+    /// (Unix seconds) the last `tail` written in that window. Read with sudo
+    /// when the login user can't see the journal.
+    pub async fn unit_logs(&self, unit: &str, tail: u32, since: Option<i64>, until: Option<i64>) -> Result<String> {
+        let jcmd = journal_command(unit, tail, since, until)?;
         let mut logs = self.exec(&jcmd).await?.stdout;
         if (logs.contains("No journal files") || logs.contains("insufficient permissions") || logs.trim().is_empty())
             && self.elevation_needed()
@@ -160,11 +172,7 @@ impl SshSession {
                 logs = o.stdout;
             }
         }
-        Ok(ServiceDetail {
-            unit: unit.to_string(),
-            properties: parse_show(&props.stdout),
-            logs,
-        })
+        Ok(logs)
     }
 
     pub async fn service_action(&self, unit: &str, action: ServiceAction) -> Result<ActionReport> {
@@ -191,8 +199,39 @@ impl SshSession {
     }
 }
 
+/// `journalctl` for one unit; times are Unix seconds (`@N`, understood by every systemd).
+pub fn journal_command(unit: &str, tail: u32, since: Option<i64>, until: Option<i64>) -> Result<String> {
+    validate_unit(unit)?;
+    let mut c = format!("journalctl -u {} -n {} --no-pager -o short-iso", quote(unit), tail.min(5000));
+    for (flag, t) in [("--since", since), ("--until", until)] {
+        if let Some(t) = t {
+            if t < 0 {
+                return Err(Error::InvalidInput("a time before 1970".into()));
+            }
+            c.push_str(&format!(" {flag} @{t}"));
+        }
+    }
+    c.push_str(" 2>&1");
+    Ok(c)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn journal_between_two_times() {
+        use super::journal_command;
+        assert_eq!(
+            journal_command("nginx.service", 200, None, None).unwrap(),
+            "journalctl -u nginx.service -n 200 --no-pager -o short-iso 2>&1"
+        );
+        assert_eq!(
+            journal_command("nginx.service", 9999, Some(1_763_600_000), Some(1_763_603_600)).unwrap(),
+            "journalctl -u nginx.service -n 5000 --no-pager -o short-iso --since @1763600000 --until @1763603600 2>&1"
+        );
+        assert!(journal_command("nginx.service", 10, Some(-5), None).is_err());
+        assert!(journal_command("x; rm -rf /", 10, None, None).is_err());
+    }
+
     use super::*;
 
     const LIST: &str = "nginx.service        loaded active   running A high performance web server\n\

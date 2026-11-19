@@ -3,11 +3,13 @@ import { useEffect, useMemo, useState } from "react";
 import { confirm, StateDot, DrawerClose } from "../components/ui";
 import { Modal } from "../components/ui";
 import { api, asApiError, ComposeAction, ComposeTarget, Container, ContainerAction, ContainerStats, ExecOutput } from "../lib/api";
-import { crashFacts, explain, lastLines } from "../lib/containerCrash";
+import { crashFacts, explain } from "../lib/containerCrash";
 import { publishedPorts } from "../lib/ports";
 import { forward } from "./TunnelsView";
 import { runJob, useRunningJob } from "../lib/jobs";
 import { JobProgress } from "../components/JobProgress";
+import { VSplit } from "../components/VSplit";
+import { rangeIso, useLogPane } from "../components/LogPane";
 import { SessionState, useStore } from "../store";
 
 type StateFilter = "all" | "running" | "stopped" | "paused";
@@ -105,11 +107,10 @@ export function DockerView({ s }: { s: SessionState }) {
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<string | null>(null);
-  const [pane, setPane] = useState<"logs" | "inspect" | "compose">("logs");
+  const [pane, setPane] = useState<"inspect" | "compose">("inspect");
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [desc, setDesc] = useState(false);
-  const [logs, setLogs] = useState("");
   const [inspect, setInspect] = useState<any>(null);
   const [busy, setBusy] = useState(false);
 
@@ -130,12 +131,19 @@ export function DockerView({ s }: { s: SessionState }) {
   const cur = list.find((c) => c.id === sel);
   useEffect(() => {
     if (!cur) return;
-    if (!cur.composeProject) setPane((p) => (p === "compose" ? "logs" : p));
-    setLogs("Loading…");
+    if (!cur.composeProject) setPane("inspect");
     setInspect(null);
-    api.containerLogs(sid, cur.id, 400).then(setLogs).catch((e) => setLogs(asApiError(e).message));
     api.inspectContainer(sid, cur.id).then(setInspect).catch(() => {});
   }, [sel]);
+
+  const log = useLogPane({
+    sid,
+    id: cur?.id ?? null,
+    name: cur?.names.split(",")[0] ?? "container",
+    follow: cur ? { type: "container", id: cur.id } : null,
+    load: (r) => (r ? api.containerLogs(sid, cur!.id, 5000, rangeIso(r.from), rangeIso(r.to)) : api.containerLogs(sid, cur!.id, 400)),
+  });
+  const logs = log.text;
 
   const statOf = (c: Container) => stats.find((x) => c.id.startsWith(x.id) || x.name === c.names);
   const groups = useMemo(() => {
@@ -290,19 +298,26 @@ export function DockerView({ s }: { s: SessionState }) {
                 </div>
               )}
               {job && <JobProgress job={job} compact />}
-              <CrashPanel inspect={inspect} logs={logs} onLogs={() => setPane("logs")} />
-              <div className="toolbar">
-                <div className="segmented">
-                  <button className={pane === "logs" ? "on" : ""} onClick={() => setPane("logs")}><ScrollText size={12} /> Logs</button>
-                  <button className={pane === "inspect" ? "on" : ""} onClick={() => setPane("inspect")}><Braces size={12} /> Inspect</button>
-                  {cur.composeProject && <button className={pane === "compose" ? "on" : ""} onClick={() => setPane("compose")}><FileCode2 size={12} /> Compose</button>}
-                </div>
-                <span className="spacer" />
-                {pane === "logs" && <button className="icon-btn" aria-label="Refresh logs" onClick={() => api.containerLogs(sid, cur.id, 400).then(setLogs)}><RefreshCw size={13} /></button>}
-              </div>
-              {pane === "compose" && cur.composeProject
-                ? <ComposePane s={s} inspect={inspect} />
-                : <pre className="logs">{pane === "logs" ? logs : inspect ? JSON.stringify(inspect, null, 2) : "Loading…"}</pre>}
+              <CrashPanel inspect={inspect} logs={logs} />
+              <VSplit
+                id="docker"
+                top={{
+                  title: <span className="vsplit-title"><ScrollText size={13} /> Logs</span>,
+                  extra: log.extra,
+                  body: log.body,
+                }}
+                bottom={{
+                  title: (
+                    <div className="segmented">
+                      <button className={pane === "inspect" ? "on" : ""} onClick={() => setPane("inspect")}><Braces size={12} /> Inspect</button>
+                      {cur.composeProject && <button className={pane === "compose" ? "on" : ""} onClick={() => setPane("compose")}><FileCode2 size={12} /> Compose</button>}
+                    </div>
+                  ),
+                  body: pane === "compose" && cur.composeProject
+                    ? <div className="vsplit-body"><ComposePane s={s} inspect={inspect} /></div>
+                    : <pre className="logs">{inspect ? JSON.stringify(inspect, null, 2) : "Loading…"}</pre>,
+                }}
+              />
             </>
           )}
         </aside>
@@ -313,21 +328,15 @@ export function DockerView({ s }: { s: SessionState }) {
 
 
 /** "Why did it stop?": shown for a container that crashed, restarts or is unhealthy. */
-function CrashPanel({ inspect, logs, onLogs }: { inspect: any; logs: string; onLogs: () => void }) {
+function CrashPanel({ inspect, logs }: { inspect: any; logs: string }) {
   const facts = crashFacts(inspect);
   const e = facts && explain(facts, logs);
   if (!facts || !e) return null;
-  const tail = lastLines(logs, 12);
   return (
     <div className={`crash ${e.level}`}>
       <div className="crash-head"><AlertTriangle size={15} /> <b>{e.headline}</b>{facts.finishedAt && <span className="faint"> · {new Date(facts.finishedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>}</div>
       <ul>{e.hints.map((h, i) => <li key={i}>{h}</li>)}</ul>
-      {tail && tail !== "Loading…" && (
-        <>
-          <div className="faint crash-sub">Last log lines <button className="link" onClick={onLogs}>all logs</button></div>
-          <pre className="crash-log mono">{tail}</pre>
-        </>
-      )}
     </div>
   );
 }
+

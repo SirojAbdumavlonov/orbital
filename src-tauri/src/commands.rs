@@ -543,6 +543,18 @@ pub async fn list_services(engine: Eng<'_>, session_id: String) -> R<Vec<Service
 }
 
 #[tauri::command]
+pub async fn unit_logs(
+    engine: Eng<'_>,
+    session_id: String,
+    unit: String,
+    tail: Option<u32>,
+    since: Option<i64>,
+    until: Option<i64>,
+) -> R<String> {
+    engine.unit_logs(&session_id, &unit, tail.unwrap_or(400), since, until).await
+}
+
+#[tauri::command]
 pub async fn service_detail(engine: Eng<'_>, session_id: String, unit: String) -> R<ServiceDetail> {
     engine.service_detail(&session_id, &unit).await
 }
@@ -574,8 +586,17 @@ pub async fn inspect_container(engine: Eng<'_>, session_id: String, id: String) 
 }
 
 #[tauri::command]
-pub async fn container_logs(engine: Eng<'_>, session_id: String, id: String, tail: Option<u32>) -> R<String> {
-    engine.container_logs(&session_id, &id, tail.unwrap_or(500)).await
+pub async fn container_logs(
+    engine: Eng<'_>,
+    session_id: String,
+    id: String,
+    tail: Option<u32>,
+    since: Option<String>,
+    until: Option<String>,
+) -> R<String> {
+    engine
+        .container_logs(&session_id, &id, tail.unwrap_or(500), since.as_deref(), until.as_deref())
+        .await
 }
 
 #[tauri::command]
@@ -767,6 +788,13 @@ pub fn audit_verify(engine: Eng) -> R<VerifyReport> {
 #[tauri::command]
 pub fn audit_export(engine: Eng, format: String, path: String) -> R<()> {
     std::fs::write(path, engine.audit_export(&format)?)?;
+    Ok(())
+}
+
+/// Save text the UI already shows (a log pane) to a file the user picked in the save dialog.
+#[tauri::command]
+pub fn save_text(path: String, text: String) -> R<()> {
+    std::fs::write(path, text)?;
     Ok(())
 }
 
@@ -1008,7 +1036,7 @@ pub async fn agent_status(engine: Eng<'_>, session_id: String) -> R<orbital_core
 }
 
 #[tauri::command]
-pub async fn agent_check(engine: Eng<'_>, setup: orbital_core::agent::AgentSetup) -> R<String> {
+pub async fn agent_check(engine: Eng<'_>, setup: orbital_core::agent::AgentSetup) -> R<orbital_core::agent::AgentCheck> {
     engine.agent_check(&setup).await
 }
 
@@ -1045,4 +1073,45 @@ pub async fn agent_set_alerts(engine: Eng<'_>, session_id: String, on: bool) -> 
 #[tauri::command]
 pub async fn agent_remove(engine: Eng<'_>, session_id: String) -> R<()> {
     engine.agent_remove(&session_id).await
+}
+
+#[tauri::command]
+pub async fn agent_models(engine: Eng<'_>, session_id: String) -> R<Vec<orbital_core::agent::AiModel>> {
+    engine.agent_models(&session_id).await
+}
+
+#[tauri::command]
+pub async fn agent_set_model(engine: Eng<'_>, session_id: String, model: String) -> R<()> {
+    engine.agent_set_model(&session_id, &model).await
+}
+
+#[tauri::command]
+pub async fn agent_test(engine: Eng<'_>, session_id: String) -> R<Option<String>> {
+    engine.agent_test(&session_id).await
+}
+
+#[tauri::command]
+pub async fn agent_set_daily(engine: Eng<'_>, session_id: String, time: Option<String>) -> R<()> {
+    engine.agent_set_daily(&session_id, time.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn find_files(engine: Eng<'_>, session_id: String, dir: String, query: String) -> R<orbital_core::filetools::FindReport> {
+    engine.find_files(&session_id, &dir, &query).await
+}
+
+#[tauri::command]
+pub async fn download_folder(
+    engine: Eng<'_>,
+    session_id: String,
+    remote_path: String,
+    local_path: String,
+    progress: Channel<ProgressEvent>,
+) -> R<u64> {
+    progress::run_job(
+        progress.id(),
+        sink(progress),
+        engine.download_folder(&session_id, &remote_path, &PathBuf::from(local_path)),
+    )
+    .await
 }

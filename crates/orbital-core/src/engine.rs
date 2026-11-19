@@ -1125,6 +1125,25 @@ impl Engine {
             .await
     }
 
+    /// Files and folders whose names contain `query`, below `dir` (read-only).
+    pub async fn find_files(&self, sid: &str, dir: &str, query: &str) -> Result<crate::filetools::FindReport> {
+        self.session(sid).await?.find_files(dir, query).await
+    }
+
+    /// Download a folder as one .tar.gz, streamed into `local` (a job: progress, stoppable).
+    pub async fn download_folder(&self, sid: &str, remote: &str, local: &std::path::Path) -> Result<u64> {
+        let s = self.session(sid).await?;
+        self.audited(
+            &s,
+            Category::File,
+            "file.download_folder",
+            Some(remote),
+            None,
+            s.download_folder(remote, local),
+        )
+        .await
+    }
+
     // ---------- installed software ----------
 
     /// Which well-known server software is on this host (read-only).
@@ -2199,6 +2218,10 @@ impl Engine {
         self.session(sid).await?.service_detail(unit, 200).await
     }
 
+    pub async fn unit_logs(&self, sid: &str, unit: &str, tail: u32, since: Option<i64>, until: Option<i64>) -> Result<String> {
+        self.session(sid).await?.unit_logs(unit, tail, since, until).await
+    }
+
     pub async fn service_action(&self, sid: &str, unit: &str, action: ServiceAction) -> Result<ActionReport> {
         let s = self.session(sid).await?;
         let name = format!("service.{}", action.verb());
@@ -2230,8 +2253,8 @@ impl Engine {
         self.session(sid).await?.inspect_container(id).await
     }
 
-    pub async fn container_logs(&self, sid: &str, id: &str, tail: u32) -> Result<String> {
-        self.session(sid).await?.container_logs(id, tail).await
+    pub async fn container_logs(&self, sid: &str, id: &str, tail: u32, since: Option<&str>, until: Option<&str>) -> Result<String> {
+        self.session(sid).await?.container_logs(id, tail, since, until).await
     }
 
     pub async fn container_action(&self, sid: &str, id: &str, action: ContainerAction) -> Result<ExecOutput> {
@@ -2282,6 +2305,29 @@ impl Engine {
     /// job, with its own timeout, and record it.
     async fn system_exec(&self, s: &SshSession, action: &str, target: &str, cmd: &str, timeout: std::time::Duration) -> Result<ExecOutput> {
         self.system_exec_with(s, action, target, cmd, None, timeout).await
+    }
+
+    /// [`system_exec`] without streaming the command's output to the job: the
+    /// user sees only the step, not installer noise. Recorded the same way.
+    async fn system_exec_quiet(
+        &self,
+        s: &SshSession,
+        action: &str,
+        target: &str,
+        cmd: &str,
+        timeout: std::time::Duration,
+    ) -> Result<ExecOutput> {
+        let sent = s.privileged_command(cmd);
+        match s.exec_privileged_with(cmd, None, timeout).await {
+            Ok(o) => {
+                self.record_exec(s, Category::Command, action, target, &sent, &o);
+                Ok(o)
+            }
+            Err(e) => {
+                self.record_error(s, Category::Command, action, target, Some(sent), &e);
+                Err(e)
+            }
+        }
     }
 
     /// [`system_exec`] with data on stdin (file contents, secrets): recorded
@@ -2364,12 +2410,19 @@ impl Engine {
         self.session(sid).await?.agent_status().await
     }
 
-    /// Check the bot token and the AI key from this computer; the bot's @name.
-    pub async fn agent_check(&self, setup: &crate::agent::AgentSetup) -> Result<String> {
+    /// Check the bot token and the AI key from this computer: the bot's @name and the models the key can use.
+    pub async fn agent_check(&self, setup: &crate::agent::AgentSetup) -> Result<crate::agent::AgentCheck> {
         crate::agent::validate_setup(setup)?;
         let bot = crate::agent::telegram_bot_name(&setup.telegram_token).await?;
-        crate::agent::check_ai_key(setup.provider, &setup.api_key).await?;
-        Ok(bot)
+        let models = crate::agent::check_ai_key(setup.provider, &setup.api_key).await?;
+        if let Some(m) = setup.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+            if !models.iter().any(|x| x.id == m) {
+                return Err(Error::InvalidInput(format!(
+                    "this key can't use the model {m}; pick one from the list"
+                )));
+            }
+        }
+        Ok(crate::agent::AgentCheck { bot, models })
     }
 
     /// Install (or reconfigure) the agent: Python and the AI libraries, the
@@ -2382,24 +2435,25 @@ impl Engine {
         let bot = self
             .agent_check(setup)
             .await
-            .map_err(|e| self.refused_as(&s, Category::Command, "agent.install", "AI agent", e))?;
+            .map_err(|e| self.refused_as(&s, Category::Command, "agent.install", "AI agent", e))?
+            .bot;
         let target = format!("@{bot}");
         let long = std::time::Duration::from_secs(900);
         let short = std::time::Duration::from_secs(60);
-        progress::step("Preparing Python and the AI libraries (the first time takes a minute or two) …");
-        self.system_exec(&s, "agent.prepare", &target, a::PREPARE_SCRIPT, long)
+        progress::step("Setting up the agent on the server (the first time takes a minute or two) …");
+        self.system_exec_quiet(&s, "agent.prepare", &target, a::PREPARE_SCRIPT, long)
             .await?
             .check()?;
-        progress::step("Uploading the agent …");
+        progress::step("Installing the agent …");
         self.system_exec_with(&s, "agent.upload", &target, a::WRITE_AGENT, Some(a::AGENT_PY.as_bytes()), short)
             .await?
             .check()?;
-        progress::step("Saving the bot token and the API key (readable by root only) …");
+        progress::step("Saving your settings …");
         let config = a::config_json(setup, &bot, &s.profile.name)?;
         self.system_exec_with(&s, "agent.configure", &target, a::WRITE_CONFIG, Some(config.as_bytes()), short)
             .await?
             .check()?;
-        progress::step("Starting the agent service …");
+        progress::step("Starting the agent …");
         self.system_exec_with(&s, "agent.start", &target, a::WRITE_UNIT, Some(a::UNIT.as_bytes()), short)
             .await?
             .check()?;
@@ -2441,8 +2495,8 @@ impl Engine {
     pub async fn agent_update(&self, sid: &str) -> Result<()> {
         use crate::agent as a;
         let s = self.session(sid).await?;
-        progress::step("Updating Python's AI libraries …");
-        self.system_exec(
+        progress::step("Updating the agent …");
+        self.system_exec_quiet(
             &s,
             "agent.prepare",
             "AI agent",
@@ -2451,7 +2505,7 @@ impl Engine {
         )
         .await?
         .check()?;
-        progress::step("Uploading the agent …");
+
         self.system_exec_with(
             &s,
             "agent.upload",
@@ -2496,6 +2550,59 @@ impl Engine {
         )
         .await?
         .check()?;
+        Ok(())
+    }
+
+    /// The models the agent's key can use (the agent lists them; Orbital doesn't keep the key).
+    pub async fn agent_models(&self, sid: &str) -> Result<Vec<crate::agent::AiModel>> {
+        let s = self.session(sid).await?;
+        let (o, _) = s.exec_inspect(crate::agent::LIST_MODELS).await?;
+        crate::agent::parse_model_list(&o.stdout, &o.stderr)
+    }
+
+    /// Switch the agent to another model the key can use; it applies from the next message.
+    pub async fn agent_set_model(&self, sid: &str, model: &str) -> Result<()> {
+        let s = self.session(sid).await?;
+        let cmd = crate::agent::set_model_command(model).map_err(|e| self.refused_as(&s, Category::Command, "agent.model", model, e))?;
+        let models = self.agent_models(sid).await?;
+        if !models.iter().any(|m| m.id == model.trim()) {
+            return Err(self.refused_as(
+                &s,
+                Category::Command,
+                "agent.model",
+                model,
+                Error::InvalidInput(format!("the agent's key can't use {model}")),
+            ));
+        }
+        self.system_exec(&s, "agent.model", model.trim(), &cmd, std::time::Duration::from_secs(30))
+            .await?
+            .check()?;
+        Ok(())
+    }
+
+    /// Have the agent message the paired Telegram account; returns who it reached.
+    pub async fn agent_test(&self, sid: &str) -> Result<Option<String>> {
+        let s = self.session(sid).await?;
+        let o = self
+            .system_exec(
+                &s,
+                "agent.test",
+                "Telegram",
+                crate::agent::TEST_COMMAND,
+                std::time::Duration::from_secs(40),
+            )
+            .await?;
+        crate::agent::parse_test(&o.stdout, &o.stderr)
+    }
+
+    /// Daily summary at a time of day (server time), or off.
+    pub async fn agent_set_daily(&self, sid: &str, time: Option<&str>) -> Result<()> {
+        let s = self.session(sid).await?;
+        let cmd = crate::agent::set_daily_command(time)
+            .map_err(|e| self.refused_as(&s, Category::Command, "agent.daily", time.unwrap_or("off"), e))?;
+        self.system_exec(&s, "agent.daily", time.unwrap_or("off"), &cmd, std::time::Duration::from_secs(30))
+            .await?
+            .check()?;
         Ok(())
     }
 

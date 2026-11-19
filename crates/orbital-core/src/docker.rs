@@ -254,11 +254,10 @@ impl SshSession {
         Ok(v.get(0).cloned().unwrap_or(v))
     }
 
-    pub async fn container_logs(&self, id: &str, tail: u32) -> Result<String> {
-        validate_container(id)?;
-        let (_, o) = self
-            .docker(&format!("logs --timestamps --tail {} -- {} 2>&1", tail.min(10_000), quote(id)))
-            .await?;
+    /// The last `tail` lines, or with `since`/`until` (RFC 3339 times) the
+    /// last `tail` lines written in that window.
+    pub async fn container_logs(&self, id: &str, tail: u32, since: Option<&str>, until: Option<&str>) -> Result<String> {
+        let (_, o) = self.docker(&logs_args(id, tail, since, until)?).await?;
         Ok(o.stdout)
     }
 
@@ -276,8 +275,62 @@ impl SshSession {
     }
 }
 
+/// `logs …` for [`SshSession::container_logs`]. Times must be RFC 3339
+/// (`2026-11-20T09:00:00Z`, `…+05:00`), checked before they reach the server.
+pub fn logs_args(id: &str, tail: u32, since: Option<&str>, until: Option<&str>) -> Result<String> {
+    validate_container(id)?;
+    let mut a = format!("logs --timestamps --tail {}", tail.min(10_000));
+    for (flag, t) in [("--since", since), ("--until", until)] {
+        if let Some(t) = t {
+            let t = validate_time(t)?;
+            a.push_str(&format!(" {flag} {}", quote(t)));
+        }
+    }
+    a.push_str(&format!(" -- {} 2>&1", quote(id)));
+    Ok(a)
+}
+
+fn validate_time(t: &str) -> Result<&str> {
+    let b = t.as_bytes();
+    let date_ok = b.len() >= 20
+        && b.len() <= 35
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b[10] == b'T'
+        && b.iter().all(|c| c.is_ascii_digit() || b"-:T.Z+".contains(c));
+    if date_ok {
+        Ok(t)
+    } else {
+        Err(Error::InvalidInput(format!("not a date and time: {t}")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn logs_between_two_times() {
+        use super::logs_args;
+        assert_eq!(
+            logs_args("web", 400, None, None).unwrap(),
+            "logs --timestamps --tail 400 -- web 2>&1"
+        );
+        assert_eq!(
+            logs_args("web", 99_999, Some("2026-11-20T09:00:00.000Z"), Some("2026-11-20T10:30:00+05:00")).unwrap(),
+            "logs --timestamps --tail 10000 --since 2026-11-20T09:00:00.000Z --until 2026-11-20T10:30:00+05:00 -- web 2>&1"
+        );
+        for bad in [
+            "yesterday",
+            "2026-11-20",
+            "2026-11-20T09:00:00Z; rm -rf /",
+            "2026-11-20T09:00:00 Z",
+            "$(id)2026-11-20T09:00:00Z",
+        ] {
+            assert!(logs_args("web", 10, Some(bad), None).is_err(), "{bad}");
+        }
+        assert!(logs_args("bad name", 10, None, None).is_err());
+    }
+
     use super::*;
 
     const PS: &str = r#"{"Command":"\"/docker-entrypoint.…\"","CreatedAt":"2026-11-01 10:00:00 +0000 UTC","ID":"3f2a9c11aa","Image":"nginx:1.27","Labels":"com.docker.compose.project=shop,com.docker.compose.service=web","LocalVolumes":"0","Mounts":"","Names":"shop-web-1","Networks":"shop_default","Ports":"0.0.0.0:80->80/tcp","RunningFor":"2 weeks ago","Size":"0B","State":"running","Status":"Up 2 weeks"}

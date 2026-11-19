@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, asApiError, Container, LogSource } from "../lib/api";
 import { bytes } from "../lib/format";
 import { SessionState, useStore } from "../store";
+import { level } from "../lib/logs";
 
 const MAX_LINES = 5000;
 const COLORS = [1, 2, 3, 4, 5, 6].map((n) => `var(--log-${n})`);
@@ -13,12 +14,6 @@ interface Followed { key: string; label: string; source: LogSource; id: string |
 const keyOf = (s: LogSource) => (s.type === "file" ? `f:${s.path}` : s.type === "unit" ? `u:${s.unit}` : `c:${s.id}`);
 const labelOf = (s: LogSource) => (s.type === "file" ? s.path.replace(/^\/var\/log\//, "") : s.type === "unit" ? s.unit.replace(/\.service$/, "") : s.id);
 
-/** How bad a line looks, for colouring. */
-function level(t: string): "error" | "warn" | null {
-  if (/\b(error|err|fatal|crit(ical)?|emerg|alert|panic|exception|failed|traceback)\b|\s5\d\d\s/i.test(t)) return "error";
-  if (/\b(warn(ing)?|deprecated)\b|\s4\d\d\s/i.test(t)) return "warn";
-  return null;
-}
 
 function SourcePicker({ s, onPick, onClose }: { s: SessionState; onPick: (src: LogSource) => void; onClose: () => void }) {
   const [files, setFiles] = useState<{ path: string; size: number }[] | null>(null);

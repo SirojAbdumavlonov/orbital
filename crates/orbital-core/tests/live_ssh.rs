@@ -991,6 +991,20 @@ async fn server_details_and_compose_input() {
     assert!(matches!(r, Err(Error::InvalidInput(_))), "{r:?}");
     let log = engine.audit_query(&AuditFilter::default()).unwrap();
     assert!(log.iter().any(|ev| ev.action == "compose.up" && ev.outcome != Outcome::Success));
+    // A log time range that isn't a date never reaches the server.
+    let r = engine.container_logs(&s.id, "web", 100, Some("$(id)"), None).await;
+    assert!(matches!(r, Err(Error::InvalidInput(_))), "{r:?}");
+    // A unit's journal over the last hour reads without error (empty or "no journalctl" is fine), and a bad unit never reaches the server.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    engine
+        .unit_logs(&s.id, "ssh.service", 50, Some(now - 3600), Some(now))
+        .await
+        .unwrap();
+    let r = engine.unit_logs(&s.id, "x;id", 50, None, None).await;
+    assert!(matches!(r, Err(Error::InvalidInput(_))), "{r:?}");
     engine.disconnect(&s.id).await.unwrap();
 }
 
@@ -1967,8 +1981,66 @@ async fn ai_agent_installs_pairs_and_removes() {
 
     engine.agent_set_alerts(&s.id, false).await.unwrap();
     assert!(!engine.agent_status(&s.id).await.unwrap().alerts);
+    // Switching the model (the list itself needs a real key, so it's set directly).
+    root(a::set_model_command("claude-sonnet-5-5").unwrap()).await;
+    assert_eq!(
+        engine.agent_status(&s.id).await.unwrap().model.as_deref(),
+        Some("claude-sonnet-5-5")
+    );
+    // With a fake key the agent's model list reports the provider's refusal.
+    assert!(engine.agent_models(&s.id).await.is_err());
+    // Daily summary on and off; a test message needs a paired account first.
+    engine.agent_set_daily(&s.id, Some("08:30")).await.unwrap();
+    assert_eq!(engine.agent_status(&s.id).await.unwrap().daily_report.as_deref(), Some("08:30"));
+    engine.agent_set_daily(&s.id, None).await.unwrap();
+    assert!(engine.agent_status(&s.id).await.unwrap().daily_report.is_none());
+    let e = engine.agent_test(&s.id).await.unwrap_err().to_string();
+    assert!(e.contains("not paired"), "{e}");
     engine.agent_remove(&s.id).await.unwrap();
     let gone = root("ls /opt/orbital-agent /etc/orbital-agent 2>&1 || true".into()).await;
     assert!(gone.stdout.contains("No such file"), "{}", gone.stdout);
     assert!(!engine.agent_status(&s.id).await.unwrap().installed);
+}
+
+/// Find files by name below a folder, and download a folder as one .tar.gz.
+#[tokio::test]
+async fn find_files_and_download_a_folder() {
+    let Some(e) = env() else { return };
+    let Some(key) = e.key.clone() else { return };
+    let engine = engine();
+    let p = engine.create_profile(profile(&e, AuthMethod::Key, Some(key))).unwrap();
+    let a = connect(&engine, &p.id, None).await;
+    let dir = format!("{}/orbital-it-find-{}", a.home, std::process::id());
+    engine
+        .run_command(
+            &a.id,
+            &format!("mkdir -p {dir}/conf.d {dir}/node_modules/x {dir}/.git && echo a > {dir}/conf.d/site.conf && echo b > {dir}/nginx.conf && echo c > {dir}/node_modules/x/nginx.conf && echo d > {dir}/.git/nginx.conf"),
+            false,
+        )
+        .await
+        .unwrap();
+
+    let r = engine.find_files(&a.id, &dir, "CONF").await.unwrap();
+    let names: Vec<_> = r.files.iter().map(|f| f.path.trim_start_matches(&dir).to_string()).collect();
+    assert_eq!(
+        names,
+        ["/conf.d", "/nginx.conf", "/conf.d/site.conf"],
+        "case-insensitive, skips .git and node_modules"
+    );
+    assert!(r.files[0].dir && !r.files[1].dir && !r.truncated);
+    assert!(engine.find_files(&a.id, &dir, "a/b").await.is_err());
+
+    let local = std::env::temp_dir().join(format!("orbital-it-folder-{}.tar.gz", std::process::id()));
+    let n = engine.download_folder(&a.id, &dir, &local).await.unwrap();
+    assert!(n > 0 && std::fs::metadata(&local).unwrap().len() == n);
+    let list = std::process::Command::new("tar").arg("tzf").arg(&local).output().unwrap();
+    let listing = String::from_utf8_lossy(&list.stdout);
+    let top = dir.rsplit('/').next().unwrap();
+    assert!(
+        listing.contains(&format!("{top}/conf.d/site.conf")) && listing.contains(&format!("{top}/nginx.conf")),
+        "{listing}"
+    );
+    let _ = std::fs::remove_file(&local);
+    assert!(engine.download_folder(&a.id, "/", &local).await.is_err());
+    engine.run_command(&a.id, &format!("rm -rf {dir}"), false).await.unwrap();
 }

@@ -34,7 +34,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 CONFIG = "/etc/orbital-agent/config.json"
 STATE_DIR = "/var/lib/orbital-agent"
 STATE = STATE_DIR + "/state.json"
@@ -461,11 +461,14 @@ class Telegram:
     def __init__(self, token):
         self.base = f"https://api.telegram.org/bot{token}/"
 
-    def call(self, method, timeout=30, **params):
+    def call(self, method, http_timeout=30, **params):
+        """Call a Bot API method. `http_timeout` is how long to wait for the reply;
+        it has its own name because Telegram's methods have parameters called
+        `timeout` too (getUpdates' long-poll time), which go in `params`."""
         data = json.dumps(params).encode()
         req = urllib.request.Request(self.base + method, data=data, headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(req, timeout=http_timeout) as r:
                 body = json.loads(r.read())
         except urllib.error.HTTPError as e:
             body = json.loads(e.read() or b"{}")
@@ -487,7 +490,7 @@ class Telegram:
 
     def typing(self, chat):
         try:
-            self.call("sendChatAction", chat_id=chat, action="typing", timeout=10)
+            self.call("sendChatAction", http_timeout=10, chat_id=chat, action="typing")
         except Exception:
             pass
 
@@ -525,8 +528,12 @@ class Agent:
             return
         if m == self.cfg_mtime:
             return
+        before = (self.cfg.get("provider"), self.cfg.get("model"))
         self.cfg = load_json(CONFIG, {})
         self.cfg_mtime = m
+        if before != (self.cfg.get("provider"), self.cfg.get("model")):
+            # Another model or provider: the next question starts a fresh conversation.
+            self.conv = Conversation()
         self.tg = Telegram(self.cfg["telegram_token"])
         self.server = self.cfg.get("server_name") or socket.gethostname()
         try:
@@ -754,6 +761,24 @@ class Agent:
             self.alerted = now
             self.save_state()
 
+    # -- daily summary
+
+    def daily_summary(self):
+        """A morning report at the time set in Orbital, from the server's own data (no AI, no cost)."""
+        at = self.cfg.get("daily_report")
+        if not at or not self.owner():
+            return
+        now = time.localtime()
+        today = time.strftime("%Y-%m-%d", now)
+        if time.strftime("%H:%M", now) < at or self.state.get("last_report") == today:
+            return
+        self.state["last_report"] = today
+        self.save_state()
+        problems = [k.replace(":", " ") for k in sorted(self.alerted)]
+        head = f"☀️ Daily summary for {self.server}\n" + (("Needs attention: " + ", ".join(problems)) if problems else "Nothing needs attention.")
+        self.tg.send(self.owner(), head + "\n\n" + summary_text())
+        log("daily_summary")
+
     # -- main loop
 
     def run(self):
@@ -769,6 +794,10 @@ class Agent:
             if time.time() >= next_alert:
                 next_alert = time.time() + ALERT_EVERY
                 try:
+                    self.daily_summary()
+                except Exception as e:
+                    log("error", error=f"daily summary: {e}")
+                try:
                     self.check_alerts()
                 except Exception as e:
                     log("error", error=f"alerts: {e}")
@@ -776,7 +805,7 @@ class Agent:
                 params = {"timeout": 25, "allowed_updates": ["message", "callback_query"]}
                 if offset is not None:
                     params["offset"] = offset
-                updates = self.tg.call("getUpdates", timeout=40, **params)
+                updates = self.tg.call("getUpdates", http_timeout=40, **params)
             except Exception as e:
                 log("error", error=f"telegram: {e}")
                 time.sleep(5)
@@ -790,6 +819,40 @@ class Agent:
 
 
 # ----------------------------------------------------------------- commands
+
+
+SUMMARY = r"""
+echo "uptime: $(uptime -p 2>/dev/null)"
+echo "load: $(cut -d' ' -f1-3 /proc/loadavg) on $(nproc) cores"
+free -h 2>/dev/null | awk '/^Mem:/ {print "memory: " $3 " used of " $2 ", " $7 " available"}'
+df -h -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null | awk 'NR>1 {print "disk " $6 ": " $5 " full, " $4 " free"}'
+f=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | tr '\n' ' ')
+echo "failed services: ${f:-none}"
+[ -x /usr/lib/update-notifier/apt-check ] && echo "updates waiting (all;security): $(/usr/lib/update-notifier/apt-check 2>&1)"
+[ -f /var/run/reboot-required ] && echo "a reboot is needed"
+true
+"""
+
+
+def summary_text():
+    return run(SUMMARY, shell=True)
+
+
+def send_test():
+    """Message the paired account, to prove the bot reaches it (no AI involved)."""
+    cfg = load_json(CONFIG, {})
+    st = load_json(STATE, {})
+    if not st.get("owner_id"):
+        print(json.dumps({"error": "not paired yet: make a pairing code and send it to the bot first"}))
+        sys.exit(1)
+    server = cfg.get("server_name") or socket.gethostname()
+    try:
+        Telegram(cfg["telegram_token"]).send(st["owner_id"], f"✅ Test from Orbital: the agent on {server} can reach you. Ask me anything about the server.")
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
+        sys.exit(1)
+    log("test_message")
+    print(json.dumps({"ok": True, "to": st.get("owner_name")}))
 
 
 def status():
@@ -807,6 +870,7 @@ def status():
         "ownerId": st.get("owner_id"),
         "pairedAt": st.get("paired_at"),
         "alerting": st.get("alerted", []),
+        "dailyReport": cfg.get("daily_report"),
     }))
 
 
@@ -828,16 +892,61 @@ def set_pair_code():
     print("ok")
 
 
+MODEL_RE = re.compile(r"^[A-Za-z0-9._:/-]{1,80}$")
+
+# OpenAI lists every model (embeddings, audio, images); only chat models can run the agent.
+NOT_CHAT = ("embedding", "audio", "realtime", "transcribe", "tts", "image", "dall-e", "whisper", "moderation", "search", "instruct", "codex")
+
+
+def chat_model(provider, model_id):
+    if provider != "openai":
+        return True
+    is_chat = model_id.startswith(("gpt-", "chatgpt-")) or (model_id[:1] == "o" and model_id[1:2].isdigit())
+    return is_chat and not any(w in model_id for w in NOT_CHAT)
+
+
 def set_option():
-    """Change a non-secret option: alerts on/off. `set alerts on|off`."""
+    """Change a non-secret option: `set alerts on|off`, `set model <id>`. The
+    running agent notices the changed config and uses it for the next message."""
     key, value = sys.argv[2], sys.argv[3]
     cfg = load_json(CONFIG, {})
     if key == "alerts":
         cfg["alerts"] = value == "on"
+    elif key == "daily":
+        if value == "off":
+            cfg.pop("daily_report", None)
+        elif re.match(r"^([01][0-9]|2[0-3]):[0-5][0-9]$", value):
+            cfg["daily_report"] = value
+        else:
+            sys.exit("bad time")
+    elif key == "model":
+        if not MODEL_RE.match(value):
+            sys.exit("bad model name")
+        cfg["model"] = value
     else:
         sys.exit("unknown option")
     save_json(CONFIG, cfg)
     print("ok")
+
+
+def list_models():
+    """The models the configured key can use, newest first, as JSON: [{"id", "name"}]."""
+    cfg = load_json(CONFIG, {})
+    provider = cfg.get("provider")
+    try:
+        if provider == "openai":
+            import openai
+
+            items = sorted(openai.OpenAI(api_key=cfg["api_key"]).models.list(), key=lambda m: getattr(m, "created", 0), reverse=True)
+            out = [{"id": m.id, "name": m.id} for m in items if chat_model("openai", m.id)]
+        else:
+            import anthropic
+
+            out = [{"id": m.id, "name": getattr(m, "display_name", None) or m.id} for m in anthropic.Anthropic(api_key=cfg["api_key"]).models.list(limit=100)]
+    except Exception as e:  # the provider's message is what the user needs to see
+        print(json.dumps({"error": f"{type(e).__name__}: {e}"}))
+        sys.exit(1)
+    print(json.dumps(out))
 
 
 def selftest():
@@ -858,9 +967,45 @@ def selftest():
     assert len(names) == len(set(names)) and "run_command" in names
     assert all(t["schema"]["additionalProperties"] is False for t in tool_schemas())
     assert clip("x" * 20000).count("…(cut)…") == 1
+
+    assert MODEL_RE.match("claude-sonnet-5-5") and MODEL_RE.match("gpt-5") and not MODEL_RE.match("x; rm -rf /")
+    assert chat_model("openai", "gpt-5") and chat_model("openai", "o3") and not chat_model("openai", "text-embedding-3-large")
+    assert not chat_model("openai", "gpt-4o-audio-preview") and chat_model("claude", "claude-opus-5-5")
+
+    # getUpdates' own `timeout` (the long poll) reaches Telegram, and the HTTP
+    # wait is separate: the two once clashed and every poll failed.
+    sent = {}
+
+    class Reply:
+        def __init__(self, body):
+            self.body = body
+
+        def read(self):
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout):
+        sent["body"] = json.loads(req.data)
+        sent["http_timeout"] = timeout
+        return Reply(b'{"ok": true, "result": []}')
+
+    real = urllib.request.urlopen
+    urllib.request.urlopen = fake_urlopen
+    try:
+        assert Telegram("1:x").call("getUpdates", http_timeout=40, timeout=25, offset=7) == []
+        assert sent == {"body": {"timeout": 25, "offset": 7}, "http_timeout": 40}, sent
+        Telegram("1:x").typing(42)
+        assert sent["body"] == {"chat_id": 42, "action": "typing"} and sent["http_timeout"] == 10, sent
+    finally:
+        urllib.request.urlopen = real
     print("selftest ok")
 
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "run"
-    {"run": lambda: Agent().run(), "status": status, "pair": set_pair_code, "set": set_option, "selftest": selftest}.get(cmd, lambda: sys.exit(f"unknown command {cmd}"))()
+    {"run": lambda: Agent().run(), "status": status, "pair": set_pair_code, "set": set_option, "models": list_models, "test": send_test, "selftest": selftest}.get(cmd, lambda: sys.exit(f"unknown command {cmd}"))()

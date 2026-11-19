@@ -923,12 +923,40 @@ export interface AgentStatus {
   /** JSON lines from the agent's activity log. */
   recent: string[];
   updateAvailable: boolean;
+  /** Time of the daily summary ("09:00", server time), or null when off. */
+  dailyReport: string | null;
+  /** The agent version this Orbital installs. */
+  latestVersion: string;
+}
+
+export interface AiModel {
+  id: string;
+  name: string;
+}
+
+/** What Check found: the bot's @name and the models the key can use (newest first). */
+export interface AgentCheck {
+  bot: string;
+  models: AiModel[];
 }
 
 export interface PairCode {
   code: string;
   expires: number;
   bot: string | null;
+}
+
+// ---------- find files ----------
+
+export interface FoundFile {
+  path: string;
+  dir: boolean;
+}
+
+export interface FindReport {
+  files: FoundFile[];
+  /** More matched than were returned (200). */
+  truncated: boolean;
 }
 
 // ---------- disk cleanup ----------
@@ -973,15 +1001,28 @@ function progressChannel(onProgress?: OnProgress) {
 }
 
 export const api = {
+  /** Files and folders whose names contain `query`, below `dir` (skips .git and node_modules). */
+  findFiles: (sessionId: string, dir: string, query: string) => invoke<FindReport>("find_files", { sessionId, dir, query }),
+  /** A folder as one .tar.gz, streamed into `localPath`; a job (progress, stoppable). */
+  downloadFolder: (sessionId: string, remotePath: string, localPath: string, onProgress?: OnProgress) =>
+    invoke<number>("download_folder", { sessionId, remotePath, localPath, progress: progressChannel(onProgress) }),
   agentStatus: (sessionId: string) => invoke<AgentStatus>("agent_status", { sessionId }),
   /** Checks the bot token with Telegram and the AI key with its provider; returns the bot's @name. */
-  agentCheck: (setup: AgentSetup) => invoke<string>("agent_check", { setup }),
+  agentCheck: (setup: AgentSetup) => invoke<AgentCheck>("agent_check", { setup }),
   agentInstall: (sessionId: string, setup: AgentSetup, onProgress?: OnProgress) => invoke<PairCode>("agent_install", { sessionId, setup, progress: progressChannel(onProgress) }),
   agentPairCode: (sessionId: string) => invoke<PairCode>("agent_pair_code", { sessionId }),
   agentUpdate: (sessionId: string, onProgress?: OnProgress) => invoke<void>("agent_update", { sessionId, progress: progressChannel(onProgress) }),
   agentSetRunning: (sessionId: string, on: boolean) => invoke<void>("agent_set_running", { sessionId, on }),
   agentSetAlerts: (sessionId: string, on: boolean) => invoke<void>("agent_set_alerts", { sessionId, on }),
   agentRemove: (sessionId: string) => invoke<void>("agent_remove", { sessionId }),
+  /** The models the agent's key can use (listed by the agent on the server; Orbital doesn't keep the key). */
+  agentModels: (sessionId: string) => invoke<AiModel[]>("agent_models", { sessionId }),
+  /** Switch the agent's model; it applies from the next message. */
+  agentSetModel: (sessionId: string, model: string) => invoke<void>("agent_set_model", { sessionId, model }),
+  /** The agent messages the paired account; returns who it reached. */
+  agentTest: (sessionId: string) => invoke<string | null>("agent_test", { sessionId }),
+  /** Daily summary at "HH:MM" (server time), or null for off. */
+  agentSetDaily: (sessionId: string, time: string | null) => invoke<void>("agent_set_daily", { sessionId, time }),
   cleanupScan: (sessionId: string) => invoke<CleanupItem[]>("cleanup_scan", { sessionId }),
   cleanupRun: (sessionId: string, id: string, onProgress?: OnProgress) => invoke<CleanupItem[]>("cleanup_run", { sessionId, id, progress: progressChannel(onProgress) }),
   /** SIGTERM (or SIGKILL with force). PID 1 and sshd are refused. */
@@ -1118,13 +1159,18 @@ export const api = {
   systemInfo: (sessionId: string) => invoke<SystemInfo>("system_info", { sessionId }),
   metrics: (sessionId: string) => invoke<Metrics>("metrics", { sessionId }),
   listServices: (sessionId: string) => invoke<Service[]>("list_services", { sessionId }),
+  /** A unit's journal; since/until are Unix seconds. */
+  unitLogs: (sessionId: string, unit: string, tail = 400, since: number | null = null, until: number | null = null) =>
+    invoke<string>("unit_logs", { sessionId, unit, tail, since, until }),
   serviceDetail: (sessionId: string, unit: string) => invoke<ServiceDetail>("service_detail", { sessionId, unit }),
   serviceAction: (sessionId: string, unit: string, action: ServiceAction, onProgress?: OnProgress) =>
     invoke<ActionReport>("service_action", { sessionId, unit, action, progress: progressChannel(onProgress) }),
   listContainers: (sessionId: string) => invoke<Container[]>("list_containers", { sessionId }),
   containerStats: (sessionId: string) => invoke<ContainerStats[]>("container_stats", { sessionId }),
   inspectContainer: (sessionId: string, id: string) => invoke<any>("inspect_container", { sessionId, id }),
-  containerLogs: (sessionId: string, id: string, tail = 500) => invoke<string>("container_logs", { sessionId, id, tail }),
+  /** The last `tail` lines; with since/until (ISO times) the last `tail` written between them. */
+  containerLogs: (sessionId: string, id: string, tail = 500, since: string | null = null, until: string | null = null) =>
+    invoke<string>("container_logs", { sessionId, id, tail, since, until }),
   containerAction: (sessionId: string, id: string, action: ContainerAction, onProgress?: OnProgress) =>
     invoke<ExecOutput>("container_action", { sessionId, id, action, progress: progressChannel(onProgress) }),
   /** docker compose up -d / restart / pull for a project or one service; returns Compose's output. */
@@ -1177,6 +1223,7 @@ export const api = {
   auditQuery: (filter: { profileId?: string; category?: AuditCategory; search?: string; limit?: number; beforeSeq?: number }) =>
     invoke<AuditEvent[]>("audit_query", { filter }),
   auditVerify: () => invoke<{ ok: boolean; checked: number; firstBrokenSeq: number | null }>("audit_verify"),
+  saveText: (path: string, text: string) => invoke<void>("save_text", { path, text }),
   auditExport: (format: "json" | "csv", path: string) => invoke<void>("audit_export", { format, path }),
   /** Results and alerts from the uptime checks, for as long as the page lives. */
   uptimeWatch: (onEvent: (e: UptimeEvent) => void) => {

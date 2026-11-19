@@ -4,6 +4,7 @@ import { confirm, StateDot } from "../components/ui";
 import { api, asApiError, ServiceAction, ServiceDetail } from "../lib/api";
 import { bytes } from "../lib/format";
 import { SessionState, useStore } from "../store";
+import { rangeSeconds, useLogPane } from "../components/LogPane";
 
 /** A tab for any detected software without a dedicated view: its service, configuration and logs. */
 export function ToolView({ s, toolId }: { s: SessionState; toolId: string }) {
@@ -14,6 +15,13 @@ export function ToolView({ s, toolId }: { s: SessionState; toolId: string }) {
   const [detail, setDetail] = useState<ServiceDetail | null>(null);
   const [busy, setBusy] = useState<ServiceAction | null>(null);
   const [loading, setLoading] = useState(false);
+  const log = useLogPane({
+    sid,
+    id: unit,
+    name: (unit ?? "service").replace(/\.service$/, ""),
+    follow: unit ? { type: "unit", unit: unit } : null,
+    load: (r) => api.unitLogs(sid, unit!, r ? 5000 : 400, r ? rangeSeconds(r.from) : null, r ? rangeSeconds(r.to) : null),
+  });
 
   const load = async () => {
     if (!unit) return;
@@ -106,7 +114,8 @@ export function ToolView({ s, toolId }: { s: SessionState; toolId: string }) {
         </div>
         <aside className="drawer">
           <div className="drawer-head"><h3>Recent log</h3><div className="muted">{unit ? `journalctl -u ${unit}` : "Only available for systemd services"}</div></div>
-          <pre className="logs">{unit ? detail?.logs ?? "Loading logs…" : "This program runs without a systemd unit (for example inside a container), so Orbital can't start, stop or read logs for it here."}</pre>
+          {unit && <div className="vsplit-head"><span className="vsplit-title" style={{ paddingLeft: 6 }}>Logs</span><span className="spacer" />{log.extra}</div>}
+          {unit ? log.body : <pre className="logs">{"This program runs without a systemd unit (for example inside a container), so Orbital can't start, stop or read logs for it here."}</pre>}
         </aside>
       </div>
     </div>

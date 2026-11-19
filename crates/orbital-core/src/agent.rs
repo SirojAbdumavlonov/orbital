@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 /// The agent itself, uploaded to `/opt/orbital-agent/agent.py`.
 pub const AGENT_PY: &str = include_str!("agent/orbital_agent.py");
 /// Its version, as the agent reports it (kept equal to `VERSION` in the script).
-pub const VERSION: &str = "1.3.0";
+pub const VERSION: &str = "1.3.1";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -63,8 +63,12 @@ pub struct AgentStatus {
     pub alerting: Vec<String>,
     /// The last lines of its activity log (JSON lines, no secrets).
     pub recent: Vec<String>,
-    /// The installed agent is older than this Orbital's.
+    /// The installed agent is older than this Orbital's (or its version can't be read).
     pub update_available: bool,
+    /// Time of the daily summary ("09:00"), or none.
+    pub daily_report: Option<String>,
+    /// The agent version this Orbital installs.
+    pub latest_version: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -83,7 +87,6 @@ need=0
 command -v python3 >/dev/null 2>&1 || need=1
 [ $need -eq 0 ] && python3 -c 'import venv, ensurepip' >/dev/null 2>&1 || need=1
 if [ $need -eq 1 ]; then
-  echo "Installing Python …"
   if command -v apt-get >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv
@@ -95,9 +98,7 @@ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 4)' || { e
 mkdir -p /opt/orbital-agent /etc/orbital-agent /var/lib/orbital-agent
 chmod 700 /etc/orbital-agent /var/lib/orbital-agent
 [ -x /opt/orbital-agent/venv/bin/python ] || python3 -m venv /opt/orbital-agent/venv
-echo "Installing the AI libraries (anthropic, openai) …"
 /opt/orbital-agent/venv/bin/pip install --quiet --disable-pip-version-check --upgrade anthropic openai
-echo "Python ready"
 "#;
 
 /// Writes the agent from stdin.
@@ -131,6 +132,99 @@ pub const SET_PAIR_CODE: &str = "/opt/orbital-agent/venv/bin/python /opt/orbital
 
 pub const ALERTS_ON: &str = "/opt/orbital-agent/venv/bin/python /opt/orbital-agent/agent.py set alerts on";
 pub const ALERTS_OFF: &str = "/opt/orbital-agent/venv/bin/python /opt/orbital-agent/agent.py set alerts off";
+
+/// The models the configured key can use, listed by the agent itself (Orbital
+/// doesn't keep the key): JSON `[{"id", "name"}]`, or `{"error": …}`.
+pub const LIST_MODELS: &str = "/opt/orbital-agent/venv/bin/python /opt/orbital-agent/agent.py models";
+
+/// Switch the model; the running agent uses it from the next message.
+pub fn set_model_command(model: &str) -> Result<String> {
+    let m = model.trim();
+    if m.is_empty() || m.len() > 80 || !m.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._:/".contains(&b)) {
+        return Err(Error::InvalidInput("a model name is letters, digits and - . _ : / only".into()));
+    }
+    Ok(format!(
+        "/opt/orbital-agent/venv/bin/python /opt/orbital-agent/agent.py set model {}",
+        crate::shell::quote(m)
+    ))
+}
+
+/// The agent's model list, or what went wrong (an old agent without the
+/// command, or the provider's own error).
+pub fn parse_model_list(stdout: &str, stderr: &str) -> Result<Vec<AiModel>> {
+    let text = stdout.trim();
+    if let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(text) {
+        let models: Vec<AiModel> = list
+            .iter()
+            .filter_map(|m| {
+                let id = m.get("id")?.as_str()?.to_string();
+                let name = m.get("name").and_then(|n| n.as_str()).unwrap_or(&id).to_string();
+                Some(AiModel { id, name })
+            })
+            .collect();
+        return Ok(models);
+    }
+    if let Some(e) = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+    {
+        return Err(Error::Other(format!("the AI provider said: {e}")));
+    }
+    if stderr.contains("unknown command") {
+        return Err(Error::InvalidInput(
+            "this agent is too old to list models: click Update agent first".into(),
+        ));
+    }
+    Err(Error::Other(format!(
+        "couldn't list the models: {}",
+        stderr.trim().lines().last().unwrap_or("no answer")
+    )))
+}
+
+/// Message the paired account (no AI involved): JSON `{"ok": true}` or `{"error": …}`.
+pub const TEST_COMMAND: &str = "/opt/orbital-agent/venv/bin/python /opt/orbital-agent/agent.py test";
+
+/// Daily summary at `time` ("HH:MM", server time), or off.
+pub fn set_daily_command(time: Option<&str>) -> Result<String> {
+    let value = match time.map(str::trim) {
+        None | Some("") => "off".to_string(),
+        Some(t) => {
+            let ok = t.len() == 5
+                && t.as_bytes()[2] == b':'
+                && t[..2].parse::<u8>().is_ok_and(|h| h < 24)
+                && t[3..].parse::<u8>().is_ok_and(|m| m < 60);
+            if !ok {
+                return Err(Error::InvalidInput("give the time as HH:MM, like 09:00".into()));
+            }
+            t.to_string()
+        }
+    };
+    Ok(format!(
+        "/opt/orbital-agent/venv/bin/python /opt/orbital-agent/agent.py set daily {value}"
+    ))
+}
+
+/// What the test command printed: who it reached, or why it couldn't.
+pub fn parse_test(stdout: &str, stderr: &str) -> Result<Option<String>> {
+    let v: serde_json::Value = match serde_json::from_str(stdout.trim()) {
+        Ok(v) => v,
+        Err(_) if stderr.contains("unknown command") => {
+            return Err(Error::InvalidInput(
+                "this agent is too old for a test message: click Update agent first".into(),
+            ))
+        }
+        Err(_) => {
+            return Err(Error::Other(format!(
+                "the agent didn't answer: {}",
+                stderr.trim().lines().last().unwrap_or("no output")
+            )))
+        }
+    };
+    if let Some(e) = v.get("error").and_then(|e| e.as_str()) {
+        return Err(Error::Other(e.to_string()));
+    }
+    Ok(v.get("to").and_then(|t| t.as_str()).map(String::from))
+}
 
 pub const REMOVE: &str = "systemctl disable --now orbital-agent >/dev/null 2>&1; rm -f /etc/systemd/system/orbital-agent.service; systemctl daemon-reload; rm -rf /opt/orbital-agent /etc/orbital-agent /var/lib/orbital-agent /var/log/orbital-agent.log; echo removed";
 
@@ -177,6 +271,11 @@ pub fn validate_setup(s: &AgentSetup) -> Result<()> {
         return Err(Error::InvalidInput("paste the whole API key".into()));
     }
     match s.provider {
+        Provider::Claude if key.starts_with("sk-ant-oat") => {
+            return Err(Error::InvalidInput(
+                "this is a Claude subscription (OAuth) token, like the one Claude Code uses, not an API key. Create an API key at console.anthropic.com → API keys (it starts with sk-ant-api) and paste that".into(),
+            ))
+        }
         Provider::Claude if !key.starts_with("sk-ant-") => return Err(Error::InvalidInput("Claude API keys start with sk-ant-".into())),
         Provider::Openai if !key.starts_with("sk-") => return Err(Error::InvalidInput("OpenAI API keys start with sk-".into())),
         _ => {}
@@ -217,6 +316,7 @@ pub fn parse_status(out: &str) -> AgentStatus {
                 st.alerts = v.get("alerts").and_then(|x| x.as_bool()).unwrap_or(true);
                 st.pair_code_active = v.get("pairCodeActive").and_then(|x| x.as_bool()).unwrap_or(false);
                 st.paired_at = v.get("pairedAt").and_then(|x| x.as_i64());
+                st.daily_report = s("dailyReport");
                 st.alerting = v
                     .get("alerting")
                     .and_then(|x| x.as_array())
@@ -227,7 +327,9 @@ pub fn parse_status(out: &str) -> AgentStatus {
             st.recent.push(l.to_string());
         }
     }
-    st.update_available = st.installed && st.version.as_deref().is_some_and(|v| v != VERSION);
+    st.latest_version = VERSION.to_string();
+    // An agent that doesn't say its version is older than any that does.
+    st.update_available = st.installed && st.version.as_deref() != Some(VERSION);
     st
 }
 
@@ -261,25 +363,120 @@ pub async fn telegram_bot_name(token: &str) -> Result<String> {
         .ok_or_else(|| Error::Other("Telegram didn't say the bot's name".into()))
 }
 
-/// Whether the AI key works (lists models: free, nothing is generated).
-pub async fn check_ai_key(provider: Provider, key: &str) -> Result<()> {
+/// A model the key can use, for the setup's model list.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiModel {
+    pub id: String,
+    pub name: String,
+}
+
+/// What Check found: the bot's @name and the models the key can use.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCheck {
+    pub bot: String,
+    pub models: Vec<AiModel>,
+}
+
+/// The provider's own words for an error reply (`{"error": {"message": …}}`
+/// on both APIs), so "400" becomes something a person can act on.
+pub fn provider_error(status: u16, body: &str) -> String {
+    let msg = serde_json::from_str::<serde_json::Value>(body).ok().and_then(|v| {
+        v.pointer("/error/message")
+            .or_else(|| v.get("message"))
+            .and_then(|m| m.as_str())
+            .map(str::to_string)
+    });
+    let what = match status {
+        401 => "the AI provider refused this API key",
+        403 => "this API key isn't allowed to do that",
+        404 => "the AI provider doesn't know that address",
+        429 => "the AI provider is rate-limiting this key, or it has no credit left",
+        s if s >= 500 => "the AI provider had a problem on its side",
+        _ => "the AI provider rejected the request",
+    };
+    match msg {
+        Some(m) if !m.trim().is_empty() => format!("{what} ({status}): {}", m.trim()),
+        _ => format!("{what} ({status})"),
+    }
+}
+
+/// Models worth offering, newest first. OpenAI lists everything (embeddings,
+/// audio, images); only chat models can run the agent.
+pub fn parse_models(provider: Provider, body: &str) -> Vec<AiModel> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return vec![];
+    };
+    let Some(items) = v.get("data").and_then(|d| d.as_array()) else {
+        return vec![];
+    };
+    let mut out: Vec<(String, AiModel)> = items
+        .iter()
+        .filter_map(|m| {
+            let id = m.get("id")?.as_str()?.to_string();
+            match provider {
+                Provider::Claude => {
+                    let name = m.get("display_name").and_then(|x| x.as_str()).unwrap_or(&id).to_string();
+                    let when = m.get("created_at").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    Some((when, AiModel { id, name }))
+                }
+                Provider::Openai => {
+                    const NOT_CHAT: [&str; 12] = [
+                        "embedding",
+                        "audio",
+                        "realtime",
+                        "transcribe",
+                        "tts",
+                        "image",
+                        "dall-e",
+                        "whisper",
+                        "moderation",
+                        "search",
+                        "instruct",
+                        "codex",
+                    ];
+                    let chat = (id.starts_with("gpt-")
+                        || id.starts_with("chatgpt-")
+                        || (id.starts_with('o') && id[1..].starts_with(|c: char| c.is_ascii_digit())))
+                        && !NOT_CHAT.iter().any(|w| id.contains(w));
+                    let when = m.get("created").and_then(|x| x.as_i64()).unwrap_or(0);
+                    chat.then(|| (format!("{when:020}"), AiModel { name: id.clone(), id }))
+                }
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.id.cmp(&b.1.id)));
+    out.into_iter().map(|(_, m)| m).collect()
+}
+
+/// Whether the AI key works, and which models it can use (listing models is
+/// free: nothing is generated).
+pub async fn check_ai_key(provider: Provider, key: &str) -> Result<Vec<AiModel>> {
     let c = http()?;
     let req = match provider {
         Provider::Claude => c
-            .get("https://api.anthropic.com/v1/models")
+            .get("https://api.anthropic.com/v1/models?limit=100")
             .header("x-api-key", key.trim())
-            .header("anthropic-version", "2023-06-01"),
+            .header("anthropic-version", "2026-10-21"),
         Provider::Openai => c.get("https://api.openai.com/v1/models").bearer_auth(key.trim()),
     };
     let r = req
         .send()
         .await
         .map_err(|e| Error::Other(format!("couldn't reach the AI provider: {}", crate::dns::net_error(&e))))?;
-    match r.status().as_u16() {
-        200 => Ok(()),
-        401 | 403 => Err(Error::InvalidInput("the AI provider refused this API key".into())),
-        429 => Ok(()), // the key works; it's just busy
-        s => Err(Error::Other(format!("the AI provider answered {s}"))),
+    let status = r.status().as_u16();
+    let body = r.text().await.unwrap_or_default();
+    match status {
+        200 => {
+            let models = parse_models(provider, &body);
+            if models.is_empty() {
+                return Err(Error::Other("the key works, but the provider lists no chat models for it".into()));
+            }
+            Ok(models)
+        }
+        401 | 403 => Err(Error::InvalidInput(provider_error(status, &body))),
+        s => Err(Error::Other(provider_error(s, &body))),
     }
 }
 
@@ -358,6 +555,101 @@ mod tests {
     }
 
     #[test]
+    fn subscription_tokens_are_explained() {
+        let mut s = setup();
+        s.api_key = "sk-ant-oat01-abcdefghijklmnopqrstuvwxyz".into();
+        let e = validate_setup(&s).unwrap_err().to_string();
+        assert!(e.contains("subscription") && e.contains("console.anthropic.com"), "{e}");
+    }
+
+    #[test]
+    fn provider_errors_say_why() {
+        let anthropic =
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"OAuth authentication is currently not supported."}}"#;
+        assert_eq!(
+            provider_error(400, anthropic),
+            "the AI provider rejected the request (400): OAuth authentication is currently not supported."
+        );
+        let openai = r#"{"error":{"message":"Incorrect API key provided: sk-proj-****abcd.","type":"invalid_request_error","code":"invalid_api_key"}}"#;
+        assert!(provider_error(401, openai).starts_with("the AI provider refused this API key (401): Incorrect API key"));
+        assert_eq!(
+            provider_error(500, "<html>oops</html>"),
+            "the AI provider had a problem on its side (500)"
+        );
+    }
+
+    #[test]
+    fn lists_models_newest_first_and_only_chat_ones() {
+        let claude = r#"{"data":[{"id":"claude-haiku-5-5","display_name":"Claude Haiku 5.5","created_at":"2026-09-01T00:00:00Z"},{"id":"claude-opus-5-5","display_name":"Claude Opus 5.5","created_at":"2026-10-01T00:00:00Z"}]}"#;
+        let m = parse_models(Provider::Claude, claude);
+        assert_eq!(
+            m.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(),
+            ["claude-opus-5-5", "claude-haiku-5-5"]
+        );
+        assert_eq!(m[0].name, "Claude Opus 5.5");
+        let openai = r#"{"data":[{"id":"gpt-5","created":300},{"id":"text-embedding-3-large","created":400},{"id":"gpt-4o-audio-preview","created":350},{"id":"o3","created":200},{"id":"gpt-image-1","created":500},{"id":"whisper-1","created":100},{"id":"omni-moderation-latest","created":450}]}"#;
+        assert_eq!(
+            parse_models(Provider::Openai, openai)
+                .iter()
+                .map(|x| x.id.as_str())
+                .collect::<Vec<_>>(),
+            ["gpt-5", "o3"]
+        );
+        assert!(parse_models(Provider::Claude, "not json").is_empty());
+    }
+
+    #[test]
+    fn daily_summary_and_test_message() {
+        assert!(set_daily_command(Some("09:00")).unwrap().ends_with("set daily 09:00"));
+        assert!(set_daily_command(None).unwrap().ends_with("set daily off"));
+        for bad in ["9:00", "24:00", "09:60", "nine", "09:00; reboot"] {
+            assert!(set_daily_command(Some(bad)).is_err(), "{bad}");
+        }
+        assert_eq!(parse_test(r#"{"ok": true, "to": "siroj"}"#, "").unwrap().as_deref(), Some("siroj"));
+        assert!(parse_test(r#"{"error": "not paired yet"}"#, "")
+            .unwrap_err()
+            .to_string()
+            .contains("not paired"));
+        assert!(parse_test("", "unknown command test")
+            .unwrap_err()
+            .to_string()
+            .contains("Update agent"));
+    }
+
+    #[test]
+    fn an_agent_without_a_version_is_outdated() {
+        let st = parse_status("@@installed\n@@active active\n");
+        assert!(st.installed && st.update_available);
+        let current = parse_status(&format!("@@installed\n@@json {{\"version\": \"{VERSION}\"}}\n"));
+        assert!(!current.update_available);
+    }
+
+    #[test]
+    fn changing_the_model() {
+        assert_eq!(
+            set_model_command(" claude-sonnet-5-5 ").unwrap(),
+            "/opt/orbital-agent/venv/bin/python /opt/orbital-agent/agent.py set model claude-sonnet-5-5"
+        );
+        assert!(set_model_command("x; rm -rf /").is_err());
+        assert!(set_model_command("").is_err());
+        let ok = parse_model_list(
+            r#"[{"id":"claude-opus-5-5","name":"Claude Opus 5.5"},{"id":"claude-sonnet-5-5"}]"#,
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            ok.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
+            ["Claude Opus 5.5", "claude-sonnet-5-5"]
+        );
+        let e = parse_model_list(r#"{"error": "AuthenticationError: invalid x-api-key"}"#, "")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("invalid x-api-key"), "{e}");
+        let old = parse_model_list("", "unknown command models").unwrap_err().to_string();
+        assert!(old.contains("Update agent"), "{old}");
+    }
+
+    #[test]
     fn pair_codes_are_readable_and_random() {
         let a = new_pair_code();
         assert_eq!(a.len(), 8);
@@ -373,7 +665,8 @@ mod tests {
         assert_eq!(st.owner.as_deref(), Some("siroj"));
         assert_eq!(st.alerting, ["disk:/"]);
         assert_eq!(st.recent.len(), 1);
-        assert_eq!(parse_status(""), AgentStatus::default());
+        let empty = parse_status("");
+        assert!(!empty.installed && !empty.update_available && empty.latest_version == VERSION);
     }
 
     /// The agent's own checks (secret paths refused, names validated, tool

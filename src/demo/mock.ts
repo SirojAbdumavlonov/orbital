@@ -378,7 +378,7 @@ const cleanupItems = () => [
   { id: "docker", title: "Docker leftovers", detail: "Stopped containers, unused networks, dangling images and build cache. Running containers and volumes (data) are kept.", bytes: cleaned.has("docker") ? 0 : 1900 * MB },
   { id: "dockerimages", title: "Docker images no container uses", detail: "Pulled again when a container needs one. Can take a while to download later.", bytes: cleaned.has("dockerimages") ? 0 : 3100 * MB },
 ];
-const agent: any = { installed: false, running: false, version: null, provider: null, model: null, bot: null, alerts: true, pairCodeActive: false, owner: null, pairedAt: null, alerting: [], recent: [], updateAvailable: false };
+const agent: any = { installed: false, running: false, version: null, provider: null, model: null, bot: null, alerts: true, pairCodeActive: false, owner: null, pairedAt: null, alerting: [], recent: [], updateAvailable: false, dailyReport: null, latestVersion: "1.3.1" };
 const agentLog: any[] = [];
 /** A pairing code; in the demo, "you" send it from Telegram 8 seconds later. */
 function agentCode() {
@@ -733,7 +733,7 @@ export function install() {
       case "follow_logs": {
         const id = "lg" + Math.random().toString(36).slice(2, 8);
         const send = (n: number) => args.onEvent.onmessage({ type: "data", text: Array.from({ length: n }, () => `2026-11-15T${new Date().toTimeString().slice(0, 8)} ${LOG_LINES[Math.floor(Math.random() * LOG_LINES.length)]}`).join("\n") + "\n" });
-        setTimeout(() => send(40), 100);
+        if (args.lines > 0) setTimeout(() => send(Math.min(40, args.lines)), 100);
         logTimers[id] = window.setInterval(() => send(1 + Math.floor(Math.random() * 3)), 900);
         return id;
       }
@@ -819,22 +819,45 @@ export function install() {
         return n;
       }
       case "notify": return null;
+      case "find_files": {
+        await new Promise((r) => setTimeout(r, 500));
+        const q = String(args.query).toLowerCase();
+        const all = ["/home/deploy/apps", "/home/deploy/apps/shop/docker-compose.yml", "/home/deploy/apps/shop/.env.example", "/home/deploy/apps/shop/nginx.conf", "/home/deploy/apps/shop/config", "/home/deploy/apps/shop/config/app.yml", "/home/deploy/backup.sh", "/home/deploy/docker-compose.yml", "/home/deploy/apps/blog/config.toml"];
+        const dirs = new Set(["/home/deploy/apps", "/home/deploy/apps/shop/config"]);
+        const files = all.filter((p) => p.startsWith(args.dir === "/" ? "/" : args.dir + "/") && p.split("/").pop()!.toLowerCase().includes(q)).map((p) => ({ path: p, dir: dirs.has(p) }));
+        files.sort((a, b) => a.path.split("/").length - b.path.split("/").length || a.path.localeCompare(b.path));
+        return { files, truncated: false };
+      }
+      case "download_folder":
+        await progress(args.progress, [[0, "step", `Packing ${args.remotePath} on the server and downloading it …`], ...transferEvents(1, 38_400_000, [args.remotePath.split("/").pop()], 3600)]);
+        return 38_400_000;
       case "cancel_job": stopped.add(args.id); return true;
       case "agent_status": return { ...agent, recent: agentLog.map((l) => JSON.stringify(l)) };
       case "agent_check":
         await new Promise((r) => setTimeout(r, 700));
         if (!/^\d+:[\w-]{30,}$/.test(args.setup.telegramToken)) throw { kind: "InvalidInput", message: "Invalid input: Telegram doesn't accept this bot token: copy it again from @BotFather" };
-        return "my_server_helper_bot";
+        if (args.setup.apiKey.startsWith("sk-ant-oat")) throw { kind: "InvalidInput", message: "Invalid input: this is a Claude subscription (OAuth) token, like the one Claude Code uses, not an API key. Create an API key at console.anthropic.com → API keys (it starts with sk-ant-api) and paste that" };
+        if (args.setup.apiKey.includes("bad")) throw { kind: "Other", message: "the AI provider rejected the request (400): Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits." };
+        return args.setup.provider === "openai"
+          ? { bot: "my_server_helper_bot", models: [{ id: "gpt-5", name: "gpt-5" }, { id: "gpt-5-mini", name: "gpt-5-mini" }, { id: "o3", name: "o3" }] }
+          : { bot: "my_server_helper_bot", models: [{ id: "claude-opus-5-5", name: "Claude Opus 5.5" }, { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" }, { id: "claude-haiku-5-5", name: "Claude Haiku 5.5" }, { id: "claude-fable-5-2", name: "Claude Fable 5.2" }] };
       case "agent_install": {
-        await progress(args.progress, [[0, "step", "Checking the bot token and the API key …"], [700, "step", "Preparing Python and the AI libraries (the first time takes a minute or two) …"], [600, "line", "Installing the AI libraries (anthropic, openai) …"], [1800, "line", "Successfully installed anthropic-1.4.0 openai-2.9.1 httpx-0.28.1"], [400, "line", "Python ready"], [400, "step", "Uploading the agent …"], [500, "step", "Saving the bot token and the API key (readable by root only) …"], [500, "step", "Starting the agent service …"], [600, "step", "Making a pairing code …"]]);
-        Object.assign(agent, { installed: true, running: true, version: "1.3.0", provider: args.setup.provider, model: args.setup.model || (args.setup.provider === "openai" ? "gpt-5" : "claude-opus-5-5"), bot: "my_server_helper_bot", alerts: args.setup.alerts, owner: null, pairedAt: null, pairCodeActive: true });
-        agentLog.push({ time: new Date().toISOString().slice(0, 19), event: "start", version: "1.3.0" });
+        await progress(args.progress, [[0, "step", "Checking the bot token and the API key …"], [700, "step", "Setting up the agent on the server (the first time takes a minute or two) …"], [2600, "step", "Installing the agent …"], [500, "step", "Saving your settings …"], [500, "step", "Starting the agent …"], [600, "step", "Making a pairing code …"]]);
+        Object.assign(agent, { installed: true, running: true, version: "1.3.0", updateAvailable: true, provider: args.setup.provider, model: args.setup.model || (args.setup.provider === "openai" ? "gpt-5" : "claude-opus-5-5"), bot: "my_server_helper_bot", alerts: args.setup.alerts, owner: null, pairedAt: null, pairCodeActive: true });
+        agentLog.push({ time: new Date().toISOString().slice(0, 19), event: "start", version: "1.3.1" });
         return agentCode();
       }
       case "agent_pair_code": Object.assign(agent, { owner: null, pairedAt: null, pairCodeActive: true }); return agentCode();
-      case "agent_update": await progress(args.progress, [[0, "step", "Updating Python's AI libraries …"], [1200, "step", "Uploading the agent …"], [500, "step", "Restarting it …"]]); agent.version = "1.3.0"; agent.updateAvailable = false; return null;
+      case "agent_update": await progress(args.progress, [[0, "step", "Updating the agent …"], [1700, "step", "Restarting it …"]]); agent.version = "1.3.1"; agent.updateAvailable = false; return null;
       case "agent_set_running": agent.running = args.on; return null;
       case "agent_set_alerts": agent.alerts = args.on; return null;
+      case "agent_models":
+        await new Promise((r) => setTimeout(r, 600));
+        if (agent.version !== "1.3.1") throw { kind: "InvalidInput", message: "Invalid input: this agent is too old to list models: click Update agent first" };
+        return agent.provider === "openai" ? [{ id: "gpt-5", name: "gpt-5" }, { id: "gpt-5-mini", name: "gpt-5-mini" }, { id: "o3", name: "o3" }] : [{ id: "claude-opus-5-5", name: "Claude Opus 5.5" }, { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" }, { id: "claude-haiku-5-5", name: "Claude Haiku 5.5" }];
+      case "agent_set_model": agent.model = args.model; agentLog.push({ time: new Date().toISOString().slice(0, 19), event: "config", provider: agent.provider, model: args.model }); return null;
+      case "agent_test": await new Promise((r) => setTimeout(r, 900)); if (!agent.owner) throw { kind: "Other", message: "not paired yet: make a pairing code and send it to the bot first" }; agentLog.push({ time: new Date().toISOString().slice(0, 19), event: "test_message" }); return agent.owner;
+      case "agent_set_daily": agent.dailyReport = args.time; return null;
       case "agent_remove": Object.assign(agent, { installed: false, running: false, owner: null }); agentLog.length = 0; return null;
       case "tmux_sessions": return [{ name: "orbital-1", windows: 2, attached: false, created: Math.floor(Date.now() / 1000) - 3 * 3600 }, { name: "deploy", windows: 1, attached: false, created: Math.floor(Date.now() / 1000) - 86400 }];
       case "cleanup_scan": return cleanupItems();
@@ -954,6 +977,12 @@ export function install() {
         await progress(args.progress, [[0, "step", `Running systemctl ${args.action} ${args.unit} …`], ...(args.unit.startsWith("nginx") ? [[400, "line", "nginx: the configuration file /etc/nginx/nginx.conf syntax is ok"], [200, "line", "nginx: configuration file /etc/nginx/nginx.conf test is successful"]] as [number, "line", string][] : []), [900, "line", ""]]);
         return { command: `systemctl ${args.action} -- ${args.unit}`, preflight: args.unit.startsWith("nginx") ? ["nginx -t", "syntax is ok"] : null, output: { stdout: "", stderr: "", exitCode: 0, durationMs: 120 } };
       case "list_services": return services;
+      case "unit_logs": {
+        await new Promise((r) => setTimeout(r, 300));
+        const from = args.since ? args.since * 1000 : Date.now() - 3_600_000, to = args.until ? args.until * 1000 : Date.now();
+        const n = args.since || args.until ? 30 : 12;
+        return Array.from({ length: n }, (_, i) => `${new Date(from + ((to - from) * i) / n).toISOString().slice(0, 19)}+0000 prod-web-01 ${args.unit.replace(".service", "")}[812]: ${LOG_LINES[i % LOG_LINES.length]}`).join("\n") + "\n";
+      }
       case "service_detail": return {
         unit: args.unit,
         properties: { MainPID: "812", ActiveEnterTimestamp: "Tue 2026-10-27 09:14:02 UTC", MemoryCurrent: "48234496", TasksCurrent: "9", NRestarts: "0", User: "", FragmentPath: `/lib/systemd/system/${args.unit}` },
@@ -962,6 +991,11 @@ export function install() {
       case "list_containers": return containers;
       case "container_stats": return containers.filter((c) => c.state === "running").map((c, i) => ({ id: c.id, name: c.names, cpuPercent: `${(0.4 + i * 3.7).toFixed(2)}%`, memUsage: `${120 + i * 210}MiB / 15.5GiB`, memPercent: "2.1%", netIo: "1.2GB / 900MB", blockIo: "0B / 0B", pids: "12" }));
       case "container_logs":
+        if (args.since || args.until) {
+          const from = args.since ? Date.parse(args.since) : Date.now() - 86_400_000, to = args.until ? Date.parse(args.until) : Date.now();
+          await new Promise((r) => setTimeout(r, 400));
+          return Array.from({ length: 30 }, (_, i) => `${new Date(from + ((to - from) * i) / 30).toISOString()}  ${LOG_LINES[i % LOG_LINES.length]}`).join("\n") + "\n";
+        }
         if (containers.find((x) => x.id === args.id)?.state === "restarting") return "2026-11-18T09:41:02.118Z  INFO  shop-worker 2.14.0 starting\n2026-11-18T09:41:02.410Z  INFO  Connecting to postgres://db:5432/shop\n2026-11-18T09:41:07.415Z  ERROR Error: connect ECONNREFUSED 127.0.0.1:5432\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1606:16)\n2026-11-18T09:41:07.416Z  FATAL worker can't start without the database, exiting\n";
         return "2026-11-15T01:02:11.120Z  INFO  Started ShopApiApplication in 6.81 seconds\n2026-11-15T01:02:12.004Z  INFO  Tomcat started on port 8081 (http)\n2026-11-15T01:04:40.551Z  WARN  Slow query: SELECT * FROM orders WHERE … (1840 ms)\n";
       case "inspect_container": {
@@ -1102,6 +1136,7 @@ export function install() {
         return null;
       }
       case "plugin:event|listen": return 1;
+      case "save_text": return null;
       case "plugin:dialog|save": return `/Users/demo/Downloads/${args.options?.defaultPath ?? "download"}`;
       // Picking an SSH config file in the import dialog.
       case "plugin:dialog|open": return args.options?.title?.includes("SSH config") ? "/Users/demo/work/ssh_config" : null;

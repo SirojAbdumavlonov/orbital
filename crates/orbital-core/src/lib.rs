@@ -17,6 +17,7 @@ pub mod docker;
 pub mod engine;
 pub mod error;
 pub mod fail2ban;
+pub mod filetools;
 pub mod firewall;
 pub mod history;
 pub mod known_hosts;

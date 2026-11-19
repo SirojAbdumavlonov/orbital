@@ -1,13 +1,13 @@
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   ArrowRightLeft, ArrowUp, ChevronRight, Download, Eye, EyeOff, FilePlus, FileText, Folder, FolderPlus, FolderUp, History, Link2, Lock, Pencil, RefreshCw, RotateCcw, Save,
-  ShieldCheck, SquareTerminal, Trash2, Upload, X,
+  Search, ShieldCheck, SquareTerminal, Star, Trash2, Upload, X,
 } from "lucide-react";
 import { isMac, mod } from "../lib/platform";
 import Editor, { DiffEditor, DiffOnMount, OnMount } from "@monaco-editor/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { confirm, Modal } from "../components/ui";
-import { api, asApiError, FileEntry, SafeWriteReport } from "../lib/api";
+import { FindReport, api, asApiError, FileEntry, SafeWriteReport } from "../lib/api";
 import { runJob, useRunningJob } from "../lib/jobs";
 import { JobProgress } from "../components/JobProgress";
 import { baseName, breadcrumbs, bytes, joinPath, octal, parentPath, relativeTime } from "../lib/format";
@@ -42,6 +42,37 @@ function Browser({ s }: { s: SessionState }) {
   const [copyOf, setCopyOf] = useState<FileEntry[] | null>(null);
   // "Send to server" with nothing selected: first choose what to send.
   const [pickSend, setPickSend] = useState(false);
+  const [marks, setMarks] = useBookmarks(s.profile.id);
+  const marked = marks.includes(s.cwd);
+  const [finding, setFinding] = useState(false);
+  const [query, setQuery] = useState("");
+  const [found, setFound] = useState<FindReport | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [findErr, setFindErr] = useState<string | null>(null);
+  const folderJob = useRunningJob(`folder:${sid}`);
+  async function findNow() {
+    if (!query.trim()) return;
+    setSearching(true);
+    setFindErr(null);
+    try {
+      setFound(await api.findFiles(sid, s.cwd, query.trim()));
+    } catch (e) {
+      setFound(null);
+      setFindErr(asApiError(e).message.replace(/^Invalid input: /, ""));
+    } finally {
+      setSearching(false);
+    }
+  }
+  const closeFind = () => { setFinding(false); setFound(null); setQuery(""); setFindErr(null); };
+  async function downloadFolder(e: FileEntry) {
+    const local = await saveDialog({ defaultPath: `${e.name}.tar.gz`, title: `Download ${e.name} as one archive` });
+    if (!local) return;
+    try {
+      await runJob((p) => api.downloadFolder(sid, e.path, local, p), { key: `folder:${sid}`, title: `Downloading ${e.name}`, sid, quietHere: false, done: (n) => `Downloaded ${e.name} (${bytes(n)}) to ${local}` });
+    } catch {
+      // The job reports the error.
+    }
+  }
   const sendRequest = useStore((x) => x.sendRequest);
   useEffect(() => {
     if (sendRequest !== sid) return;
@@ -64,7 +95,7 @@ function Browser({ s }: { s: SessionState }) {
     }
   }, [sid, s.cwd]);
 
-  useEffect(() => { load(s.cwd); setSel(null); setFilter(""); }, [s.cwd]);
+  useEffect(() => { load(s.cwd); setSel(null); setFilter(""); setFound(null); setFindErr(null); }, [s.cwd]);
   const go = (path: string) => patch(sid, { cwd: path });
 
   async function openEntry(e: FileEntry) {
@@ -157,8 +188,19 @@ function Browser({ s }: { s: SessionState }) {
         <div className="crumbs mono">
           {breadcrumbs(s.cwd).map((b) => <button key={b.path} onClick={() => go(b.path)}>{b.name}</button>)}
         </div>
+        {ssh && <button className={`icon-btn ${marked ? "on" : ""}`} aria-label={marked ? "Remove bookmark" : "Bookmark this folder"} title={marked ? "Remove this folder from bookmarks" : "Bookmark this folder"} onClick={() => setMarks(marked ? marks.filter((m) => m !== s.cwd) : [...marks, s.cwd])}><Star size={14} fill={marked ? "currentColor" : "none"} /></button>}
         <button className="icon-btn" aria-label="Refresh" title="Refresh" onClick={() => load()}><RefreshCw size={14} className={loading ? "spin" : ""} /></button>
       </div>
+      {marks.length > 0 && (
+        <div className="bookmarks" aria-label="Bookmarked folders">
+          {marks.map((m) => (
+            <span key={m} className={`bookmark ${m === s.cwd ? "on" : ""}`}>
+              <button className="mono" title={m} onClick={() => go(m)}><Star size={11} /> {m === "/" ? "/" : m.split("/").filter(Boolean).pop()}</button>
+              <button className="bookmark-x" aria-label={`Remove bookmark ${m}`} title="Remove bookmark" onClick={() => setMarks(marks.filter((x) => x !== m))}><X size={11} /></button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="toolbar">
         <input className="input" style={{ height: 26 }} placeholder="Filter this folder" value={filter} onChange={(e) => setFilter(e.target.value)} />
         <button className="icon-btn" title={showHidden ? "Hide dotfiles" : "Show dotfiles"} aria-label="Toggle hidden files" onClick={() => setShowHidden(!showHidden)}>{showHidden ? <Eye size={15} /> : <EyeOff size={15} />}</button>
@@ -168,10 +210,18 @@ function Browser({ s }: { s: SessionState }) {
         <button className="icon-btn" title="Upload a folder from this computer" aria-label="Upload folder" onClick={pickUploadFolder}><FolderUp size={15} /></button>
         {ssh && <button className="icon-btn" title="Open terminal in this folder" aria-label="Open terminal here" onClick={() => openTerminal(sid, s.cwd)}><SquareTerminal size={15} /></button>}
         {ssh && <button className="icon-btn" title="Send files or folders to another server" aria-label="Send to another server" onClick={() => setPickSend(true)}><ArrowRightLeft size={15} /></button>}
+        {ssh && <button className={`icon-btn ${finding ? "on" : ""}`} title="Find files in this folder and below" aria-label="Find files" onClick={() => (finding ? closeFind() : setFinding(true))}><Search size={15} /></button>}
       </div>
-      {(uploadJob || copyJob) && (
+      {finding && (
+        <form className="find-bar" onSubmit={(e) => { e.preventDefault(); void findNow(); }}>
+          <input className="input" autoFocus placeholder={`Find by name in ${s.cwd === "/" ? "/" : s.cwd.split("/").pop()} and below…`} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Escape" && closeFind()} />
+          <button className="btn" disabled={!query.trim() || searching}>{searching ? "Searching…" : "Find"}</button>
+        </form>
+      )}
+      {(uploadJob || copyJob || folderJob) && (
         <div className="job-stack">
           {uploadJob && <JobProgress job={uploadJob} compact />}
+          {folderJob && <JobProgress job={folderJob} compact />}
           {copyJob && !copyOf && <JobProgress job={copyJob} compact />}
         </div>
       )}
@@ -179,9 +229,22 @@ function Browser({ s }: { s: SessionState }) {
         if (e.key === "Enter" && selected) openEntry(selected);
         if (((e.key === "Backspace" && mod(e)) || (!isMac && e.key === "Delete")) && selected) remove(selected);
       }}>
-        {error && <div className="empty"><div><h3>Can't read this folder</h3><p>{error}</p><button className="btn" onClick={() => go(s.info.home)}>Go to home folder</button></div></div>}
-        {!error && visible.length === 0 && !loading && <div className="empty"><p>{filter ? "No matches in this folder." : "This folder is empty. Drop files here to upload."}</p></div>}
-        {visible.map((e) => (
+        {finding && (findErr || found) && (
+          <div className="find-results">
+            {findErr && <div className="empty"><p>{findErr}</p></div>}
+            {found && found.files.length === 0 && <div className="empty"><p>Nothing named like “{query}” in this folder or below.</p></div>}
+            {found?.files.map((f) => (
+              <button key={f.path} className="entry find-hit" onClick={() => (f.dir ? (closeFind(), go(f.path)) : openFile(sid, f.path))} title={f.path}>
+                {f.dir ? <Folder size={15} color="var(--amber)" /> : <FileText size={15} className="faint" />}
+                <span className="n mono">{f.path.startsWith(s.cwd === "/" ? "/" : s.cwd + "/") ? f.path.slice(s.cwd === "/" ? 1 : s.cwd.length + 1) : f.path}</span>
+              </button>
+            ))}
+            {found?.truncated && <div className="faint" style={{ padding: "8px 12px", fontSize: 12 }}>Showing the first 200 matches; type more of the name to narrow it down.</div>}
+          </div>
+        )}
+        {!(finding && (findErr || found)) && error && <div className="empty"><div><h3>Can't read this folder</h3><p>{error}</p><button className="btn" onClick={() => go(s.info.home)}>Go to home folder</button></div></div>}
+        {!(finding && (findErr || found)) && !error && visible.length === 0 && !loading && <div className="empty"><p>{filter ? "No matches in this folder." : "This folder is empty. Drop files here to upload."}</p></div>}
+        {!(finding && (findErr || found)) && visible.map((e) => (
           <div
             key={e.path}
             role="option"
@@ -209,6 +272,7 @@ function Browser({ s }: { s: SessionState }) {
           {ssh ? <span className="mono faint" title="Owner:group, last modified">{selected.owner ?? selected.uid}:{selected.group ?? selected.gid} · {relativeTime(selected.mtime)}</span> : <span className="mono faint">{selected.kind === "dir" ? "Folder" : bytes(selected.size)} · {relativeTime(selected.mtime)}</span>}
           <span className="spacer" />
           {selected.kind !== "dir" && <button className="icon-btn" title="Download" aria-label="Download" onClick={() => download(selected)}><Download size={14} /></button>}
+          {selected.kind === "dir" && ssh && <button className="btn" style={{ height: 26 }} disabled={!!folderJob} title="Download this folder as one .tar.gz archive" onClick={() => downloadFolder(selected)}><Download size={13} /> Download folder</button>}
         </div>
       )}
       {rename && (
@@ -822,4 +886,25 @@ function VersionsDialog({ s, file, onClose, onRestored }: { s: SessionState; fil
       )}
     </Modal>
   );
+}
+
+/** Bookmarked folders for a server (per profile, on this computer). */
+function useBookmarks(profileId: string): [string[], (m: string[]) => void] {
+  const key = `orbital.bookmarks.${profileId}`;
+  const [marks, setMarks] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(key) ?? "[]");
+    } catch {
+      return [];
+    }
+  });
+  const save = (m: string[]) => {
+    setMarks(m);
+    try {
+      localStorage.setItem(key, JSON.stringify(m));
+    } catch {
+      /* private mode: bookmarks last until the app closes */
+    }
+  };
+  return [marks, save];
 }

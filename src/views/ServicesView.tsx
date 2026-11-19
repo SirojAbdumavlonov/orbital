@@ -1,9 +1,10 @@
-import { Play, RefreshCw, RotateCw, Search, Square, ToggleLeft, ToggleRight, Zap } from "lucide-react";
+import { Play, ScrollText, RefreshCw, RotateCw, Search, Square, ToggleLeft, ToggleRight, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { confirm, StateDot, DrawerClose } from "../components/ui";
 import { api, asApiError, Service, ServiceAction, ServiceDetail } from "../lib/api";
 import { runJob, useRunningJob } from "../lib/jobs";
 import { JobProgress } from "../components/JobProgress";
+import { rangeSeconds, useLogPane } from "../components/LogPane";
 import { bytes } from "../lib/format";
 import { SessionState, useStore } from "../store";
 
@@ -20,6 +21,13 @@ export function ServicesView({ s }: { s: SessionState }) {
   const [detail, setDetail] = useState<ServiceDetail | null>(null);
   const [busy, setBusy] = useState<ServiceAction | null>(null);
   const job = useRunningJob(`service:${sid}`);
+  const log = useLogPane({
+    sid,
+    id: sel,
+    name: (sel ?? "service").replace(/\.service$/, ""),
+    follow: sel ? { type: "unit", unit: sel } : null,
+    load: (r) => api.unitLogs(sid, sel!, r ? 5000 : 400, r ? rangeSeconds(r.from) : null, r ? rangeSeconds(r.to) : null),
+  });
 
   const load = async () => {
     setLoading(true);
@@ -152,7 +160,8 @@ export function ServicesView({ s }: { s: SessionState }) {
                 <dt>Runs as</dt><dd>{p.User || "root"}</dd>
                 <dt>Unit file</dt><dd className="mono">{p.FragmentPath || "—"}</dd>
               </dl>
-              <pre className="logs">{detail?.logs || "Loading logs…"}</pre>
+              <div className="vsplit-head"><span className="vsplit-title" style={{ paddingLeft: 6 }}><ScrollText size={13} /> Logs</span><span className="spacer" />{log.extra}</div>
+              {log.body}
             </>
           )}
         </aside>

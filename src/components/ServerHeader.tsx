@@ -6,13 +6,13 @@ import { bytes, duration } from "../lib/format";
 import { useSettings } from "../lib/settings";
 import { ALWAYS_TOOLS, DEDICATED_TOOLS, isSsh, SessionState, Tab, useStore } from "../store";
 import { PROTOCOL_NAMES } from "./ProfileDialog";
-import { LiveNumber, Sparkline, StateDot } from "./ui";
+import { LiveNumber, Modal, Sparkline, StateDot } from "./ui";
 
 const TABS: { id: Tab; label: string; icon: typeof Gauge }[] = [
   { id: "files", label: "Files", icon: FolderTree },
-  { id: "services", label: "Services", icon: ListChecks },
   { id: "monitor", label: "Monitor", icon: Gauge },
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
+  { id: "services", label: "Services", icon: ListChecks },
   { id: "activity", label: "Activity", icon: Activity },
 ];
 
@@ -36,69 +36,79 @@ const BUILTIN: Record<string, { name: string; hint: string; icon: typeof Gauge }
 };
 const tabName = (id: string, t?: DetectedTool) => t?.name ?? BUILTIN[id]?.name ?? (id === "docker" ? "Docker" : id);
 
-/** The "+" at the end of the tab strip: software found on this server that can be opened as a tab. */
+/**
+ * The "+" at the end of the tab strip: a window listing everything that can
+ * open as a tab here, the software found on this server and the tools every
+ * server has, searchable and scrollable.
+ */
 function AddToolMenu({ s }: { s: SessionState }) {
   const { openTool, detectTools } = useStore();
   const [open, setOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    window.addEventListener("mousedown", away);
-    window.addEventListener("keydown", esc);
-    return () => {
-      window.removeEventListener("mousedown", away);
-      window.removeEventListener("keydown", esc);
-    };
-  }, [open]);
+  const [q, setQ] = useState("");
   const refresh = async () => {
     setRefreshing(true);
     await detectTools(s.info.id);
     setRefreshing(false);
   };
   // Only software Orbital has something to show for: its own view, or config and log files it found.
-  const available = (s.tools ?? []).filter((t) => !s.toolTabs.includes(t.id) && (DEDICATED_TOOLS.includes(t.id) || t.paths.length > 0));
-  // Open leftwards when the "+" sits too close to the window's right edge.
-  const flip = open && (ref.current?.getBoundingClientRect().left ?? 0) + 300 > window.innerWidth;
+  const found = (s.tools ?? []).filter((t) => !s.toolTabs.includes(t.id) && (DEDICATED_TOOLS.includes(t.id) || t.paths.length > 0));
+  const builtin = ALWAYS_TOOLS.filter((id) => !s.toolTabs.includes(id));
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const hit = (...texts: string[]) => words.every((w) => texts.some((t) => t.toLowerCase().includes(w)));
+  const foundShown = found.filter((t) => hit(t.name, t.category, t.id));
+  const builtinShown = builtin.filter((id) => hit(BUILTIN[id].name, BUILTIN[id].hint, id));
+  const pick = (id: string) => {
+    openTool(s.info.id, id);
+    setOpen(false);
+    setQ("");
+  };
+  const first = foundShown[0]?.id ?? builtinShown[0];
   return (
-    <div className="menu-anchor" ref={ref}>
-      <button className="tab tab-add" aria-label="Add a tab for software on this server" aria-haspopup="menu" aria-expanded={open} title="Add a tab" onClick={() => { setOpen(!open); if (!open) refresh(); }}>
+    <>
+      <button className="tab tab-add" aria-label="Add a tab for software on this server" aria-haspopup="dialog" title="Add a tab" onClick={() => { setOpen(true); refresh(); }}>
         <Plus size={15} />
       </button>
       {open && (
-        <div className={`menu ${flip ? "flip" : ""}`} role="menu">
-          <div className="menu-head">
-            <span>Found on this server</span>
-            <button className="icon-btn" style={{ width: 22, height: 22 }} aria-label="Look again" title="Look again" onClick={refresh}><RefreshCw size={12} className={refreshing ? "spin" : ""} /></button>
+        <Modal title="Add a tab" subtitle={<>Tools for <b>{s.profile.name}</b>: what Orbital found on it, and what every server has.</>} wide onClose={() => { setOpen(false); setQ(""); }}>
+          <div className="picker-search">
+            <input className="input" autoFocus placeholder="Search: docker, logs, firewall, database…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && first && pick(first)} />
+            <button className="icon-btn" aria-label="Look again" title="Look for software again" onClick={refresh}><RefreshCw size={14} className={refreshing ? "spin" : ""} /></button>
           </div>
-          {s.tools === null && <div className="menu-empty">Looking…</div>}
-          {s.tools !== null && available.length === 0 && (
-            <div className="menu-empty">{s.tools.length === 0 ? "Nothing Orbital recognises yet." : "Everything found is already open."}</div>
-          )}
-          {ALWAYS_TOOLS.filter((id) => !s.toolTabs.includes(id)).map((id) => {
-            const b = BUILTIN[id];
-            return (
-              <button key={id} role="menuitem" className="menu-item" onClick={() => { openTool(s.info.id, id); setOpen(false); }}>
-                <b.icon size={15} />
-                <span className="menu-name">{b.name}<small>{b.hint}</small></span>
-              </button>
-            );
-          })}
-          {available.map((t) => {
-            const Icon = toolIcon(t);
-            return (
-              <button key={t.id} role="menuitem" className="menu-item" onClick={() => { openTool(s.info.id, t.id); setOpen(false); }}>
-                <Icon size={15} />
-                <span className="menu-name">{t.name}<small>{t.category}</small></span>
-                <StateDot state={t.running ? "running" : "inactive"} label={t.running ? "running" : "stopped"} />
-              </button>
-            );
-          })}
-        </div>
+          <div className="picker">
+            <div className="picker-title">Found on this server{s.tools === null ? " · looking…" : ""}</div>
+            {s.tools !== null && foundShown.length === 0 && (
+              <div className="faint picker-empty">{q ? "Nothing found on this server matches." : s.tools.length === 0 ? "Nothing Orbital recognises yet." : "Everything found is already open."}</div>
+            )}
+            <div className="picker-grid">
+              {foundShown.map((t) => {
+                const Icon = toolIcon(t);
+                return (
+                  <button key={t.id} className="picker-card" onClick={() => pick(t.id)}>
+                    <Icon size={17} />
+                    <span className="picker-text"><b>{t.name}</b><small>{t.category}</small></span>
+                    <StateDot state={t.running ? "running" : "inactive"} label={t.running ? "running" : "stopped"} />
+                  </button>
+                );
+              })}
+            </div>
+            <div className="picker-title">Tools for every server</div>
+            {builtinShown.length === 0 && <div className="faint picker-empty">{q ? "No tool matches." : "All of them are open."}</div>}
+            <div className="picker-grid">
+              {builtinShown.map((id) => {
+                const b = BUILTIN[id];
+                return (
+                  <button key={id} className="picker-card" onClick={() => pick(id)}>
+                    <b.icon size={17} />
+                    <span className="picker-text"><b>{b.name}</b><small>{b.hint}</small></span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </Modal>
       )}
-    </div>
+    </>
   );
 }
 

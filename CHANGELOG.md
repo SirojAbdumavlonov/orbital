@@ -4,6 +4,31 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Live logs** for containers (Docker tab), services (Services tab) and the service of every tool tab: new lines appear as they're written, no Refresh needed; **Live** pauses and resumes. The view keeps the newest 2,000 lines and follows the end unless you scroll up.
+- **Logs between two times** (the calendar button next to Logs): pick from and to, or the last 15 minutes, hour, 6 or 24 hours, in this computer's time zone (`docker logs --since/--until`, `journalctl --since/--until`, up to 5,000 lines).
+- **Search a log and show only errors and warnings** (the filter button next to Logs); errors and warnings are coloured.
+- **Save a log to a file** (the download button next to Logs): the lines shown, filters included.
+- **Bookmarks in Files**: the ☆ next to the path saves the folder for this server; saved folders show as chips under the path, one click away.
+- **Find files by name** (the magnifier in the Files toolbar): searches below the current folder on the server, case-insensitive, skipping .git and node_modules, up to 200 matches, nearest first. Click a match to open the file or folder.
+- **Download a whole folder** (select a folder → **Download folder**): packed on the server and streamed as one .tar.gz into Downloads, with live bytes, and stoppable.
+- **AI agent: daily summary** in Telegram at a time you choose (AI agent tab): health, disks, memory, failed services and waiting updates, once a day in the server's time. Built from the server's own data, so it uses no AI credit.
+- **AI agent: Send a test message**: the agent messages your Telegram account, proving the whole path (server → Telegram → you) works without spending anything on AI.
+
+### Changed
+- **Change the AI agent's model** (AI agent tab → **Change model**): pick another model your key can use, for example Opus ↔ Sonnet, without typing the key again. The agent on the server lists the models (Orbital never keeps the key) and uses the new one from your next message, starting a fresh conversation.
+- **AI agent setup: choose the model from a list.** Check now loads the models your key can use (newest first; for ChatGPT only models that can chat) and you pick one; Claude Opus 5.5 is preselected when the key has it. Install waits until the check passed.
+- **Docker: one log view, resizable.** A selected container showed its log twice (in the crash explanation and in the Logs tab below). Now Logs is the top pane and Inspect/Compose the bottom one; drag the line between them to change their heights (double-click resets), fold either with its arrow, and the layout is remembered.
+- **Server tabs in order of use**: Files, Monitor, Terminal, Services, Activity.
+- **The "+" for tabs opens an "Add a tab" window**: a searchable grid of everything that can open here, the software found on the server (with whether it runs) and the tools every server has, scrollable, with Enter opening the first match. The old drop-down ran off the screen once the list grew.
+
+### Fixed
+- **AI agent: "this agent is too old to list models" with no way forward.** When a server runs an older agent, the AI agent tab now shows a banner with **Update agent** at the top (the button used to sit among the others), the Change-model dialog offers **Update agent now** right where the error appears, and an agent whose version can't be read counts as out of date instead of hiding the button.
+- **AI agent: it started but never answered** ("Telegram.call() got multiple values for keyword argument 'timeout'"). Telegram's getUpdates has its own `timeout` parameter (how long to wait for new messages), and the agent's HTTP wait was also called `timeout`, so every poll failed. The agent is now version 1.3.1: on a server that runs the old one, the AI agent tab shows **Update agent**.
+- Setting up the AI agent shows plain steps (setting up, installing, saving your settings, starting) instead of what the installer downloads.
+- **AI agent: "the AI provider answered 400" said nothing useful.** The provider's own reason is shown now (for example "Your credit balance is too low…" or "OAuth authentication is currently not supported"), and a Claude subscription token (sk-ant-oat…, the kind Claude Code uses) is recognised before anything is sent, with where to create a real API key.
+
+
 ## 1.3.0 (2026-11-19)
 
 ### Added
