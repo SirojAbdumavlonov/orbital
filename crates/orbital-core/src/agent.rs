@@ -377,7 +377,9 @@ mod tests {
     }
 
     /// The agent's own checks (secret paths refused, names validated, tool
-    /// schemas strict), when python3 is here to run them.
+    /// schemas strict), when python3 is here to run them. Unix only: the agent
+    /// runs on Linux servers, and its path checks are about Unix paths.
+    #[cfg(unix)]
     #[test]
     fn the_agent_passes_its_selftest() {
         let dir = std::env::temp_dir().join(format!("orbital-agent-test-{}", std::process::id()));
