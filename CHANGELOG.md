@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.3.0 (2026-11-19)
+
 ### Added
 - **AI agent in Telegram** (new tab on every server): ask about a server from Telegram, any time, in plain words ("is everything OK?", "why is the site slow?", "show nginx errors from the last hour"), answered by Claude (Claude Opus 5.5 by default) or ChatGPT with your own API key. The agent runs on the server itself, so it answers when this computer is off.
   - Set up in two steps: a bot from @BotFather (token) and an AI key; **Check** tests both before anything goes to the server. **Install** adds Python's AI libraries in their own folder (/opt/orbital-agent) and a service, with live progress.
