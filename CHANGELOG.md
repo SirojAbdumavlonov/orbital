@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.3.2 (2026-11-20)
+
 ### Added
 - **Network check** (new tab on every server, from "+"): is a host, port or web address reachable *from the server*? Port (nc), HTTP(S) with status and time (curl), DNS, ping and traceroute, each with its full output one click away; recent checks are remembered per server. Answers "why can't my app reach the database/API?" without typing commands.
 - **Databases, Redis and Apache in Docker.** Their tabs now work inside the container: a picker next to the toolbar chooses this server or a container (shown when there is a choice). Inside a container Orbital uses the login the image was started with (POSTGRES_USER/POSTGRES_PASSWORD, MYSQL_ROOT_PASSWORD/MARIADB_ROOT_PASSWORD, REDIS_PASSWORD); those values stay in the container. One-click backups are for databases installed on the server itself.
