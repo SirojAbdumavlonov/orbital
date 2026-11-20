@@ -35,7 +35,9 @@ jobs:
           sudo systemctl restart fail2ban
           sleep 2
           sudo fail2ban-client status
-          sudo systemctl start nginx
+          # Some runner images start Apache on port 80; the nginx tests need it.
+          sudo systemctl disable --now apache2 2>/dev/null || true
+          sudo systemctl restart nginx
           echo 'export ORBITAL_IT_UFW=1 ORBITAL_IT_FAIL2BAN=1 ORBITAL_IT_USERS=1 ORBITAL_IT_NGINX=1' >> /tmp/it-env
       - name: Clippy
         run: cargo clippy -p orbital-core --all-targets -- -D warnings
