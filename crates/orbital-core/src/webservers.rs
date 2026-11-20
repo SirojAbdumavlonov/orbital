@@ -364,9 +364,10 @@ pub fn haproxy_state_script(socket: &str, backend: &str, server: &str, state: Ha
 }
 
 impl SshSession {
-    pub async fn apache_status(&self) -> Result<ApacheStatus> {
-        let (o, _) = self.exec_inspect(APACHE_SCRIPT).await?;
-        parse_apache(&o.stdout).ok_or_else(|| Error::NotFound("Apache is not installed on this server".into()))
+    /// On the server, or inside `container` (the official httpd image).
+    pub async fn apache_status(&self, container: Option<&str>) -> Result<ApacheStatus> {
+        let o = self.inspect_in(container, APACHE_SCRIPT).await?;
+        parse_apache(&o.stdout).ok_or_else(|| crate::databases::missing("Apache", container, &o))
     }
 
     pub async fn haproxy_status(&self) -> Result<HaproxyStatus> {

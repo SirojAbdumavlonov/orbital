@@ -316,6 +316,7 @@ pub fn run() {
             commands::inspect_container,
             commands::container_logs,
             commands::unit_logs,
+            commands::net_check,
             commands::save_text,
             commands::container_action,
             commands::run_command,

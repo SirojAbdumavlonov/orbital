@@ -23,6 +23,7 @@ pub mod history;
 pub mod known_hosts;
 pub mod logs;
 pub mod metrics;
+pub mod netcheck;
 pub mod nginx;
 pub mod ports;
 pub mod presence;

@@ -82,7 +82,7 @@ pub fn validate_db_name(name: &str) -> Result<&str> {
 
 const PG_LIST: &str = r#"export LC_ALL=C; cd /tmp
 command -v psql >/dev/null 2>&1 || { echo @@missing; exit 0; }
-as_pg() { if command -v runuser >/dev/null 2>&1; then runuser -u postgres -- "$@"; else sudo -n -u postgres -- "$@"; fi; }
+as_pg() { if [ -n "$ORBITAL_CONTAINER" ]; then "$@"; elif command -v runuser >/dev/null 2>&1; then runuser -u postgres -- "$@"; else sudo -n -u postgres -- "$@"; fi; }
 v=$(as_pg psql -XAtq -c 'show server_version' 2>&1) || { echo "@@error $v"; exit 0; }
 echo "@@version $v"
 echo "@@max $(as_pg psql -XAtq -c 'show max_connections' 2>/dev/null)"
@@ -360,14 +360,27 @@ pub fn parse_redis_info(out: &str) -> Option<RedisInfo> {
 }
 
 impl SshSession {
-    pub async fn list_databases(&self, kind: DbKind) -> Result<DbServer> {
-        let (o, _) = self.exec_inspect(list_script(kind)).await?;
-        parse_list(kind, &o.stdout).ok_or_else(|| Error::NotFound(format!("{} is not installed on this server", kind.label())))
+    /// On the server, or inside `container`.
+    pub async fn list_databases(&self, kind: DbKind, container: Option<&str>) -> Result<DbServer> {
+        let o = self.inspect_in(container, list_script(kind)).await?;
+        parse_list(kind, &o.stdout).ok_or_else(|| missing(kind.label(), container, &o))
     }
 
-    pub async fn redis_info(&self) -> Result<RedisInfo> {
-        let (o, _) = self.exec_inspect(&redis_info_script()).await?;
-        parse_redis_info(&o.stdout).ok_or_else(|| Error::NotFound("Redis is not installed on this server".into()))
+    pub async fn redis_info(&self, container: Option<&str>) -> Result<RedisInfo> {
+        let o = self.inspect_in(container, &redis_info_script()).await?;
+        parse_redis_info(&o.stdout).ok_or_else(|| missing("Redis", container, &o))
+    }
+}
+
+/// "Not installed" for the server, or what went wrong inside a container.
+pub(crate) fn missing(what: &str, container: Option<&str>, o: &crate::ssh::ExecOutput) -> Error {
+    match container {
+        None => Error::NotFound(format!("{what} is not installed on this server")),
+        Some(c) if o.stdout.contains("@@missing") => Error::NotFound(format!("{what}'s command-line client isn't inside container {c}")),
+        Some(c) => {
+            let why = format!("{} {}", o.stdout, o.stderr);
+            Error::NotFound(format!("couldn't reach {what} inside container {c}: {}", why.trim()))
+        }
     }
 }
 

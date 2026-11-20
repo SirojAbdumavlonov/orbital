@@ -109,20 +109,39 @@ export const useUpdates = create<UpdateState>((set, get) => ({
 }));
 
 const FIRST_CHECK_MS = 8_000;
-const EVERY_MS = 6 * 60 * 60 * 1000;
+/** Regular checks while Orbital stays open. */
+export const EVERY_MS = 60 * 60 * 1000;
+/** Coming back to Orbital (focus, wake from sleep) checks again if the last check is older than this. */
+export const ON_RETURN_MS = 20 * 60 * 1000;
 
-/** Checks for updates shortly after launch and every six hours, when the setting is on. */
+/**
+ * Checks for updates shortly after launch, every hour, and when you come back
+ * to Orbital after 20 minutes or more, when the setting is on. That's about
+ * one small request (latest.json from GitHub) an hour, and a release reaches
+ * people the same day.
+ */
 export function useUpdateChecks() {
   const auto = useSettings((s) => s.autoUpdates);
   useEffect(() => {
     // Only inside the app (or the demo's mock backend), never in a plain browser.
     if (!auto || updatesDisabled || !("__TAURI_INTERNALS__" in window)) return;
-    const quiet = () => void useUpdates.getState().check(true);
+    let last = 0;
+    const quiet = () => {
+      last = Date.now();
+      void useUpdates.getState().check(true);
+    };
+    const back = () => {
+      if (document.visibilityState === "visible" && Date.now() - last >= ON_RETURN_MS) quiet();
+    };
     const first = setTimeout(quiet, FIRST_CHECK_MS);
-    const every = setInterval(quiet, EVERY_MS);
+    const every = setInterval(() => Date.now() - last >= EVERY_MS - 60_000 && quiet(), EVERY_MS);
+    window.addEventListener("focus", back);
+    document.addEventListener("visibilitychange", back);
     return () => {
       clearTimeout(first);
       clearInterval(every);
+      window.removeEventListener("focus", back);
+      document.removeEventListener("visibilitychange", back);
     };
   }, [auto]);
 }

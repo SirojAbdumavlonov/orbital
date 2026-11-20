@@ -1,4 +1,4 @@
-import { Bot, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound } from "lucide-react";
+import { Bot, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound, Radar } from "lucide-react";
 import { Activity, Boxes, Cable, Clock, Cpu, Database, FolderTree, Gauge, Globe, ListChecks, LockKeyhole, Network, Plus, RefreshCw, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, asApiError, DetectedTool } from "../lib/api";
@@ -31,6 +31,7 @@ const BUILTIN: Record<string, { name: string; hint: string; icon: typeof Gauge }
   logs: { name: "Logs", hint: "Follow log files, services and containers live", icon: ScrollText },
   tunnels: { name: "Port forwarding", hint: "Use a server port (or a container on 127.0.0.1) at localhost here", icon: ArrowLeftRight },
   ports: { name: "Open ports", hint: "What listens where, and who can reach it", icon: Cable },
+  network: { name: "Network check", hint: "Can the server reach a host, port or URL? Ping, DNS, port, HTTP, traceroute", icon: Radar },
   users: { name: "Users", hint: "Accounts, groups, sudo and SSH keys", icon: UsersIcon },
   sshkeys: { name: "SSH keys", hint: "Who can sign in with a key; make and install keys", icon: KeyRound },
 };

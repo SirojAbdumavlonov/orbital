@@ -131,7 +131,7 @@ function main() {
   git("commit", "-m", `Release ${tag}`);
   git("tag", "-a", tag, "-m", `Orbital ${version}`);
   console.log(`\n${current} → ${version}: committed and tagged ${tag}. To build the release:\n\n  git push && git push origin ${tag}\n`);
-  console.log("Then publish the draft on GitHub; installed copies pick it up within six hours.");
+  console.log("Then publish the draft on GitHub; installed copies pick it up within the hour.");
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main();

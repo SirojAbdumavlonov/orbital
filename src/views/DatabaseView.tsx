@@ -9,6 +9,7 @@ import { bytes, duration } from "../lib/format";
 import { useRemote } from "../lib/remote";
 import { SessionState, useStore } from "../store";
 import { ToolView } from "./ToolView";
+import { usePlace } from "../components/PlacePicker";
 
 const KIND: Record<string, DbKind> = { postgresql: "postgres", mysql: "mysql", mongodb: "mongo" };
 
@@ -90,7 +91,8 @@ function BackupDialog({ s, kind, db, onClose }: { s: SessionState; kind: DbKind;
 export function DatabaseView({ s, toolId }: { s: SessionState; toolId: string }) {
   const kind = KIND[toolId];
   const tool = s.tools?.find((t) => t.id === toolId);
-  const { data, error, loading, reload } = useRemote(() => api.listDatabases(s.info.id, kind), [s.info.id, kind]);
+  const [place, picker] = usePlace(s, toolId);
+  const { data, error, loading, reload } = useRemote(() => api.listDatabases(s.info.id, kind, place), [s.info.id, kind, place]);
   const [showSystem, setShowSystem] = useState(false);
   const [backup, setBackup] = useState<DbInfo | null>(null);
   const list = (data?.databases ?? []).filter((d) => showSystem || !d.system);
@@ -101,6 +103,7 @@ export function DatabaseView({ s, toolId }: { s: SessionState; toolId: string })
   return (
     <WithServicePane s={s} toolId={toolId} label="Databases">
       <div className="toolbar">
+        {picker}
         {data?.version && <span className="badge">{tool?.name} {data.version.split(" ")[0]}</span>}
         {data && !data.error && <span className="faint">{data.databases.filter((d) => !d.system).length} databases · {bytes(total)}{data.connections != null ? ` · ${data.connections}${data.maxConnections ? ` of ${data.maxConnections}` : ""} connections` : ""}</span>}
         <span className="spacer" />
@@ -112,9 +115,10 @@ export function DatabaseView({ s, toolId }: { s: SessionState; toolId: string })
         <div className="notice">
           <b>{tool?.name} didn't answer Orbital's admin login.</b>
           <pre className="output" style={{ margin: "8px 0" }}>{data.error}</pre>
-          {kind === "postgres" && "Orbital runs psql as the postgres system user through sudo. Turn on sudo for this server, then reconnect."}
-          {kind === "mysql" && "Orbital logs in as root over MySQL's socket, the Debian and Ubuntu default. If root needs a password, add it to /root/.my.cnf on the server ([client] password=…)."}
-          {kind === "mongo" && "This MongoDB requires a login. Orbital can only read servers that allow localhost access without one."}
+          {place && `Orbital runs the client inside container ${place} with the login the image was started with (POSTGRES_USER/POSTGRES_PASSWORD, MYSQL_ROOT_PASSWORD, …). `}
+          {!place && kind === "postgres" && "Orbital runs psql as the postgres system user through sudo. Turn on sudo for this server, then reconnect."}
+          {!place && kind === "mysql" && "Orbital logs in as root over MySQL's socket, the Debian and Ubuntu default. If root needs a password, add it to /root/.my.cnf on the server ([client] password=…)."}
+          {!place && kind === "mongo" && "This MongoDB requires a login. Orbital can only read servers that allow localhost access without one."}
         </div>
       )}
       {data && !data.error && (
@@ -128,13 +132,13 @@ export function DatabaseView({ s, toolId }: { s: SessionState; toolId: string })
                   <td className="num">{d.sizeBytes != null ? bytes(d.sizeBytes) : "—"}</td>
                   {hasTables && <td className="num muted">{d.tables ?? "—"}</td>}
                   {kind !== "mongo" && <td className="num muted">{d.connections ?? "—"}</td>}
-                  <td style={{ textAlign: "right" }}><button className="btn" onClick={() => setBackup(d)}><Download size={13} /> Back up</button></td>
+                  <td style={{ textAlign: "right" }}>{!place && <button className="btn" onClick={() => setBackup(d)}><Download size={13} /> Back up</button>}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           {list.length === 0 && <div className="empty" style={{ flex: "none" }}><p>No databases yet{showSystem ? "" : " besides the system ones"}.</p></div>}
-          <p className="footnote">Backups are made on the server with {kind === "postgres" ? "pg_dump" : kind === "mysql" ? "mysqldump" : "mongodump"}, downloaded to this computer, and removed from the server. Each one is recorded in the activity log.</p>
+          {place ? <p className="footnote">This {tool?.name} runs in Docker container {place}; Orbital reads it from inside the container. One-click backups work for databases installed on the server itself.</p> : <p className="footnote">Backups are made on the server with {kind === "postgres" ? "pg_dump" : kind === "mysql" ? "mysqldump" : "mongodump"}, downloaded to this computer, and removed from the server. Each one is recorded in the activity log.</p>}
         </div>
       )}
       {backup && <BackupDialog s={s} kind={kind} db={backup} onClose={() => setBackup(null)} />}
@@ -145,7 +149,8 @@ export function DatabaseView({ s, toolId }: { s: SessionState; toolId: string })
 /** Redis: memory, clients and keys per database; snapshot and flush. */
 export function RedisView({ s }: { s: SessionState }) {
   const toast = useStore((x) => x.toast);
-  const { data: r, setData, error, loading, reload } = useRemote(() => api.redisInfo(s.info.id), [s.info.id]);
+  const [place, picker] = usePlace(s, "redis");
+  const { data: r, setData, error, loading, reload } = useRemote(() => api.redisInfo(s.info.id, place), [s.info.id, place]);
   const [busy, setBusy] = useState(false);
 
   async function act(action: RedisAction, what: string, danger?: { title: string; body: string; type: string }) {
@@ -155,7 +160,7 @@ export function RedisView({ s }: { s: SessionState }) {
     }
     setBusy(true);
     try {
-      setData(await api.redisAction(s.info.id, action));
+      setData(await api.redisAction(s.info.id, action, place));
       toast({ kind: "success", title: `${what}: done` });
     } catch (e) {
       toast({ kind: "error", title: `${what} failed`, body: asApiError(e).message });
@@ -169,6 +174,7 @@ export function RedisView({ s }: { s: SessionState }) {
   return (
     <WithServicePane s={s} toolId="redis" label="Redis">
       <div className="toolbar">
+        {picker}
         {r?.version && <span className="badge">Redis {r.version}{r.role ? ` · ${r.role}` : ""}</span>}
         <span className="spacer" />
         {r && !r.error && <button className="btn" disabled={busy} onClick={() => act("snapshot", "Snapshot")} title="Write the data to disk now (BGSAVE)"><Camera size={13} /> Save snapshot</button>}
@@ -176,7 +182,7 @@ export function RedisView({ s }: { s: SessionState }) {
         <button className="icon-btn" aria-label="Refresh" onClick={reload}><RefreshCw size={14} className={loading ? "spin" : ""} /></button>
       </div>
       {error && <div className="empty"><div><h3>Couldn't read Redis</h3><p>{error.message}</p><button className="btn" onClick={reload}>Try again</button></div></div>}
-      {r?.error && <div className="notice"><b>Redis didn't answer.</b><pre className="output" style={{ marginTop: 8 }}>{r.error}</pre>Orbital uses the password from redis.conf when it sets one, which needs sudo for this server.</div>}
+      {r?.error && <div className="notice"><b>Redis didn't answer.</b><pre className="output" style={{ marginTop: 8 }}>{r.error}</pre>{place ? `Orbital uses the container's REDIS_PASSWORD when it has one; a password set only in a mounted redis.conf isn't read.` : "Orbital uses the password from redis.conf when it sets one, which needs sudo for this server."}</div>}
       {r && !r.error && (
         <div className="scroll">
           <div className="stat-row">

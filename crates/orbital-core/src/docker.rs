@@ -221,6 +221,16 @@ impl SshSession {
         Ok((cmd, o))
     }
 
+    /// Run one of Orbital's fixed read scripts on the server itself, or with
+    /// `container` inside that container (`docker exec … sh -c`), where
+    /// [`CONTAINER_PRELUDE`] first picks up the image's own login settings.
+    pub async fn inspect_in(&self, container: Option<&str>, script: &str) -> Result<ExecOutput> {
+        match container {
+            None => Ok(self.exec_inspect(script).await?.0),
+            Some(c) => Ok(self.docker(&in_container_args(c, script)?).await?.1),
+        }
+    }
+
     pub async fn docker_available(&self) -> Result<Option<String>> {
         let o = self.exec("command -v docker >/dev/null 2>&1 && echo yes").await?;
         if !o.stdout.contains("yes") {
@@ -275,6 +285,29 @@ impl SshSession {
     }
 }
 
+/// Run first inside a container: the official images keep their database
+/// login in environment variables (POSTGRES_USER, MYSQL_ROOT_PASSWORD, …),
+/// which the clients read from PG*/MYSQL_PWD/REDISCLI_AUTH. Nothing leaves
+/// the container; Orbital never sees these values.
+pub const CONTAINER_PRELUDE: &str = r#"ORBITAL_CONTAINER=1
+u=${POSTGRES_USER:-${POSTGRESQL_USERNAME:-postgres}}; export PGUSER="${PGUSER:-$u}"
+export PGDATABASE="${PGDATABASE:-${POSTGRES_DB:-${POSTGRESQL_DATABASE:-postgres}}}"
+p=${POSTGRES_PASSWORD:-${POSTGRESQL_PASSWORD:-}}; [ -n "$p" ] && export PGPASSWORD="$p"
+p=${MYSQL_ROOT_PASSWORD:-${MARIADB_ROOT_PASSWORD:-}}; [ -n "$p" ] && export MYSQL_PWD="$p"
+p=${REDIS_PASSWORD:-}; [ -n "$p" ] && export REDISCLI_AUTH="$p"
+unset p u
+"#;
+
+/// `exec -- NAME sh -c SCRIPT` (for `docker`): a fixed script inside a container.
+pub fn in_container_args(name: &str, script: &str) -> Result<String> {
+    validate_container(name)?;
+    Ok(format!(
+        "exec -- {} sh -c {}",
+        quote(name),
+        quote(&format!("{CONTAINER_PRELUDE}{script}"))
+    ))
+}
+
 /// `logs …` for [`SshSession::container_logs`]. Times must be RFC 3339
 /// (`2026-11-20T09:00:00Z`, `…+05:00`), checked before they reach the server.
 pub fn logs_args(id: &str, tail: u32, since: Option<&str>, until: Option<&str>) -> Result<String> {
@@ -308,6 +341,28 @@ fn validate_time(t: &str) -> Result<&str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scripts_run_inside_a_container() {
+        let a = super::in_container_args("shop-db-1", "psql -c 'select 1'").unwrap();
+        assert!(a.starts_with("exec -- shop-db-1 sh -c 'ORBITAL_CONTAINER=1"), "{a}");
+        assert!(a.contains("select 1"), "{a}");
+        assert!(super::in_container_args("db; reboot", "true").is_err());
+        // The prelude maps the image's settings to the clients' variables.
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "{}echo \"$PGUSER $PGDATABASE $PGPASSWORD $MYSQL_PWD $ORBITAL_CONTAINER\"",
+                super::CONTAINER_PRELUDE
+            ))
+            .env_clear()
+            .env("POSTGRES_USER", "app")
+            .env("POSTGRES_PASSWORD", "pw")
+            .env("MARIADB_ROOT_PASSWORD", "root")
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "app postgres pw root 1");
+    }
+
     #[test]
     fn logs_between_two_times() {
         use super::logs_args;

@@ -385,8 +385,8 @@ pub async fn change_user(
 }
 
 #[tauri::command]
-pub async fn apache_status(engine: Eng<'_>, session_id: String) -> R<ApacheStatus> {
-    engine.apache_status(&session_id).await
+pub async fn apache_status(engine: Eng<'_>, session_id: String, container: Option<String>) -> R<ApacheStatus> {
+    engine.apache_status(&session_id, container.as_deref()).await
 }
 
 #[tauri::command]
@@ -411,8 +411,8 @@ pub async fn haproxy_server_state(
 }
 
 #[tauri::command]
-pub async fn list_databases(engine: Eng<'_>, session_id: String, kind: DbKind) -> R<DbServer> {
-    engine.list_databases(&session_id, kind).await
+pub async fn list_databases(engine: Eng<'_>, session_id: String, kind: DbKind, container: Option<String>) -> R<DbServer> {
+    engine.list_databases(&session_id, kind, container.as_deref()).await
 }
 
 #[tauri::command]
@@ -434,13 +434,13 @@ pub async fn backup_database(
 }
 
 #[tauri::command]
-pub async fn redis_info(engine: Eng<'_>, session_id: String) -> R<RedisInfo> {
-    engine.redis_info(&session_id).await
+pub async fn redis_info(engine: Eng<'_>, session_id: String, container: Option<String>) -> R<RedisInfo> {
+    engine.redis_info(&session_id, container.as_deref()).await
 }
 
 #[tauri::command]
-pub async fn redis_action(engine: Eng<'_>, session_id: String, action: RedisAction) -> R<RedisInfo> {
-    engine.redis_action(&session_id, action).await
+pub async fn redis_action(engine: Eng<'_>, session_id: String, action: RedisAction, container: Option<String>) -> R<RedisInfo> {
+    engine.redis_action(&session_id, action, container.as_deref()).await
 }
 
 #[tauri::command]
@@ -540,6 +540,17 @@ pub async fn metrics(engine: Eng<'_>, session_id: String) -> R<Metrics> {
 #[tauri::command]
 pub async fn list_services(engine: Eng<'_>, session_id: String) -> R<Vec<Service>> {
     engine.list_services(&session_id).await
+}
+
+#[tauri::command]
+pub async fn net_check(
+    engine: Eng<'_>,
+    session_id: String,
+    check: orbital_core::netcheck::NetCheck,
+    target: String,
+    port: Option<u16>,
+) -> R<orbital_core::netcheck::NetResult> {
+    engine.net_check(&session_id, check, &target, port).await
 }
 
 #[tauri::command]

@@ -4,7 +4,10 @@
 //! Detection is one read-only script built from a fixed catalogue — nothing
 //! from the user or the server is interpolated into it. A tool counts as
 //! present if its binary is on PATH, systemd knows its unit, or its process
-//! is running.
+//! is running on the host. A process inside a container doesn't count by
+//! itself (the host has no client for it); instead running containers whose
+//! image is a known program (postgres, redis, httpd, …) are listed on the
+//! tool, so its tab can work inside them.
 
 use crate::shell::quote;
 use crate::ssh::SshSession;
@@ -180,6 +183,61 @@ pub struct DetectedTool {
     /// `active`, `inactive`, `failed`, … for that unit.
     pub unit_state: Option<String>,
     pub paths: Vec<ToolPath>,
+    /// Installed on the server itself (binary, unit or a host process).
+    pub on_host: bool,
+    /// Running containers whose image is this program.
+    pub containers: Vec<String>,
+}
+
+/// Image names (the last part, without tag) per tool, for databases and web
+/// servers whose tab can work inside a container.
+fn images(id: &str) -> &'static [&'static str] {
+    match id {
+        "postgresql" => &["postgres", "postgresql", "postgis", "timescaledb", "timescaledb-ha"],
+        "mysql" => &["mysql", "mariadb", "percona-server", "mysql-server"],
+        "redis" => &["redis", "valkey", "redis-stack", "redis-stack-server", "keydb"],
+        "mongodb" => &["mongo", "mongodb", "mongodb-community-server"],
+        "apache" => &["httpd", "apache"],
+        _ => &[],
+    }
+}
+
+/// Which tool an image runs: `docker.io/library/postgres:16-alpine` → postgresql.
+pub fn image_tool(image: &str) -> Option<&'static str> {
+    let repo = image.split('@').next().unwrap_or(image);
+    let last = repo.rsplit('/').next().unwrap_or(repo);
+    let name = last.split(':').next().unwrap_or(last).to_ascii_lowercase();
+    CATALOG.iter().map(|t| t.id).find(|id| images(id).contains(&name.as_str()))
+}
+
+/// Add running containers to the tools they run, creating a tool that is only in containers.
+pub fn add_containers(tools: &mut Vec<DetectedTool>, containers: &[crate::docker::Container]) {
+    for c in containers.iter().filter(|c| c.state == "running") {
+        let Some(id) = image_tool(&c.image) else { continue };
+        let name = c.names.split(',').next().unwrap_or(&c.names).to_string();
+        match tools.iter_mut().find(|t| t.id == id) {
+            Some(t) => {
+                t.containers.push(name);
+                t.running = true;
+            }
+            None => {
+                let spec = CATALOG.iter().find(|t| t.id == id).expect("image ids come from the catalogue");
+                tools.push(DetectedTool {
+                    id: spec.id.into(),
+                    name: spec.name.into(),
+                    category: spec.category.into(),
+                    running: true,
+                    binary: None,
+                    unit: None,
+                    unit_state: None,
+                    paths: Vec::new(),
+                    on_host: false,
+                    containers: vec![name],
+                });
+            }
+        }
+    }
+    tools.sort_by_key(|t| !t.running);
 }
 
 fn words(items: &[&str]) -> String {
@@ -207,7 +265,12 @@ pub fn detect_script() -> String {
         }
         if !t.procs.is_empty() {
             s.push_str(&format!(
-                "for n in {}; do {{ pgrep -x \"$n\" || ps -Ao comm= | sed 's|.*/||; s/ *$//' | grep -qxF \"$n\" || ps -Ao ucomm= | sed 's/ *$//' | grep -qxF \"$n\"; }} >/dev/null 2>&1 && {{ echo \"proc=$n\"; break; }}; done\n",
+                // With pgrep, a process counts only outside containers (its cgroup names no
+                // container runtime); without pgrep (busybox), any process counts.
+                "for n in {}; do c=; if command -v pgrep >/dev/null 2>&1; then for p in $(pgrep -x \"$n\" 2>/dev/null); do \
+                 if grep -qsE 'docker|containerd|libpod|kubepods|lxc' \"/proc/$p/cgroup\"; then c=1; else c=2; break; fi; done; \
+                 else {{ ps -Ao comm= | sed 's|.*/||; s/ *$//' | grep -qxF \"$n\" || ps -Ao ucomm= | sed 's/ *$//' | grep -qxF \"$n\"; }} >/dev/null 2>&1 && c=2; fi; \
+                 [ \"$c\" = 2 ] && {{ echo \"proc=$n\"; break; }}; [ \"$c\" = 1 ] && echo \"cproc=$n\"; done\n",
                 words(t.procs)
             ));
         }
@@ -230,6 +293,7 @@ pub fn parse_detect(out: &str) -> Vec<DetectedTool> {
         if let Some((mut t, proc_seen)) = cur {
             let present = t.binary.is_some() || t.unit.is_some() || proc_seen;
             if present {
+                t.on_host = true;
                 t.running = proc_seen || matches!(t.unit_state.as_deref(), Some("active" | "reloading" | "activating"));
                 found.push(t);
             }
@@ -250,6 +314,8 @@ pub fn parse_detect(out: &str) -> Vec<DetectedTool> {
                         unit: None,
                         unit_state: None,
                         paths: Vec::new(),
+                        on_host: false,
+                        containers: Vec::new(),
                     },
                     false,
                 )
@@ -282,7 +348,13 @@ pub fn parse_detect(out: &str) -> Vec<DetectedTool> {
 
 impl SshSession {
     pub async fn detect_tools(&self) -> crate::Result<Vec<DetectedTool>> {
-        Ok(parse_detect(&self.exec(&detect_script()).await?.stdout))
+        let mut tools = parse_detect(&self.exec(&detect_script()).await?.stdout);
+        if tools.iter().any(|t| t.id == "docker" && t.running) {
+            if let Ok(cs) = self.list_containers().await {
+                add_containers(&mut tools, &cs);
+            }
+        }
+        Ok(tools)
     }
 }
 
@@ -326,6 +398,52 @@ garbage line\n";
         assert_eq!(mysql.unit_state.as_deref(), Some("failed"));
 
         assert!(parse_detect("").is_empty());
+    }
+
+    #[test]
+    fn container_processes_alone_dont_count_but_containers_do() {
+        // A redis-server seen only inside a container: no tab from the process itself.
+        let mut tools = parse_detect("@@tool redis\ncproc=redis-server\n@@tool docker\nbin=/usr/bin/docker\nunit=docker.service active\n");
+        assert_eq!(tools.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["docker"]);
+        assert!(tools[0].on_host);
+
+        let c = |name: &str, image: &str, state: &str| crate::docker::Container {
+            id: format!("{name}-id"),
+            names: name.into(),
+            image: image.into(),
+            state: state.into(),
+            status: String::new(),
+            ports: String::new(),
+            created_at: String::new(),
+            compose_project: None,
+        };
+        add_containers(
+            &mut tools,
+            &[
+                c("cache", "redis:7-alpine", "running"),
+                c("db", "docker.io/library/postgres:16", "running"),
+                c("old-db", "postgres:15", "exited"),
+                c("web", "ghcr.io/acme/shop:1.2", "running"),
+            ],
+        );
+        let redis = tools.iter().find(|t| t.id == "redis").unwrap();
+        assert!(redis.running && !redis.on_host && redis.binary.is_none());
+        assert_eq!(redis.containers, ["cache"]);
+        let pg = tools.iter().find(|t| t.id == "postgresql").unwrap();
+        assert_eq!(pg.containers, ["db"]);
+        assert_eq!(tools.len(), 3);
+    }
+
+    #[test]
+    fn images_map_to_tools() {
+        assert_eq!(image_tool("postgres:16-alpine"), Some("postgresql"));
+        assert_eq!(image_tool("bitnami/postgresql:16"), Some("postgresql"));
+        assert_eq!(image_tool("mariadb@sha256:abc"), Some("mysql"));
+        assert_eq!(image_tool("registry.example.com:5000/valkey/valkey:8"), Some("redis"));
+        assert_eq!(image_tool("httpd:2.4"), Some("apache"));
+        assert_eq!(image_tool("Mongo:7"), Some("mongodb"));
+        assert_eq!(image_tool("nginx:1.27"), None);
+        assert_eq!(image_tool("acme/redis-exporter"), None);
     }
 
     #[test]

@@ -47,6 +47,7 @@ import { CronView } from "./views/CronView";
 import { DeployView } from "./views/DeployView";
 import { LogsView } from "./views/LogsView";
 import { TunnelsView } from "./views/TunnelsView";
+import { NetworkView } from "./views/NetworkView";
 import { ServicesView } from "./views/ServicesView";
 import { TerminalView } from "./views/TerminalView";
 
@@ -84,6 +85,7 @@ const TOOL_VIEWS: Record<string, (p: { s: SessionState }) => JSX.Element> = {
   deploy: DeployView,
   logs: LogsView,
   tunnels: TunnelsView,
+  network: NetworkView,
 };
 
 function ToolTab({ s, id }: { s: SessionState; id: string }) {

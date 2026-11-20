@@ -2020,8 +2020,8 @@ impl Engine {
 
     // ---------- Apache, HAProxy ----------
 
-    pub async fn apache_status(&self, sid: &str) -> Result<ApacheStatus> {
-        self.session(sid).await?.apache_status().await
+    pub async fn apache_status(&self, sid: &str, container: Option<&str>) -> Result<ApacheStatus> {
+        self.session(sid).await?.apache_status(container).await
     }
 
     /// Enable or disable a Debian-style Apache site. Undone automatically if
@@ -2048,7 +2048,7 @@ impl Engine {
         }
         self.record_exec(&s, Category::Config, action, name, &sent, &o);
         o.check()?;
-        s.apache_status().await
+        s.apache_status(None).await
     }
 
     pub async fn haproxy_status(&self, sid: &str) -> Result<HaproxyStatus> {
@@ -2104,8 +2104,8 @@ impl Engine {
 
     // ---------- databases ----------
 
-    pub async fn list_databases(&self, sid: &str, kind: DbKind) -> Result<DbServer> {
-        self.session(sid).await?.list_databases(kind).await
+    pub async fn list_databases(&self, sid: &str, kind: DbKind, container: Option<&str>) -> Result<DbServer> {
+        self.session(sid).await?.list_databases(kind, container).await
     }
 
     /// Dump one database on the server into a private temp file, download it
@@ -2156,12 +2156,13 @@ impl Engine {
         r
     }
 
-    pub async fn redis_info(&self, sid: &str) -> Result<RedisInfo> {
-        self.session(sid).await?.redis_info().await
+    pub async fn redis_info(&self, sid: &str, container: Option<&str>) -> Result<RedisInfo> {
+        self.session(sid).await?.redis_info(container).await
     }
 
     /// Snapshot or flush Redis. Flushing deletes data; the UI asks the user to type a confirmation.
-    pub async fn redis_action(&self, sid: &str, action: RedisAction) -> Result<RedisInfo> {
+    /// On the server, or inside `container`.
+    pub async fn redis_action(&self, sid: &str, action: RedisAction, container: Option<&str>) -> Result<RedisInfo> {
         let s = self.session(sid).await?;
         let (name, target) = match action {
             RedisAction::Snapshot => ("redis.snapshot", "all".to_string()),
@@ -2169,7 +2170,7 @@ impl Engine {
             RedisAction::FlushAll => ("redis.flushall", "all databases".to_string()),
         };
         let script = databases::redis_action_script(action).map_err(|e| self.refused_as(&s, Category::Command, name, &target, e))?;
-        let (o, _) = s.exec_inspect(&script).await?;
+        let o = s.inspect_in(container, &script).await?;
         let ok = o.ok() && !o.stdout.contains("ERR") && !o.stdout.contains("NOAUTH");
         let o = crate::ssh::ExecOutput {
             exit_code: if ok { 0 } else { o.exit_code.max(1) },
@@ -2177,9 +2178,13 @@ impl Engine {
             ..o
         };
         // The script reads redis.conf for a password; record what was asked, not the script.
+        let target = match container {
+            Some(c) => format!("{target} in container {c}"),
+            None => target,
+        };
         self.record_exec(&s, Category::Command, name, &target, &format!("redis-cli {name}"), &o);
         o.check()?;
-        s.redis_info().await
+        s.redis_info(container).await
     }
 
     // ---------- monitoring ----------
@@ -2216,6 +2221,17 @@ impl Engine {
 
     pub async fn service_detail(&self, sid: &str, unit: &str) -> Result<ServiceDetail> {
         self.session(sid).await?.service_detail(unit, 200).await
+    }
+
+    /// Ping, DNS, a TCP port, HTTP(S) or traceroute from the server (read-only).
+    pub async fn net_check(
+        &self,
+        sid: &str,
+        check: crate::netcheck::NetCheck,
+        target: &str,
+        port: Option<u16>,
+    ) -> Result<crate::netcheck::NetResult> {
+        self.session(sid).await?.net_check(check, target, port).await
     }
 
     pub async fn unit_logs(&self, sid: &str, unit: &str, tail: u32, since: Option<i64>, until: Option<i64>) -> Result<String> {

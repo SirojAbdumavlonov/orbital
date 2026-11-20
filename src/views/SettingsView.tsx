@@ -152,7 +152,7 @@ export function SettingsView() {
 
           <h3 className="settings-title">Updates</h3>
           <UpdateRow version={version} />
-          <Row title="Check automatically" hint="Look for a new version when Orbital starts and every six hours. Nothing is installed until you click Update.">
+          <Row title="Check automatically" hint="Look for a new version when Orbital starts, every hour, and when you come back to it. Nothing is installed until you click Update.">
             <input type="checkbox" className="switch" checked={st.autoUpdates} onChange={(e) => st.set({ autoUpdates: e.target.checked })} />
           </Row>
 

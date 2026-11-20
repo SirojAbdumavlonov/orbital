@@ -227,7 +227,7 @@ const audit = [
   prevHash: "a3c1…", hash: "5be0d2f4c8a1e9b7…",
 }));
 
-const tools = [
+const tools = ([
   { id: "nginx", name: "nginx", category: "Web server", running: true, binary: "/usr/sbin/nginx", unit: "nginx.service", unitState: "active", paths: [{ path: "/etc/nginx", isDir: true }, { path: "/var/log/nginx", isDir: true }] },
   { id: "docker", name: "Docker", category: "Containers", running: true, binary: "/usr/bin/docker", unit: "docker.service", unitState: "active", paths: [{ path: "/etc/docker/daemon.json", isDir: false }] },
   { id: "postgresql", name: "PostgreSQL", category: "Database", running: true, binary: "/usr/bin/psql", unit: "postgresql.service", unitState: "active", paths: [{ path: "/etc/postgresql", isDir: true }, { path: "/var/log/postgresql", isDir: true }] },
@@ -239,8 +239,9 @@ const tools = [
   { id: "haproxy", name: "HAProxy", category: "Load balancer", running: true, binary: "/usr/sbin/haproxy", unit: "haproxy.service", unitState: "active", paths: [{ path: "/etc/haproxy/haproxy.cfg", isDir: false }] },
   { id: "mysql", name: "MySQL / MariaDB", category: "Database", running: true, binary: "/usr/sbin/mysqld", unit: "mysql.service", unitState: "active", paths: [{ path: "/etc/mysql", isDir: true }] },
   { id: "cron", name: "Cron", category: "Scheduling", running: true, binary: "/usr/sbin/cron", unit: "cron.service", unitState: "active", paths: [{ path: "/etc/crontab", isDir: false }, { path: "/etc/cron.d", isDir: true }] },
-  { id: "redis", name: "Redis", category: "Database", running: false, binary: "/usr/bin/redis-server", unit: "redis-server.service", unitState: "inactive", paths: [{ path: "/etc/redis/redis.conf", isDir: false }] },
-];
+  { id: "redis", name: "Redis", category: "Database", running: true, binary: "/usr/bin/redis-server", unit: "redis-server.service", unitState: "inactive", paths: [{ path: "/etc/redis/redis.conf", isDir: false }], containers: ["shop-cache-1"] },
+  { id: "mongodb", name: "MongoDB", category: "Database", running: true, binary: null, unit: null, unitState: null, paths: [], onHost: false, containers: ["analytics-mongo"] },
+] as any[]).map((t) => ({ onHost: true, containers: [], ...t }));
 
 const nginxConfig: { testOk: boolean; testOutput: string; files: { path: string; lines: number }[]; upstreams: any[]; sites: any[] } = {
   testOk: true,
@@ -812,7 +813,12 @@ export function install() {
         return new Promise((r) => setTimeout(() => r({ path: args.path, total: e.reduce((n, x) => n + x.bytes, 0) * 1.02, entries: e, fsSize: 80 * GB, fsUsed: 58.4 * GB, fsFree: 21.6 * GB, mount: "/", partial: false }), 700));
       }
       case "process_usage": return processUsage();
-      case "list_databases": return dbs[args.kind] ?? { version: "7.0.12", connections: 4, maxConnections: 838860, error: null, databases: [{ name: "admin", sizeBytes: 40960, connections: null, tables: 1, system: true }, { name: "app", sizeBytes: 220 * MB, connections: null, tables: 14, system: false }] };
+      case "list_databases":
+        if (args.container) {
+          await new Promise((r) => setTimeout(r, 300));
+          return { version: "7.0.12", connections: 6, maxConnections: 838860, error: null, databases: [{ name: "admin", sizeBytes: 40960, connections: null, tables: 1, system: true }, { name: "events", sizeBytes: 1.4 * 1024 * MB, connections: null, tables: 9, system: false }] };
+        }
+        return dbs[args.kind] ?? { version: "7.0.12", connections: 4, maxConnections: 838860, error: null, databases: [{ name: "admin", sizeBytes: 40960, connections: null, tables: 1, system: true }, { name: "app", sizeBytes: 220 * MB, connections: null, tables: 14, system: false }] };
       case "backup_database": {
         const n = Math.round(dbs[args.kind]?.databases.find((d: any) => d.name === args.name)?.sizeBytes / 6 || 4 * MB);
         await progress(args.progress, [[0, "step", `Dumping ${args.name} on the server (large databases take a while) …`], [2600, "step", "Downloading the dump to this computer …"], ...transferEvents(1, n, [`/tmp/orbital-backup/${args.name}.dump`], 1800)]);
@@ -879,7 +885,7 @@ export function install() {
       case "reboot_server": return null;
       case "shell_history":
         return ["docker compose logs -f --tail=100", "sudo systemctl restart nginx", "sudo nginx -t", "git pull", "tail -f /var/log/nginx/error.log", "systemctl status shop", "df -h", "cd /srv/shop", "ls -la", "htop", "sudo journalctl -u shop -n 50 --no-pager", "npm ci", "docker ps"];
-      case "redis_info": return redis();
+      case "redis_info": return args.container ? { ...redis(), version: "7.4.1", usedMemory: 64 * MB, connectedClients: 4, keyspace: [{ db: 0, keys: 1832, expires: 1790 }] } : redis();
       case "redis_action": if (args.action === "flushAll") redisKeys = []; else if (args.action?.flushDb !== undefined) redisKeys = redisKeys.filter((k) => k.db !== args.action.flushDb); return redis();
       case "apache_status": return apache();
       case "apache_site": apacheSites = apacheSites.map((x) => (x.name === args.name ? { ...x, enabled: args.enable } : x)); return apache();
@@ -977,6 +983,16 @@ export function install() {
         await progress(args.progress, [[0, "step", `Running systemctl ${args.action} ${args.unit} …`], ...(args.unit.startsWith("nginx") ? [[400, "line", "nginx: the configuration file /etc/nginx/nginx.conf syntax is ok"], [200, "line", "nginx: configuration file /etc/nginx/nginx.conf test is successful"]] as [number, "line", string][] : []), [900, "line", ""]]);
         return { command: `systemctl ${args.action} -- ${args.unit}`, preflight: args.unit.startsWith("nginx") ? ["nginx -t", "syntax is ok"] : null, output: { stdout: "", stderr: "", exitCode: 0, durationMs: 120 } };
       case "list_services": return services;
+      case "net_check": {
+        const t = String(args.target);
+        await new Promise((r) => setTimeout(r, args.check === "trace" ? 2200 : 700));
+        const down = /down|nope|10\.9\./.test(t);
+        if (args.check === "port") return down ? { ok: false, summary: "closed, filtered or nothing listening", output: `nc: connect to ${t} port ${args.port} (tcp) failed: Connection refused\n`, command: `nc -z -w 5 ${t} ${args.port}` } : { ok: true, summary: "the port is open", output: `Connection to ${t} ${args.port} port [tcp/*] succeeded!\n`, command: `nc -z -w 5 ${t} ${args.port}` };
+        if (args.check === "http") return down ? { ok: false, summary: "curl: (6) Could not resolve host: " + t.replace(/^https?:\/\//, ""), output: "curl: (6) Could not resolve host\n", command: `curl -sS -o /dev/null --max-time 15 -- '${t}'` } : { ok: true, summary: "HTTP 200 in 0.18 s from 203.0.113.20", output: "@@http 200 0.181 203.0.113.20\n", command: `curl -sS -o /dev/null --max-time 15 -- '${t}'` };
+        if (args.check === "dns") return down ? { ok: false, summary: "the name didn't resolve", output: "", command: `getent ahosts ${t}` } : { ok: true, summary: "resolves to 203.0.113.20, 2001:db8::20", output: "203.0.113.20\n2001:db8::20\n", command: `getent ahosts ${t}` };
+        if (args.check === "ping") return down ? { ok: false, summary: "no answer, 100% packet loss", output: `4 packets transmitted, 0 received, 100% packet loss, time 3060ms\n`, command: `ping -c 4 -- ${t}` } : { ok: true, summary: "reachable, 11.8 ms average, 0% packet loss", output: `PING ${t} 56(84) bytes of data.\n64 bytes from ${t}: icmp_seq=1 ttl=57 time=11.6 ms\n…\n4 packets transmitted, 4 received, 0% packet loss, time 3004ms\nrtt min/avg/max/mdev = 11.4/11.8/12.3/0.3 ms\n`, command: `ping -c 4 -- ${t}` };
+        return { ok: true, summary: "6 hops", output: ` 1  10.0.0.1  0.4 ms\n 2  172.16.4.1  1.2 ms\n 3  198.51.100.9  3.9 ms\n 4  * \n 5  203.0.113.1  9.8 ms\n 6  203.0.113.20  11.6 ms\n`, command: `traceroute -n -q 1 -w 2 -m 20 ${t}` };
+      }
       case "unit_logs": {
         await new Promise((r) => setTimeout(r, 300));
         const from = args.since ? args.since * 1000 : Date.now() - 3_600_000, to = args.until ? args.until * 1000 : Date.now();

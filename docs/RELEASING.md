@@ -74,7 +74,7 @@ app to anyone.
    pre-release version like 1.1.0-beta.1 has no `.rpm`, which can't carry a `-`; after
    Windows, then the job installs and starts the .deb), and `latest.json`
    with all three platforms. Publish it. Installed copies see it at their
-   next check (launch, or within six hours); Settings → Check for updates
+   next check (launch, within the hour, or on coming back to Orbital); Settings → Check for updates
    finds it at once.
 
 The first update can only be tried end to end with two published releases:

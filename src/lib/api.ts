@@ -316,6 +316,10 @@ export interface DetectedTool {
   unit: string | null;
   unitState: string | null;
   paths: ToolPath[];
+  /** Installed on the server itself (binary, unit or a host process). */
+  onHost: boolean;
+  /** Running containers whose image is this program. */
+  containers: string[];
 }
 
 export interface NginxLocation {
@@ -436,6 +440,9 @@ export interface TunnelInfo {
   bytes: number;
   label: string | null;
 }
+
+export type NetCheck = "ping" | "dns" | "port" | "http" | "trace";
+export interface NetResult { ok: boolean; summary: string; output: string; command: string }
 
 export type LogSource = { type: "file"; path: string } | { type: "unit"; unit: string } | { type: "container"; id: string };
 export type LogMessage = { type: "data"; text: string } | { type: "end"; code: number | null };
@@ -1144,21 +1151,23 @@ export const api = {
   createUser: (sessionId: string, user: NewUser, password: string | null) => invoke<UsersReport>("create_user", { sessionId, user, password }),
   changeUser: (sessionId: string, name: string, change: UserChange, password: string | null = null, force = false) =>
     invoke<UsersReport>("change_user", { sessionId, name, change, password, force }),
-  apacheStatus: (sessionId: string) => invoke<ApacheStatus>("apache_status", { sessionId }),
+  apacheStatus: (sessionId: string, container: string | null = null) => invoke<ApacheStatus>("apache_status", { sessionId, container }),
   /** a2ensite / a2dissite, undone if configtest fails. */
   apacheSite: (sessionId: string, name: string, enable: boolean) => invoke<ApacheStatus>("apache_site", { sessionId, name, enable }),
   haproxyStatus: (sessionId: string) => invoke<HaproxyStatus>("haproxy_status", { sessionId }),
   haproxyServerState: (sessionId: string, backend: string, server: string, state: HaServerState) =>
     invoke<HaproxyStatus>("haproxy_server_state", { sessionId, backend, server, state }),
-  listDatabases: (sessionId: string, kind: DbKind) => invoke<DbServer>("list_databases", { sessionId, kind }),
+  listDatabases: (sessionId: string, kind: DbKind, container: string | null = null) => invoke<DbServer>("list_databases", { sessionId, kind, container }),
   /** Dump on the server, download to `localPath`, remove the server copy. Returns bytes downloaded. */
   backupDatabase: (sessionId: string, kind: DbKind, name: string, format: BackupFormat, localPath: string, onProgress?: OnProgress) =>
     invoke<number>("backup_database", { sessionId, kind, name, format, localPath, progress: progressChannel(onProgress) }),
-  redisInfo: (sessionId: string) => invoke<RedisInfo>("redis_info", { sessionId }),
-  redisAction: (sessionId: string, action: RedisAction) => invoke<RedisInfo>("redis_action", { sessionId, action }),
+  redisInfo: (sessionId: string, container: string | null = null) => invoke<RedisInfo>("redis_info", { sessionId, container }),
+  redisAction: (sessionId: string, action: RedisAction, container: string | null = null) => invoke<RedisInfo>("redis_action", { sessionId, action, container }),
   systemInfo: (sessionId: string) => invoke<SystemInfo>("system_info", { sessionId }),
   metrics: (sessionId: string) => invoke<Metrics>("metrics", { sessionId }),
   listServices: (sessionId: string) => invoke<Service[]>("list_services", { sessionId }),
+  /** Ping, DNS, a TCP port, HTTP(S) or traceroute, run on the server. */
+  netCheck: (sessionId: string, check: NetCheck, target: string, port: number | null) => invoke<NetResult>("net_check", { sessionId, check, target, port }),
   /** A unit's journal; since/until are Unix seconds. */
   unitLogs: (sessionId: string, unit: string, tail = 400, since: number | null = null, until: number | null = null) =>
     invoke<string>("unit_logs", { sessionId, unit, tail, since, until }),

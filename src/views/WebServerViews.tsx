@@ -5,6 +5,7 @@ import { api, asApiError, HaServerState } from "../lib/api";
 import { useRemote } from "../lib/remote";
 import { SessionState, useStore } from "../store";
 import { WithServicePane } from "./DatabaseView";
+import { usePlace } from "../components/PlacePicker";
 
 function useReload(s: SessionState, toolId: string, name: string, after: () => void) {
   const toast = useStore((x) => x.toast);
@@ -32,7 +33,8 @@ function useReload(s: SessionState, toolId: string, name: string, after: () => v
 export function ApacheView({ s }: { s: SessionState }) {
   const { toast, openFile } = useStore();
   const sid = s.info.id;
-  const { data: st, setData, error, loading, reload } = useRemote(() => api.apacheStatus(sid), [sid]);
+  const [place, picker] = usePlace(s, "apache");
+  const { data: st, setData, error, loading, reload } = useRemote(() => api.apacheStatus(sid, place), [sid, place]);
   const svc = useReload(s, "apache", "Apache", reload);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -56,10 +58,11 @@ export function ApacheView({ s }: { s: SessionState }) {
   return (
     <WithServicePane s={s} toolId="apache" label="Sites">
       <div className="toolbar">
+        {picker}
         {st && (st.testOk ? <span className="badge ok"><ShieldCheck size={12} /> Configuration is valid</span> : <span className="badge bad"><ShieldAlert size={12} /> Configuration has errors</span>)}
         {st && <span className="faint">{st.vhosts.length} virtual hosts · {st.modules.length} modules</span>}
         <span className="spacer" />
-        {svc.unit && <button className="btn" disabled={svc.busy} onClick={svc.reload} title="Apply saved changes; apachectl configtest runs first"><Zap size={13} className={svc.busy ? "spin" : ""} /> Reload Apache</button>}
+        {svc.unit && !place && <button className="btn" disabled={svc.busy} onClick={svc.reload} title="Apply saved changes; apachectl configtest runs first"><Zap size={13} className={svc.busy ? "spin" : ""} /> Reload Apache</button>}
         <button className="icon-btn" aria-label="Refresh" onClick={reload}><RefreshCw size={14} className={loading ? "spin" : ""} /></button>
       </div>
       {error && <div className="empty"><div><h3>Couldn't read Apache</h3><p>{error.message}</p></div></div>}
@@ -71,7 +74,7 @@ export function ApacheView({ s }: { s: SessionState }) {
             <thead><tr><th>Domain names</th><th>Port</th><th>Defined in</th></tr></thead>
             <tbody>
               {st.vhosts.map((v) => (
-                <tr key={`${v.file}:${v.line}:${v.port}`} className="click" onClick={() => openFile(sid, v.file)} title="Edit in the editor">
+                <tr key={`${v.file}:${v.line}:${v.port}`} className={place ? "" : "click"} onClick={() => !place && openFile(sid, v.file)} title={place ? `${v.file} inside container ${place}` : "Edit in the editor"}>
                   <td className="mono">{[v.serverName, ...v.aliases].join(", ")}</td>
                   <td className="mono muted">{v.port}</td>
                   <td className="mono faint">{v.file}:{v.line}</td>
@@ -80,7 +83,7 @@ export function ApacheView({ s }: { s: SessionState }) {
             </tbody>
           </table>
           {st.vhosts.length === 0 && <div className="empty" style={{ flex: "none" }}><p>No virtual hosts; Apache serves {st.documentRoot ?? "its default folder"} to everyone.</p></div>}
-          {st.managesSites && (
+          {st.managesSites && !place && (
             <>
               <div className="section-title">Sites (sites-available)</div>
               <table className="table">

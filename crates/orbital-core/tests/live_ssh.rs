@@ -994,6 +994,16 @@ async fn server_details_and_compose_input() {
     // A log time range that isn't a date never reaches the server.
     let r = engine.container_logs(&s.id, "web", 100, Some("$(id)"), None).await;
     assert!(matches!(r, Err(Error::InvalidInput(_))), "{r:?}");
+    // Network checks from the server: itself answers on its SSH port; bad targets never run.
+    use orbital_core::netcheck::NetCheck;
+    let r = engine.net_check(&s.id, NetCheck::Port, "127.0.0.1", Some(e.port)).await.unwrap();
+    assert!(r.ok, "{r:?}");
+    let r = engine.net_check(&s.id, NetCheck::Dns, "localhost", None).await.unwrap();
+    assert!(!r.output.is_empty(), "{r:?}");
+    assert!(matches!(
+        engine.net_check(&s.id, NetCheck::Ping, "-x; reboot", None).await,
+        Err(Error::InvalidInput(_))
+    ));
     // A unit's journal over the last hour reads without error (empty or "no journalctl" is fine), and a bad unit never reaches the server.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1027,10 +1037,13 @@ async fn databases_web_servers_and_users_read_and_refuse() {
         )
     };
     for kind in [DbKind::Postgres, DbKind::Mysql, DbKind::Mongo] {
-        fine(engine.list_databases(&s.id, kind).await.map(|_| ()));
+        fine(engine.list_databases(&s.id, kind, None).await.map(|_| ()));
     }
-    fine(engine.redis_info(&s.id).await.map(|_| ()));
-    fine(engine.apache_status(&s.id).await.map(|_| ()));
+    fine(engine.redis_info(&s.id, None).await.map(|_| ()));
+    fine(engine.apache_status(&s.id, None).await.map(|_| ()));
+    // A bad container name never reaches the server.
+    let r = engine.list_databases(&s.id, DbKind::Postgres, Some("db; reboot")).await;
+    assert!(matches!(r, Err(Error::InvalidInput(_))), "{r:?}");
     fine(engine.haproxy_status(&s.id).await.map(|_| ()));
 
     let local = std::env::temp_dir().join("orbital-it-never.dump");
@@ -1039,7 +1052,7 @@ async fn databases_web_servers_and_users_read_and_refuse() {
         .await;
     assert!(matches!(r, Err(Error::InvalidInput(_))), "{r:?}");
     assert!(!local.exists());
-    assert!(engine.redis_action(&s.id, RedisAction::FlushDb(99_999)).await.is_err());
+    assert!(engine.redis_action(&s.id, RedisAction::FlushDb(99_999), None).await.is_err());
 
     let users = engine.list_users(&s.id).await.unwrap();
     assert!(users.users.iter().any(|u| u.uid == 0), "root is listed");
