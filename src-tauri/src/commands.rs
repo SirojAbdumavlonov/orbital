@@ -1128,6 +1128,11 @@ pub async fn find_files(engine: Eng<'_>, session_id: String, dir: String, query:
 }
 
 #[tauri::command]
+pub async fn docker_version(engine: Eng<'_>, session_id: String) -> R<Option<String>> {
+    engine.docker_version(&session_id).await
+}
+
+#[tauri::command]
 pub fn install_options(engine: Eng) -> Vec<orbital_core::install::InstallOption> {
     engine.install_options()
 }

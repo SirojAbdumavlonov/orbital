@@ -35,6 +35,8 @@ function activity(line: string): { time: string; text: string } | null {
       alert: `Alert sent: ${String(r.key ?? "").replace(":", " ")}`,
       alert_cleared: `All clear sent: ${String(r.key ?? "").replace(":", " ")}`,
       error: `Problem: ${r.error}`,
+      telegram_down: r.kind === "conflict" || r.kind === "token" ? `Telegram: ${r.error}` : `Telegram unreachable for ${r.minutes} min: ${r.error}. Messages sent meanwhile arrive when it's back.`,
+      telegram_back: `Telegram reachable again after ${r.minutes} min; nothing was lost`,
       test_message: "Test message sent",
       daily_summary: "Daily summary sent",
     };
@@ -243,7 +245,17 @@ function Installed({ s, st, code, setCode, reload, onEdit }: { s: SessionState; 
     }
   }
   const setDaily = (t: string | null) => act(() => api.agentSetDaily(sid, t), t ? `Daily summary at ${t} (server time)` : "Daily summary is off");
-  const log = st.recent.map(activity).filter(Boolean).reverse().slice(0, 25) as { time: string; text: string }[];
+  // Newest first; the same line repeated back to back shows once with a count (and its time span).
+  const log: { time: string; text: string; n: number; first: string }[] = [];
+  for (const l of (st.recent.map(activity).filter(Boolean) as { time: string; text: string }[]).reverse()) {
+    const prev = log[log.length - 1];
+    if (prev && prev.text === l.text) {
+      prev.n += 1;
+      prev.first = l.time;
+    } else if (log.length < 25) {
+      log.push({ ...l, n: 1, first: l.time });
+    }
+  }
   return (
     <>
       {st.updateAvailable && (
@@ -312,7 +324,7 @@ function Installed({ s, st, code, setCode, reload, onEdit }: { s: SessionState; 
       <div className="section-title">Recent activity</div>
       {log.length === 0 ? <p className="faint" style={{ padding: "0 16px" }}>Nothing yet.</p> : (
         <table className="table">
-          <tbody>{log.map((l, i) => <tr key={i}><td className="faint mono" style={{ width: 110, whiteSpace: "nowrap" }}>{l.time}</td><td>{l.text}</td></tr>)}</tbody>
+          <tbody>{log.map((l, i) => <tr key={i}><td className="faint mono" style={{ width: 110, whiteSpace: "nowrap" }} title={l.n > 1 ? `${l.first} – ${l.time}` : undefined}>{l.time}</td><td>{l.text}{l.n > 1 && <span className="badge" style={{ marginLeft: 8 }}>×{l.n}</span>}</td></tr>)}</tbody>
         </table>
       )}
     </>

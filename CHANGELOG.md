@@ -4,6 +4,18 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Fixed
+- **AI agent: "Problem: telegram: The read operation timed out" filled the activity list.** The agent waits for new Telegram messages over one long request; now and then the network between the server and Telegram stalls, that request gets no answer, and the next one works, so nothing was lost. Now:
+  - a stall is silent; only Telegram being unreachable for 5 minutes or more is shown, once, in plain words ("Telegram didn't answer in time", "this server couldn't look up api.telegram.org", …), with a line when it's back;
+  - after two stalls the agent talks to Telegram over IPv4 only (on servers with IPv6, such as Hetzner's, the IPv6 route to Telegram is the usual cause);
+  - a revoked bot token, or the same bot used by another program, is said at once with what to do;
+  - retries back off from 1 to 30 seconds.
+
+  The agent is now version 1.3.3: the AI agent tab offers **Update agent**. Repeated lines in its activity list show once with a count.
+- **Moving a container: "permission denied while trying to connect to the docker API".** Whether Docker needs sudo on a server was decided from the wording of Docker's error, which newer Docker versions changed, so the move ran without sudo. It's now decided by whether `docker ps` works for the login user. If sudo isn't allowed either, the message says what to change (add the user to the docker group, or allow sudo for the server).
+- **Software installed from "+" works without reconnecting.** After installing Docker, its tab said Docker wasn't installed until you reconnected; Orbital now looks at Docker again whenever it looks for software.
+- **The server tabs at the top line up with the window buttons** (with two or more servers open): the strip is as tall as the top row, and many tabs scroll in their own space instead of sliding under the sidebar and back/forward buttons.
+
 ## 1.3.5 (2026-11-21)
 
 ### Added

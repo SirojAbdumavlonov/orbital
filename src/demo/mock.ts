@@ -383,7 +383,7 @@ const cleanupItems = () => [
   { id: "docker", title: "Docker leftovers", detail: "Stopped containers, unused networks, dangling images and build cache. Running containers and volumes (data) are kept.", bytes: cleaned.has("docker") ? 0 : 1900 * MB },
   { id: "dockerimages", title: "Docker images no container uses", detail: "Pulled again when a container needs one. Can take a while to download later.", bytes: cleaned.has("dockerimages") ? 0 : 3100 * MB },
 ];
-const agent: any = { installed: false, running: false, version: null, provider: null, model: null, bot: null, alerts: true, pairCodeActive: false, owner: null, pairedAt: null, alerting: [], recent: [], updateAvailable: false, dailyReport: null, latestVersion: "1.3.1" };
+const agent: any = { installed: false, running: false, version: null, provider: null, model: null, bot: null, alerts: true, pairCodeActive: false, owner: null, pairedAt: null, alerting: [], recent: [], updateAvailable: false, dailyReport: null, latestVersion: "1.3.3" };
 const agentLog: any[] = [];
 /** A pairing code; in the demo, "you" send it from Telegram 8 seconds later. */
 function agentCode() {
@@ -854,11 +854,11 @@ export function install() {
       case "agent_install": {
         await progress(args.progress, [[0, "step", "Checking the bot token and the API key …"], [700, "step", "Setting up the agent on the server (the first time takes a minute or two) …"], [2600, "step", "Installing the agent …"], [500, "step", "Saving your settings …"], [500, "step", "Starting the agent …"], [600, "step", "Making a pairing code …"]]);
         Object.assign(agent, { installed: true, running: true, version: "1.3.0", updateAvailable: true, provider: args.setup.provider, model: args.setup.model || (args.setup.provider === "openai" ? "gpt-5" : "claude-opus-5-5"), bot: "my_server_helper_bot", alerts: args.setup.alerts, owner: null, pairedAt: null, pairCodeActive: true });
-        agentLog.push({ time: new Date().toISOString().slice(0, 19), event: "start", version: "1.3.1" });
+        agentLog.push({ time: new Date().toISOString().slice(0, 19), event: "start", version: "1.3.3" });
         return agentCode();
       }
       case "agent_pair_code": Object.assign(agent, { owner: null, pairedAt: null, pairCodeActive: true }); return agentCode();
-      case "agent_update": await progress(args.progress, [[0, "step", "Updating the agent …"], [1700, "step", "Restarting it …"]]); agent.version = "1.3.1"; agent.updateAvailable = false; return null;
+      case "agent_update": await progress(args.progress, [[0, "step", "Updating the agent …"], [1700, "step", "Restarting it …"]]); agent.version = "1.3.3"; agent.updateAvailable = false; return null;
       case "agent_set_running": agent.running = args.on; return null;
       case "agent_set_alerts": agent.alerts = args.on; return null;
       case "agent_models":
@@ -1157,6 +1157,7 @@ export function install() {
       }
       case "plugin:event|listen": return 1;
       case "save_text": return null;
+      case "docker_version": return "27.3.1";
       case "install_options": return [
         { id: "docker", name: "Docker", category: "Containers", hint: "Run apps in containers; manage them, their logs and Compose files here", apt: ["docker.io"], dnf: ["moby-engine"] },
         { id: "nginx", name: "nginx", category: "Web server", hint: "Web server and reverse proxy; then New website and HTTPS in two clicks", apt: ["nginx"], dnf: ["nginx"] },

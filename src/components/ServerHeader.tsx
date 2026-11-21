@@ -205,6 +205,8 @@ export function ServerHeader({ s }: { s: SessionState }) {
     <header className="header">
       {order.length > 1 && (
         <div className="session-strip drag" data-tauri-drag-region>
+          {/* Its own scroll area, so many servers scroll here instead of sliding under the window buttons. */}
+          <div className="session-chips" data-tauri-drag-region>
           {order.map((id) => (
             <div key={id} className={`session-chip ${id === active ? "on" : ""}`} onClick={() => setActive(id)}>
               {sessions[id].profile.name}
@@ -213,6 +215,7 @@ export function ServerHeader({ s }: { s: SessionState }) {
               </button>
             </div>
           ))}
+          </div>
         </div>
       )}
       <div className="header-top drag" data-tauri-drag-region>

@@ -206,7 +206,8 @@ pub fn parse_stats(out: &str) -> Vec<ContainerStats> {
 }
 
 pub(crate) fn is_socket_denied(o: &ExecOutput) -> bool {
-    !o.ok() && o.stderr.to_lowercase().contains("permission denied") && o.stderr.contains("docker")
+    let e = o.stderr.to_lowercase();
+    !o.ok() && e.contains("permission denied") && e.contains("docker")
 }
 
 impl SshSession {

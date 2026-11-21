@@ -319,6 +319,7 @@ pub fn run() {
             commands::net_check,
             commands::move_preview,
             commands::install_options,
+            commands::docker_version,
             commands::install_software,
             commands::move_container,
             commands::save_text,

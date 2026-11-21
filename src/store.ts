@@ -344,12 +344,14 @@ export const useStore = create<State>((set, get) => ({
 
   async detectTools(sessionId) {
     try {
-      const tools = await api.detectTools(sessionId);
+      // Docker's version too: software installed since connecting (from "+") works without reconnecting.
+      const [tools, dockerVersion] = await Promise.all([api.detectTools(sessionId), api.dockerVersion(sessionId).catch(() => undefined)]);
       get().patch(sessionId, (s) => {
+        if (dockerVersion !== undefined && dockerVersion !== s.info.dockerVersion) s = { ...s, info: { ...s.info, dockerVersion } };
         // Drop remembered tabs for software that is no longer on the server.
         const toolTabs = s.toolTabs.filter((id) => ALWAYS_TOOLS.includes(id) || tools.some((t) => t.id === id) || (id === "docker" && !!s.info.dockerVersion));
         const gone = s.tab.startsWith("tool:") && !toolTabs.includes(s.tab.slice(5));
-        return { tools, toolTabs, tab: gone ? "files" : s.tab };
+        return { info: s.info, tools, toolTabs, tab: gone ? "files" : s.tab };
       });
     } catch {
       get().patch(sessionId, (s) => ({ tools: s.tools ?? [] }));

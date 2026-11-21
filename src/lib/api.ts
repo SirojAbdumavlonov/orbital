@@ -1020,6 +1020,7 @@ export const api = {
   /** Files and folders whose names contain `query`, below `dir` (skips .git and node_modules). */
   findFiles: (sessionId: string, dir: string, query: string) => invoke<FindReport>("find_files", { sessionId, dir, query }),
   /** A folder as one .tar.gz, streamed into `localPath`; a job (progress, stoppable). */
+  dockerVersion: (sessionId: string) => invoke<string | null>("docker_version", { sessionId }),
   installOptions: () => invoke<InstallOption[]>("install_options"),
   /** Install supported software from the server's package repositories and start it; a job. */
   installSoftware: (sessionId: string, id: string, force: boolean, onProgress?: OnProgress) =>

@@ -2474,6 +2474,21 @@ impl Engine {
             Ok(o)
         }
         .await;
+        // Docker refused the login user and sudo isn't allowed: say what to change.
+        let r = r.map_err(|e| {
+            let t = e.to_string().to_lowercase();
+            if t.contains("permission denied") && t.contains("docker") {
+                let who = if t.contains("on the source") { &src } else { &dst };
+                Error::PermissionDenied(format!(
+                    "{} can't use Docker as {}: add that user to the docker group (sudo usermod -aG docker {}, then reconnect) or allow sudo in its server settings",
+                    who.label(),
+                    who.profile.username,
+                    who.profile.username
+                ))
+            } else {
+                e
+            }
+        });
         let ok = matches!(&r, Ok(o) if o.ok());
         if !ok && stopped {
             progress::step(format!("Starting {} again on {} …", p.name, src.label()));
@@ -2629,6 +2644,12 @@ impl Engine {
             std::time::Duration::from_secs(3600),
         )
         .await
+    }
+
+    /// The Docker version now (None if it isn't installed or doesn't answer):
+    /// read again after installing, so the Docker tab works without reconnecting.
+    pub async fn docker_version(&self, sid: &str) -> Result<Option<String>> {
+        Ok(self.session(sid).await?.docker_available().await.ok().flatten())
     }
 
     /// Software Orbital can install (the "+" menu's "You may try").

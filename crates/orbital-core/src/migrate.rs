@@ -413,15 +413,15 @@ pub struct MovePreview {
     pub target: String,
 }
 
-/// Whether `docker` needs sudo on this server (the login user isn't in the docker group).
+/// Whether `docker` needs sudo on this server: the login user can't talk to
+/// the daemon (not in the docker group) but sudo is allowed. Decided by
+/// whether a harmless `docker ps` works, not by the wording of the error,
+/// which differs between Docker versions.
 pub async fn docker_root(s: &SshSession) -> Result<bool> {
-    let o = s.exec("docker version --format '{{.Server.Version}}' 2>&1").await?;
-    Ok(!o.ok()
-        && crate::docker::is_socket_denied(&crate::ssh::ExecOutput {
-            stderr: o.stdout.clone(),
-            ..o
-        })
-        && s.elevation_needed())
+    if !s.elevation_needed() {
+        return Ok(false);
+    }
+    Ok(!s.exec("docker ps -q >/dev/null 2>&1").await?.ok())
 }
 
 /// `docker inspect` plus the image's registry digests (an image property, not the container's).

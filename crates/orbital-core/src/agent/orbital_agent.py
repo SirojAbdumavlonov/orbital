@@ -34,7 +34,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
-VERSION = "1.3.1"
+VERSION = "1.3.3"
 CONFIG = "/etc/orbital-agent/config.json"
 STATE_DIR = "/var/lib/orbital-agent"
 STATE = STATE_DIR + "/state.json"
@@ -457,6 +457,75 @@ def make_provider(cfg):
 # ----------------------------------------------------------------- telegram
 
 
+# Telegram over IPv4 only once IPv6 has stalled (servers with IPv6, like
+# Hetzner's, sometimes can't keep a connection to Telegram over it).
+_getaddrinfo = socket.getaddrinfo
+IPV4_ONLY = set()
+
+
+def _getaddrinfo_v4_first(host, *args, **kwargs):
+    res = _getaddrinfo(host, *args, **kwargs)
+    if host in IPV4_ONLY:
+        return [r for r in res if r[0] == socket.AF_INET] or res
+    return res
+
+
+socket.getaddrinfo = _getaddrinfo_v4_first
+
+
+def classify(error):
+    """(kind, plain words) for a failed Telegram call."""
+    text = str(error)
+    reason = getattr(error, "reason", None)
+    if isinstance(error, (socket.timeout, TimeoutError)) or isinstance(reason, (socket.timeout, TimeoutError)) or "timed out" in text:
+        return "timeout", "Telegram didn't answer in time (the network between this server and Telegram stalled)"
+    if isinstance(reason, socket.gaierror) or "Name or service not known" in text or "Temporary failure in name resolution" in text:
+        return "dns", "this server couldn't look up api.telegram.org (its DNS isn't answering)"
+    if "Conflict" in text:
+        return "conflict", "another program is reading this bot's messages: the same bot token is used somewhere else (stop the other one, or make a new bot)"
+    if "Unauthorized" in text:
+        return "token", "Telegram no longer accepts the bot token (it was revoked or regenerated in @BotFather): set it again with Change bot or AI key"
+    if "SSL" in text or "CERTIFICATE" in text:
+        return "tls", f"the secure connection to Telegram failed ({text})"
+    return "network", f"this server couldn't connect to Telegram ({text})"
+
+
+class Outage:
+    """Telegram's long poll fails now and then: a stalled connection times out
+    and the next poll works. Network trouble is reported only when it lasts
+    (REPORT_AFTER seconds without a working poll); a revoked token or a second
+    program using the bot is reported at once. One more line when it's back."""
+
+    REPORT_AFTER = 300
+    AT_ONCE = ("conflict", "token")
+
+    def __init__(self):
+        self.fails, self.since, self.reported, self.timeouts = 0, None, False, 0
+
+    def failed(self, error, now, host="api.telegram.org"):
+        """Returns (event to log or None, seconds to wait before the next try)."""
+        kind, words = classify(error)
+        self.fails += 1
+        self.since = self.since or now
+        if kind == "timeout":
+            self.timeouts += 1
+            if self.timeouts >= 2:
+                IPV4_ONLY.add(host)
+        event = None
+        if not self.reported and (kind in self.AT_ONCE or now - self.since >= self.REPORT_AFTER):
+            self.reported = True
+            event = {"event": "telegram_down", "kind": kind, "error": words, "minutes": round((now - self.since) / 60)}
+        wait = 60 if kind in self.AT_ONCE else min(30, 2 ** (self.fails - 1))
+        return event, wait
+
+    def ok(self, now):
+        event = None
+        if self.reported:
+            event = {"event": "telegram_back", "minutes": max(1, round((now - self.since) / 60))}
+        self.fails, self.since, self.reported, self.timeouts = 0, None, False, 0
+        return event
+
+
 class Telegram:
     def __init__(self, token):
         self.base = f"https://api.telegram.org/bot{token}/"
@@ -788,6 +857,7 @@ class Agent:
             sys.exit("no config at " + CONFIG)
         log("start", version=VERSION)
         offset = None
+        outage = Outage()
         next_alert = time.time() + 30
         while True:
             self.reload_config()
@@ -807,9 +877,14 @@ class Agent:
                     params["offset"] = offset
                 updates = self.tg.call("getUpdates", http_timeout=40, **params)
             except Exception as e:
-                log("error", error=f"telegram: {e}")
-                time.sleep(5)
+                ev, wait = outage.failed(e, time.time())
+                if ev:
+                    log(ev.pop("event"), **ev)
+                time.sleep(wait)
                 continue
+            back = outage.ok(time.time())
+            if back:
+                log(back.pop("event"), **back)
             for u in updates:
                 offset = u["update_id"] + 1
                 try:
@@ -1003,6 +1078,37 @@ def selftest():
         assert sent["body"] == {"chat_id": 42, "action": "typing"} and sent["http_timeout"] == 10, sent
     finally:
         urllib.request.urlopen = real
+    # Stalls are silent unless they last 5 minutes; a second stall switches Telegram to IPv4.
+    IPV4_ONLY.clear()
+    o = Outage()
+    t = TimeoutError("The read operation timed out")
+    assert o.failed(t, 0) == (None, 1) and "api.telegram.org" not in IPV4_ONLY
+    assert o.ok(40) is None
+    assert o.failed(t, 100) == (None, 1) and o.failed(t, 141) == (None, 2) and "api.telegram.org" in IPV4_ONLY
+    ev, wait = o.failed(t, 400)
+    assert ev and ev["event"] == "telegram_down" and ev["kind"] == "timeout" and ev["minutes"] == 5 and wait == 4, (ev, wait)
+    assert "stalled" in ev["error"] and o.failed(t, 500)[0] is None
+    assert o.ok(640) == {"event": "telegram_back", "minutes": 9}
+    # A revoked token or a second poller is said at once, in plain words.
+    o = Outage()
+    ev, wait = o.failed(RuntimeError("telegram getUpdates: Conflict: terminated by other getUpdates request"), 0)
+    assert ev and ev["kind"] == "conflict" and wait == 60, ev
+    assert classify(RuntimeError("telegram getUpdates: Unauthorized"))[0] == "token"
+    assert classify(urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution")))[0] == "dns"
+    assert classify(ConnectionRefusedError(111, "Connection refused"))[0] == "network"
+    # IPv4 only for the hosts in IPV4_ONLY (no network: the real lookup is replaced).
+    global _getaddrinfo
+    real_gai = _getaddrinfo
+    _getaddrinfo = lambda host, *a, **k: [(socket.AF_INET6, 1, 6, "", ("2001:db8::1", 443)), (socket.AF_INET, 1, 6, "", ("192.0.2.1", 443))]
+    IPV4_ONLY.clear()
+    try:
+        assert len(socket.getaddrinfo("api.telegram.org", 443)) == 2
+        IPV4_ONLY.add("api.telegram.org")
+        assert [r[0] for r in socket.getaddrinfo("api.telegram.org", 443)] == [socket.AF_INET]
+        assert len(socket.getaddrinfo("example.com", 443)) == 2
+    finally:
+        _getaddrinfo = real_gai
+        IPV4_ONLY.clear()
     print("selftest ok")
 
 
