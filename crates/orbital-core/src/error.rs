@@ -61,7 +61,9 @@ pub enum Error {
     ValidationFailed { validator: String, output: String },
     #[error("Pre-flight check failed, action aborted: {output}")]
     PreflightFailed { check: String, output: String },
-    #[error("Not connected (session {0})")]
+    #[error(
+        "the connection to this server was lost (the Mac slept, the network changed or the server restarted); reconnect and try again"
+    )]
     NotConnected(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

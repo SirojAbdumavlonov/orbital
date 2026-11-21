@@ -1,7 +1,9 @@
-import { FileText, FolderOpen, Lock, Pencil, Plus, RefreshCw, Search, ShieldAlert, ShieldCheck, Zap } from "lucide-react";
+import { FileText, FlaskConical, FolderOpen, Lock, Pencil, Plus, RefreshCw, Search, ShieldAlert, ShieldCheck, Trash2, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { DrawerClose } from "../components/ui";
-import { api, asApiError, NginxConfig, NginxSite } from "../lib/api";
+import { DrawerClose, Modal } from "../components/ui";
+import { SiteTestPanel } from "../components/SiteTest";
+import { runJob } from "../lib/jobs";
+import { api, asApiError, Certificate, NginxConfig, NginxSite } from "../lib/api";
 import { parentPath } from "../lib/format";
 import { SessionState, useStore } from "../store";
 import { useKept } from "../lib/kept";
@@ -29,6 +31,8 @@ export function NginxView({ s }: { s: SessionState }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useKept(`${s.info.id}:nginx:q`, "");
+  const [testing, setTesting] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<NginxSite | null>(null);
   const [sel, setSel] = useKept<string | null>(`${s.info.id}:nginx:sel`, null);
   const [reloading, setReloading] = useState(false);
 
@@ -139,7 +143,12 @@ export function NginxView({ s }: { s: SessionState }) {
                       <Lock size={13} /> Get HTTPS certificate
                     </button>
                   )}
+                  {testName(cur) && <button className="btn" title="nginx -t, a request on the server and one from this computer" onClick={() => setTesting(testing === siteKey(cur) ? null : siteKey(cur))}><FlaskConical size={13} /> Test</button>}
+                  {/^\/etc\/nginx\/(sites-available|sites-enabled|conf\.d)\//.test(cur.file) && (
+                    <button className="btn danger" title="Remove this site from nginx (a backup is kept)" onClick={() => setRemoving(cur)}><Trash2 size={13} /> Delete website…</button>
+                  )}
                 </div>
+                {testing === siteKey(cur) && testName(cur) && <div style={{ padding: "0 14px 12px" }}><SiteTestPanel sid={sid} domain={testName(cur)!} https={cur.ssl} /></div>}
                 <dl className="kv">
                   <dt>Domain names</dt><dd className="mono">{cur.serverNames.join(" ") || "—"}</dd>
                   <dt>Listens on</dt><dd className="mono">{cur.listens.join(", ") || "80"}</dd>
@@ -173,6 +182,77 @@ export function NginxView({ s }: { s: SessionState }) {
           </aside>
         </div>
       )}
+      {removing && cfg && <RemoveSiteDialog s={s} site={removing} cfg={cfg} onClose={() => setRemoving(null)} onDone={() => { setRemoving(null); setSel(null); void load(); }} />}
     </div>
+  );
+}
+
+/** A name to test the site with: its first real domain (not a wildcard or regex). */
+function testName(x: NginxSite): string | null {
+  return x.serverNames.find((n) => n.includes(".") && !/^[~*.]/.test(n)) ?? null;
+}
+
+/**
+ * Remove a website from nginx: its file and the links that enable it (backed
+ * up, and put back if nginx -t fails), optionally its certificate and its
+ * folder. Asks for the domain to be typed first.
+ */
+function RemoveSiteDialog({ s, site, cfg, onClose, onDone }: { s: SessionState; site: NginxSite; cfg: NginxConfig; onClose: () => void; onDone: () => void }) {
+  const sid = s.info.id;
+  const toast = useStore((x) => x.toast);
+  const sameFile = cfg.sites.filter((x) => x.file === site.file);
+  const names = [...new Set(sameFile.flatMap((x) => x.serverNames))].filter((n) => n && n !== "_");
+  const main = testName(site) ?? names[0] ?? site.file.split("/").pop() ?? "";
+  const [certs, setCerts] = useState<Certificate[] | null>(null);
+  const cert = certs?.find((c) => c.domains.some((d) => names.includes(d))) ?? null;
+  const roots = [...new Set(sameFile.map((x) => x.root).filter((r): r is string => !!r && /^\/var\/www\/[^/]+/.test(r) && !r.includes("..")))];
+  const [delCert, setDelCert] = useState(false);
+  const [delRoot, setDelRoot] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { api.certbotStatus(sid).then((st) => setCerts(st.certificates), () => setCerts([])); }, [sid]);
+
+  async function go() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const backup = await runJob((p) => api.removeWebsite(sid, site.file, delCert && cert ? cert.name : null, delRoot && roots[0] ? roots[0] : null, p), {
+        key: `website-remove:${sid}`,
+        title: `Deleting ${main}`,
+        sid,
+        done: () => `${main} is removed from nginx`,
+      });
+      toast({ kind: "success", title: `${main} is removed from nginx`, body: backup ? `A copy of its configuration is kept in ${backup}.` : undefined });
+      onDone();
+    } catch (e) {
+      setErr(asApiError(e).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Delete ${main}?`} subtitle={<>From nginx on <b>{s.profile.name}</b></>} onClose={onClose} keepOnOutsideClick
+      footer={<>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn danger" disabled={busy || typed.trim() !== main} onClick={go}><Trash2 size={13} /> {busy ? "Deleting…" : "Delete website"}</button>
+      </>}>
+      <div className="form">
+        <p style={{ margin: 0 }}>Removes <span className="mono">{site.file}</span> and the links that enable it, then reloads nginx. A copy is kept in <span className="mono">/var/backups/orbital-nginx</span>; if nginx -t fails without it, everything is put back.</p>
+        {names.length > 1 && <div className="notice" style={{ margin: 0 }}>This file serves {names.length} names, and all of them stop: <span className="mono">{names.join(", ")}</span></div>}
+        {cert && (
+          <label className="check"><input type="checkbox" checked={delCert} onChange={(e) => setDelCert(e.target.checked)} /> Also delete the HTTPS certificate <span className="mono">{cert.name}</span> ({cert.domains.join(", ")})</label>
+        )}
+        {roots[0] && (
+          <label className="check"><input type="checkbox" checked={delRoot} onChange={(e) => setDelRoot(e.target.checked)} /> Also delete its files in <span className="mono">{roots[0]}</span> (can't be undone)</label>
+        )}
+        <label className="field">
+          <span>Type <b className="mono">{main}</b> to confirm</span>
+          <input className="input mono" value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus />
+        </label>
+        {err && <div className="alert" style={{ whiteSpace: "pre-wrap" }}>{err}</div>}
+      </div>
+    </Modal>
   );
 }

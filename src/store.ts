@@ -2,8 +2,8 @@ import type { TermLaunch } from "./lib/api";
 import { toast as sonner } from "sonner";
 import { useSettings } from "./lib/settings";
 import { create } from "zustand";
-import { api, asApiError, ApiError, ConnectOpts, DetectedTool, Metrics, Profile, SessionInfo, Validator } from "./lib/api";
-import { forgetKept } from "./lib/kept";
+import { api, asApiError, ApiError, ConnectOpts, DetectedTool, Metrics, Profile, SessionInfo, Validator , setNotConnectedHandler } from "./lib/api";
+import { forgetKept, restoreKept, takeKept } from "./lib/kept";
 
 /** Built-in tabs, plus one `tool:<id>` tab per piece of detected software the user opened. */
 /** SFTP sessions are full SSH servers; FTP, WebDAV and S3 offer files only. */
@@ -114,7 +114,8 @@ interface State {
   goBack(): void;
   goForward(): void;
   /** Close and reopen a server's connection, keeping the tab the user was on. */
-  reconnect(sessionId: string): Promise<void>;
+  /** A new connection to the same server, keeping the tab, folder, selections and an open New website dialog. Returns the new session id. */
+  reconnect(sessionId: string): Promise<string | null>;
   /** After a profile was saved: mark its sessions for reconnect if connection settings changed. */
   profileSaved(before: Profile | null, after: Profile, secretsChanged: boolean): "reconnect" | "none";
   setReconnectAsk(sessionId: string | null): void;
@@ -208,13 +209,22 @@ export const useStore = create<State>((set, get) => ({
 
   async reconnect(sessionId) {
     const s = get().sessions[sessionId];
-    if (!s) return;
-    const { tab, cwd } = s;
+    if (!s) return null;
+    const { tab, cwd, toolTabs } = s;
     set({ reconnectAsk: null });
-    await get().disconnect(sessionId);
+    // Connect first (the old one counts as lost, so a new one is made), then let the old go:
+    // views and dialogs follow the server instead of closing in between.
+    get().patch(sessionId, { lost: true });
     await get().connect(s.profile.id);
-    const fresh = Object.values(get().sessions).find((x) => x.profile.id === s.profile.id);
-    if (fresh) get().patch(fresh.info.id, { tab: tab === "terminal" ? "files" : tab, cwd });
+    const fresh = Object.values(get().sessions).find((x) => x.profile.id === s.profile.id && !x.lost && x.info.id !== sessionId);
+    if (!fresh) return null;
+    const kept = takeKept(`${sessionId}:`);
+    if (get().newWebsite === sessionId) set({ newWebsite: fresh.info.id });
+    await get().disconnect(sessionId);
+    restoreKept(`${fresh.info.id}:`, kept);
+    get().patch(fresh.info.id, { tab: tab === "terminal" ? "files" : tab, cwd, toolTabs });
+    set({ active: fresh.info.id, globalView: null });
+    return fresh.info.id;
   },
 
   profileSaved(before, after, secretsChanged) {
@@ -436,6 +446,12 @@ export const useStore = create<State>((set, get) => ({
     set({ globalView });
   },
 }));
+
+// A call that found its connection gone marks the server as disconnected, so its header offers Reconnect.
+setNotConnectedHandler((sid) => {
+  const s = useStore.getState().sessions[sid];
+  if (s && !s.lost) useStore.getState().patch(sid, { lost: true });
+});
 
 // ---- back / forward ----
 

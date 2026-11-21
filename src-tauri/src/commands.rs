@@ -1139,6 +1139,28 @@ pub async fn docker_version(engine: Eng<'_>, session_id: String) -> R<Option<Str
 }
 
 #[tauri::command]
+pub async fn website_test(engine: Eng<'_>, session_id: String, domain: String, https: bool) -> R<orbital_core::website::SiteTest> {
+    engine.website_test(&session_id, &domain, https).await
+}
+
+#[tauri::command]
+pub async fn remove_website(
+    engine: Eng<'_>,
+    session_id: String,
+    file: String,
+    certificate: Option<String>,
+    root: Option<String>,
+    progress: Channel<ProgressEvent>,
+) -> R<String> {
+    progress::run_job(
+        progress.id(),
+        sink(progress),
+        engine.remove_website(&session_id, &file, certificate.as_deref(), root.as_deref()),
+    )
+    .await
+}
+
+#[tauri::command]
 pub fn install_options(engine: Eng) -> Vec<orbital_core::install::InstallOption> {
     engine.install_options()
 }

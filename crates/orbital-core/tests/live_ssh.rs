@@ -1662,14 +1662,36 @@ async fn new_website_server_block_is_written_validated_and_rolled_back() {
         .any(|ev| ev.action == "website.create" && ev.outcome == Outcome::Success && ev.target.as_deref() == Some(domain.as_str())));
     assert!(log.iter().any(|ev| ev.action == "website.create" && ev.outcome == Outcome::Failure));
 
-    // Clean up.
-    let link = rep.plan.enabled_link.clone().unwrap_or_default();
+    // Test: nginx -t passes and the server serves the site under its name (internet: not checked in CI).
+    let t = engine.website_test(&s.id, &domain, false).await.unwrap();
+    assert!(t.config_ok, "{}", t.config_output);
+    assert!(t.server.status.is_some_and(|c| c == 200 || c == 301), "{:?}", t.server);
+
+    // Remove it (and its folder): the file and its link are gone, a backup is kept, nginx still passes.
+    let backup = engine
+        .remove_website(&s.id, &rep.plan.file, None, Some(root.as_str()))
+        .await
+        .unwrap();
+    assert!(backup.starts_with("/var/backups/orbital-nginx/"), "{backup}");
+    assert!(!exists(rep.plan.file.clone()).await);
+    if let Some(l) = &rep.plan.enabled_link {
+        assert!(!exists(l.clone()).await);
+    }
+    assert!(!exists(root.clone()).await);
+    assert!(engine.nginx_config(&s.id).await.unwrap().test_ok);
+    assert!(engine
+        .audit_query(&AuditFilter::default())
+        .unwrap()
+        .iter()
+        .any(|ev| ev.action == "website.remove" && ev.outcome == Outcome::Success));
+    // Only nginx site files can be removed.
+    assert!(matches!(
+        engine.remove_website(&s.id, "/etc/nginx/nginx.conf", None, None).await,
+        Err(Error::InvalidInput(_))
+    ));
+
     engine
-        .run_command(
-            &s.id,
-            &format!("rm -rf -- '{}' '{link}' '{root}'; nginx -s reload", rep.plan.file),
-            true,
-        )
+        .run_command(&s.id, &format!("rm -f '{backup}'; nginx -s reload"), true)
         .await
         .unwrap();
     engine.disconnect(&s.id).await.unwrap();

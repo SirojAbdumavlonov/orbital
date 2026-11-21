@@ -30,6 +30,17 @@ export function useKept<T>(key: string, initial: T): [T, (v: T | ((prev: T) => T
   return [value, set];
 }
 
+/** Take what was kept for one server (to give it to its new connection after a reconnect). */
+export function takeKept(prefix: string): Map<string, unknown> {
+  const out = new Map<string, unknown>();
+  for (const [k, v] of memory) if (k.startsWith(prefix)) out.set(k.slice(prefix.length), v);
+  return out;
+}
+
+export function restoreKept(prefix: string, kept: Map<string, unknown>) {
+  for (const [k, v] of kept) memory.set(prefix + k, v);
+}
+
 /** Forget what was kept for a server (it disconnected). */
 export function forgetKept(prefix: string) {
   for (const k of [...memory.keys()]) if (k.startsWith(prefix)) memory.delete(k);

@@ -1,5 +1,22 @@
 // Typed bridge to the Rust engine. Types mirror orbital-core's serde output.
-import { invoke, Channel } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke, Channel } from "@tauri-apps/api/core";
+
+/** Told about every call that found its server's connection gone (the store marks it lost). */
+let onNotConnected: ((sessionId: string) => void) | null = null;
+export function setNotConnectedHandler(f: (sessionId: string) => void) {
+  onNotConnected = f;
+}
+
+/** Every backend call: a "connection lost" answer also marks that server as disconnected. */
+async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    return await tauriInvoke<T>(cmd, args);
+  } catch (e) {
+    const sid = args && (args.sessionId ?? args.srcSessionId ?? args.dstSessionId);
+    if (e && typeof e === "object" && (e as { kind?: string }).kind === "NotConnected" && typeof sid === "string") onNotConnected?.(sid);
+    throw e;
+  }
+}
 
 export type AuthMethod = "password" | "key" | "agent";
 export type SudoMode = "auto" | "never" | "noPassword" | "password";
@@ -442,6 +459,9 @@ export interface TunnelInfo {
   /** Why the server refused the last connection (null while it works). */
   lastError: string | null;
 }
+
+export interface SiteProbe { url: string; status: number | null; error: string | null }
+export interface SiteTest { configOk: boolean; configOutput: string; server: SiteProbe; internet: SiteProbe }
 
 export interface InstallOption { id: string; name: string; category: string; hint: string; apt: string[]; dnf: string[] }
 
@@ -1027,6 +1047,11 @@ export const api = {
   findFiles: (sessionId: string, dir: string, query: string) => invoke<FindReport>("find_files", { sessionId, dir, query }),
   /** A folder as one .tar.gz, streamed into `localPath`; a job (progress, stoppable). */
   dockerVersion: (sessionId: string) => invoke<string | null>("docker_version", { sessionId }),
+  /** nginx -t, a request on the server, and one from this computer. */
+  websiteTest: (sessionId: string, domain: string, https: boolean) => invoke<SiteTest>("website_test", { sessionId, domain, https }),
+  /** Remove a site's nginx file (backed up; put back if nginx -t fails), optionally its certificate and folder; a job. Returns the backup path. */
+  removeWebsite: (sessionId: string, file: string, certificate: string | null, root: string | null, onProgress?: OnProgress) =>
+    invoke<string>("remove_website", { sessionId, file, certificate, root, progress: progressChannel(onProgress) }),
   installOptions: () => invoke<InstallOption[]>("install_options"),
   /** Install supported software from the server's package repositories and start it; a job. */
   installSoftware: (sessionId: string, id: string, force: boolean, onProgress?: OnProgress) =>

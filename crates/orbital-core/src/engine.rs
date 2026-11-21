@@ -1198,6 +1198,101 @@ impl Engine {
     /// Create an nginx site for one domain: the folder (static sites), the
     /// server block through safe save with `nginx -t` and rollback, the
     /// sites-enabled link where that's the layout, then a reload.
+    /// Test a website: nginx -t, a request on the server itself, and one from this computer. Read-only.
+    pub async fn website_test(&self, sid: &str, domain: &str, https: bool) -> Result<crate::website::SiteTest> {
+        use crate::website::{self as w, SiteProbe};
+        let s = self.session(sid).await?;
+        let d = w::validate_domain(domain)?;
+        let (cfg, _) = s.exec_inspect("nginx -t 2>&1").await?;
+        let local = s.exec(&w::local_test_command(&d, https)?).await?;
+        let server = w::parse_local_test(&d, https, &local.stdout);
+        let url = format!("{}://{d}/", if https { "https" } else { "http" });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(10))
+            .user_agent(concat!("Orbital/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let internet = match client.get(&url).send().await {
+            Ok(r) => SiteProbe {
+                url,
+                status: Some(r.status().as_u16()),
+                error: None,
+            },
+            Err(e) => {
+                let why = if e.is_timeout() {
+                    "no answer within 10 s: a firewall (the server's or the cloud provider's) may block the port".to_string()
+                } else if e.is_connect() {
+                    format!("couldn't connect: the name may not point here yet, or the port is closed ({e})")
+                } else {
+                    e.to_string()
+                };
+                SiteProbe {
+                    url,
+                    status: None,
+                    error: Some(why),
+                }
+            }
+        };
+        Ok(crate::website::SiteTest {
+            config_ok: cfg.ok(),
+            config_output: cfg.combined(),
+            server,
+            internet,
+        })
+    }
+
+    /// Remove a website: its nginx file and enabled links (kept in /var/backups/orbital-nginx;
+    /// put back if nginx -t fails), then optionally its certificate and its folder under /var/www.
+    pub async fn remove_website(&self, sid: &str, file: &str, certificate: Option<&str>, root: Option<&str>) -> Result<String> {
+        use crate::website as w;
+        let s = self.session(sid).await?;
+        const ACTION: &str = "website.remove";
+        let script = w::remove_script(file).map_err(|e| self.refused_as(&s, Category::Config, ACTION, file, e))?;
+        if let Some(r) = root {
+            if !w::removable_root(r) {
+                return Err(self.refused_as(
+                    &s,
+                    Category::Config,
+                    ACTION,
+                    file,
+                    Error::InvalidInput(format!("{r} isn't a site folder under /var/www, so it isn't deleted")),
+                ));
+            }
+        }
+        progress::step(format!("Removing {file} and testing nginx …"));
+        let sent = s.privileged_command(&script);
+        let o = match s.exec_privileged(&script).await {
+            Ok(o) => o,
+            Err(e) => {
+                self.record_error(&s, Category::Config, ACTION, file, Some(sent), &e);
+                return Err(e);
+            }
+        };
+        self.record_exec(&s, Category::Config, ACTION, file, &sent, &o);
+        if !o.ok() {
+            return Err(Error::ValidationFailed {
+                validator: "nginx -t".into(),
+                output: format!("nginx -t failed without this site, so it was put back:\n{}", o.combined().trim()),
+            });
+        }
+        let backup = o.stdout.lines().find_map(|l| l.strip_prefix("@@backup ")).unwrap_or("").to_string();
+        progress::step("Reloading nginx …");
+        let (_reloaded, _) = s.reload_nginx().await?;
+        if let Some(name) = certificate {
+            progress::step(format!("Deleting the certificate {name} …"));
+            self.certbot_delete(sid, name, false).await?;
+        }
+        if let Some(r) = root {
+            progress::step(format!("Deleting {r} …"));
+            let cmd = format!("rm -rf -- {}", crate::shell::quote(r.trim_end_matches('/')));
+            let o = s.exec_privileged(&cmd).await?;
+            self.record_exec(&s, Category::File, "file.delete_recursive", r, &s.privileged_command(&cmd), &o);
+            o.check()?;
+        }
+        Ok(backup)
+    }
+
     pub async fn create_website(&self, sid: &str, input: &WebsiteInput) -> Result<WebsiteReport> {
         let s = self.session(sid).await?;
         const ACTION: &str = "website.create";

@@ -7,6 +7,7 @@ import { JobProgress } from "../components/JobProgress";
 import { useStore } from "../store";
 import { DnsReadiness } from "./CertbotView";
 import { CheckPanel } from "./DomainsView";
+import { SiteTestPanel } from "../components/SiteTest";
 
 const STEPS = ["Domain", "DNS", "Site", "HTTPS"] as const;
 type Step = 0 | 1 | 2 | 3;
@@ -46,6 +47,20 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
   const { toast, openFile, setNewWebsite } = useStore();
   const s = useStore((x) => x.sessions[sid]);
   const close = () => setNewWebsite(null);
+  // The connection can drop while this is open (the Mac slept, the network changed):
+  // reconnect from here and carry on with everything filled in so far.
+  const [reconnecting, setReconnecting] = useState(false);
+  async function reconnectHere() {
+    setReconnecting(true);
+    try {
+      if (await useStore.getState().reconnect(sid)) {
+        setPlanError(null);
+        setCertbotError(null);
+      }
+    } finally {
+      setReconnecting(false);
+    }
+  }
   const [step, setStep] = useState<Step>(0);
   const [done, setDone] = useState<Set<Step>>(new Set());
   const finish = (n: Step) => setDone((d) => new Set(d).add(n));
@@ -150,7 +165,7 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
       api.websitePlan(sid, input).then((p) => { if (alive) { setPlan(p); setPlanError(null); } }, (e) => { if (alive) { setPlan(null); setPlanError(asApiError(e).message); } });
     }, 400);
     return () => { alive = false; clearTimeout(t); };
-  }, [step, inputKey, report]);
+  }, [step, inputKey, report, sid]);
 
   const job = useRunningJob(`website:${sid}`);
   async function createSite() {
@@ -183,7 +198,7 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
   useEffect(() => {
     if (step !== 3 || certbot || !hasCertbot) return;
     api.certbotStatus(sid).then(setCertbot, (e) => setCertbotError(asApiError(e).message));
-  }, [step, hasCertbot]);
+  }, [step, hasCertbot, sid]);
 
   async function issue() {
     setIssuing(true);
@@ -252,6 +267,12 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
         ))}
       </ol>
       {job && <div style={{ marginBottom: 12 }}><JobProgress job={job} /></div>}
+      {s?.lost && (
+        <div className="alert lost-here">
+          <span>The connection to {s.profile.name} was lost (the Mac slept, the network changed or the server restarted). What you filled in is kept.</span>
+          <button className="btn primary" disabled={reconnecting} onClick={reconnectHere}>{reconnecting ? "Reconnecting…" : "Reconnect"}</button>
+        </div>
+      )}
 
       {step === 0 && (
         <div className="form">
@@ -370,6 +391,7 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
               <dt>Reload</dt><dd className={report.reloaded ? "" : "bad-text"}>{report.reloaded ? "done" : report.reloadOutput || "failed"}</dd>
             </dl>
           </div>
+          <SiteTestPanel sid={sid} domain={domain} https={false} />
           <div><button className="btn" onClick={() => { close(); void openFile(sid, report.plan.file); }}><FileText size={13} /> Open in the editor</button></div>
         </div>
       )}
@@ -404,6 +426,7 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
               <span className="faint">Renewed automatically before it expires. It's listed in the HTTPS certificates tab.</span>
             </div>
           )}
+          {done.has(3) && <SiteTestPanel sid={sid} domain={domain} https />}
           {certOut && <pre className={`output ${certOut.exitCode === 0 ? "" : "bad-text"}`}>{(certOut.stdout + certOut.stderr).trim()}</pre>}
         </div>
       )}

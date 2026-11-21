@@ -4,7 +4,17 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
-## 1.4.0 (2026-11-21)
+## 1.4.0 (2026-11-22)
+
+### Added
+- **Test a website** (Nginx tab → a site → **Test**, and by itself after New website creates a site or gets its certificate): nginx's own check (`nginx -t`), a request on the server for that name (is nginx serving it?), and one from this computer over the internet (are DNS and the firewalls right?). A failure says where to look, for example a cloud firewall such as Oracle's security list or Hetzner's firewall.
+- **Delete a website** (Nginx tab → a site → **Delete website…**): removes its nginx file and the links that enable it, then reloads nginx. A copy goes to /var/backups/orbital-nginx, and if `nginx -t` fails without the site everything is put back. Optionally also deletes its HTTPS certificate and its folder under /var/www. You type the domain to confirm, and it says when the same file serves other names too.
+
+### Fixed
+- **"Not connected (session …)" when the connection dropped** (the Mac slept, the network changed or the server restarted). The message now says so in plain words, any screen that finds the connection gone marks the server as disconnected at once, and **Reconnect** keeps your tab, folder, selections and an open New website dialog with everything filled in (which also has its own Reconnect button now).
+
+### Fixed
+- **HTTPS certificate: "points at 46.224.26.21, not this server (46.224.26.21, …)".** The check asks two public resolvers and called the name "not this server" unless both confirmed, so one resolver that was slow or hadn't seen a new record yet made a correct record look wrong. Now a name points here when a resolver sees this server's address and none sees a different one (a lagging resolver is mentioned, not held against it); "not this server" appears only for a different address, and names it. New website goes on as soon as the record points here, while the Domains check keeps waiting until every resolver agrees.
 
 ### Added
 - **Adjust a container for its new server before moving it** (Move to server… → "Adjust for the new server"):

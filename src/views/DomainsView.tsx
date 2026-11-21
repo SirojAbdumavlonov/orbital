@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { confirm, DrawerClose, Modal } from "../components/ui";
 import { api, asApiError, DnsAccount, DnsCheck, DnsRecord, DnsRecordInput, DnsType, DnsZone } from "../lib/api";
 import { isSsh, useStore } from "../store";
+import { readiness } from "../lib/dnsReady";
 
 const TYPES: DnsType[] = ["A", "AAAA", "CNAME", "TXT", "MX"];
 const TYPE_HINT: Record<DnsType, string> = {
@@ -198,7 +199,9 @@ export function CheckPanel({ name, type, expected, keepChecking, note, onResult 
       const c = await api.dnsCheck(name, type, expected);
       setCheck(c);
       setError(null);
-      onResult?.(c.verified);
+      // Enough to go on (New website, certificates): it points here and nothing says otherwise,
+      // even if a resolver hasn't caught up yet. The panel keeps checking until all agree.
+      onResult?.(c.verified || readiness(c).state === "here");
       if (c.verified) setPolling(false);
     } catch (e) {
       setError(asApiError(e).message);
@@ -228,8 +231,10 @@ export function CheckPanel({ name, type, expected, keepChecking, note, onResult 
   const want = expected.length ? expected.join(", ") : "any answer";
   // Every resolver that answered says the name doesn't exist at all.
   const missing = !!check && check.answers.some((a) => !a.error) && check.answers.every((a) => a.error || a.status === "NXDOMAIN");
+  const partly = !!check && !check.verified && expected.length > 0 && readiness(check).state === "here";
   const title = check?.verified
     ? expected.length ? "Live: every resolver answers correctly" : "Resolves: every resolver answers"
+    : partly ? "Points here; not every resolver sees it yet"
     : running && !polling ? "Checking…"
     : polling ? "Waiting for DNS…"
     : error ? "Couldn't check"

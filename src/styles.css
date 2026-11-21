@@ -913,3 +913,10 @@ body.resizing-v { cursor: row-resize; user-select: none; }
 .adjust-row.removed .adjust-key { text-decoration: line-through; color: var(--ink-3); }
 .adjust-add { margin-top: 2px; height: 26px; }
 .adjust-note { margin: 2px 0 0; font-size: 12px; }
+.alert.lost-here { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.alert.lost-here > span { flex: 1; }
+.site-test { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--slate-4); border-radius: var(--radius-m); font-size: 12.5px; }
+.site-test-head { display: flex; align-items: center; }
+.site-test-row { display: flex; gap: 8px; align-items: flex-start; }
+.site-test-row > svg { flex: none; margin-top: 2px; }
+.site-test-row .output { margin: 6px 0 0; max-height: 200px; }

@@ -386,8 +386,168 @@ impl SshSession {
     }
 }
 
+/// One HTTP check of a site.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SiteProbe {
+    pub url: String,
+    /// The HTTP status, when anything answered.
+    pub status: Option<u16>,
+    pub error: Option<String>,
+}
+
+/// "Test the website": nginx's own check, a request made on the server, and one from this computer.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SiteTest {
+    pub config_ok: bool,
+    pub config_output: String,
+    /// From the server itself, to 127.0.0.1 with the site's name: is nginx serving it?
+    pub server: SiteProbe,
+    /// From this computer over the internet: are DNS and the firewall right?
+    pub internet: SiteProbe,
+}
+
+/// A request to the site on the server itself (nginx picks the site by name).
+pub fn local_test_command(domain: &str, https: bool) -> Result<String> {
+    let d = validate_domain(domain)?;
+    let (port, scheme, insecure) = if https { (443, "https", " -k") } else { (80, "http", "") };
+    Ok(format!(
+        "if command -v curl >/dev/null 2>&1; then curl -s -o /dev/null -w '%{{http_code}}' --max-time 10{insecure} --resolve {d}:{port}:127.0.0.1 {scheme}://{d}/ 2>&1; else echo nocurl; fi"
+    ))
+}
+
+pub fn parse_local_test(domain: &str, https: bool, out: &str) -> SiteProbe {
+    let url = format!("{}://{domain}/", if https { "https" } else { "http" });
+    let t = out.trim();
+    match t.parse::<u16>() {
+        Ok(0) | Err(_) if t == "nocurl" => SiteProbe {
+            url,
+            status: None,
+            error: Some("curl isn't installed on the server".into()),
+        },
+        Ok(0) => SiteProbe {
+            url,
+            status: None,
+            error: Some("nothing answered on the server (is nginx running?)".into()),
+        },
+        Ok(code) => SiteProbe {
+            url,
+            status: Some(code),
+            error: None,
+        },
+        Err(_) => SiteProbe {
+            url,
+            status: None,
+            error: Some(if t.is_empty() { "no answer".into() } else { t.to_string() }),
+        },
+    }
+}
+
+/// Only nginx's own site files can be removed.
+pub fn validate_site_file(file: &str) -> Result<&str> {
+    let ok = ["/etc/nginx/sites-available/", "/etc/nginx/sites-enabled/", "/etc/nginx/conf.d/"]
+        .iter()
+        .any(|dir| file.starts_with(dir) && file.len() > dir.len())
+        && !file.contains("..")
+        && !file.contains('\0')
+        && !file.ends_with('/');
+    if ok {
+        Ok(file)
+    } else {
+        Err(Error::InvalidInput(format!(
+            "{file} isn't a site file in /etc/nginx/sites-available, sites-enabled or conf.d"
+        )))
+    }
+}
+
+/// Remove a site file and the links that enable it, keeping a copy in
+/// /var/backups/orbital-nginx; if nginx -t fails afterwards, everything is
+/// put back and the script fails with nginx's message. Prints `@@backup PATH`.
+pub fn remove_script(file: &str) -> Result<String> {
+    let f = quote(validate_site_file(file)?);
+    Ok(format!(
+        r#"set -u
+real=$(readlink -f -- {f}) && [ -e "$real" ] || {{ echo "the site file doesn't exist" >&2; exit 3; }}
+case "$real" in /etc/nginx/sites-available/*|/etc/nginx/sites-enabled/*|/etc/nginx/conf.d/*) ;; *) echo "not a site file: $real" >&2; exit 3;; esac
+b=/var/backups/orbital-nginx; mkdir -p "$b" && chmod 700 "$b"
+bk="$b/$(basename "$real").$(date +%Y%m%d%H%M%S)"
+cp -p -- "$real" "$bk" || exit 4
+links=$(for l in /etc/nginx/sites-enabled/*; do [ -L "$l" ] && [ "$(readlink -f -- "$l")" = "$real" ] && printf '%s
+' "$l"; done)
+printf '%s
+' "$links" | while IFS= read -r l; do [ -n "$l" ] && rm -f -- "$l"; done
+rm -f -- "$real"
+if out=$(nginx -t 2>&1); then echo "@@backup $bk"; exit 0; fi
+cp -p -- "$bk" "$real"
+printf '%s
+' "$links" | while IFS= read -r l; do [ -n "$l" ] && ln -s -- "$real" "$l"; done
+printf '%s
+' "$out" >&2
+exit 5
+"#
+    ))
+}
+
+/// A site's own folder that may be deleted with it: under /var/www, not /var/www itself.
+pub fn removable_root(root: &str) -> bool {
+    let r = root.trim_end_matches('/');
+    r.starts_with("/var/www/") && r.len() > "/var/www/".len() && !r.contains("..") && r.matches('/').count() >= 3
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn site_tests_and_removal_commands() {
+        use super::*;
+        let c = local_test_command("stats.devlab.life", false).unwrap();
+        assert!(
+            c.contains("--resolve stats.devlab.life:80:127.0.0.1 http://stats.devlab.life/"),
+            "{c}"
+        );
+        assert!(local_test_command("stats.devlab.life", true)
+            .unwrap()
+            .contains("-k --resolve stats.devlab.life:443:127.0.0.1 https://"));
+        assert!(local_test_command("bad name; id", false).is_err());
+        assert_eq!(parse_local_test("a.b", false, "200").status, Some(200));
+        assert!(parse_local_test("a.b", false, "000").error.unwrap().contains("nothing answered"));
+        assert!(parse_local_test("a.b", false, "nocurl").error.unwrap().contains("curl"));
+
+        assert!(validate_site_file("/etc/nginx/sites-available/stats.devlab.life").is_ok());
+        assert!(validate_site_file("/etc/nginx/conf.d/stats.conf").is_ok());
+        for bad in [
+            "/etc/nginx/nginx.conf",
+            "/etc/nginx/sites-available/",
+            "/etc/nginx/sites-available/../nginx.conf",
+            "/etc/passwd",
+            "/etc/nginx/conf.d",
+        ] {
+            assert!(validate_site_file(bad).is_err(), "{bad}");
+        }
+        let sh = remove_script("/etc/nginx/sites-available/stats.devlab.life").unwrap();
+        assert!(
+            sh.contains("readlink -f -- /etc/nginx/sites-available/stats.devlab.life")
+                && sh.contains("nginx -t")
+                && sh.contains("@@backup"),
+            "{sh}"
+        );
+        let o = std::process::Command::new("sh").arg("-n").arg("-c").arg(&sh).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        // A file name is only ever single-quoted, never expanded.
+        let evil = remove_script("/etc/nginx/conf.d/$(touch /tmp/x).conf").unwrap();
+        assert!(
+            evil.contains("'/etc/nginx/conf.d/$(touch /tmp/x).conf'") && !evil.contains("\"/etc/nginx/conf.d/$("),
+            "{evil}"
+        );
+        assert!(
+            removable_root("/var/www/stats.devlab.life")
+                && !removable_root("/var/www")
+                && !removable_root("/var/www/")
+                && !removable_root("/srv/app")
+                && !removable_root("/var/www/../etc")
+        );
+    }
+
     use super::*;
     use crate::nginx::NginxSite;
 

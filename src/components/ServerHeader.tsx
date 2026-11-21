@@ -192,7 +192,7 @@ export function useMetricsPoller(s: SessionState, visible: boolean) {
 }
 
 export function ServerHeader({ s }: { s: SessionState }) {
-  const { setTab, order, sessions, active, setActive, disconnect, connect, closeTool, reconnect } = useStore();
+  const { setTab, order, sessions, active, setActive, disconnect, closeTool, reconnect } = useStore();
   const last = s.metrics[s.metrics.length - 1];
   const cpuHist = s.metrics.map((m) => m.cpuPercent ?? 0).slice(-40);
   const memHist = s.metrics.map((m) => (m.memTotal ? (m.memUsed / m.memTotal) * 100 : 0)).slice(-40);
@@ -230,7 +230,7 @@ export function ServerHeader({ s }: { s: SessionState }) {
         {s.lost ? (
           <div className="signal">
             <span className="badge bad">Disconnected</span>
-            <button className="btn primary" onClick={() => { disconnect(s.info.id); connect(s.profile.id); }}>Reconnect</button>
+            <button className="btn primary" onClick={() => void reconnect(s.info.id)}>Reconnect</button>
           </div>
         ) : !isSsh(s) ? (
           <div className="signal">

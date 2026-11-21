@@ -702,8 +702,16 @@ const uptimeRun = (c: MockCheck, up = true, error?: string) => {
   return r;
 };
 
+const connCount: Record<string, number> = {};
+
 export function install() {
   mockIPC(async (cmd, args: any) => {
+    // Demo: `window.__dropConnection("s-p1")` makes that server's connection "lost" until reconnected.
+    const dropped: Set<string> = ((window as any).__dropped ??= new Set());
+    (window as any).__dropConnection ??= (sid: string) => dropped.add(sid);
+    if (args?.sessionId && dropped.has(args.sessionId) && cmd !== "disconnect")
+      throw { kind: "NotConnected", message: "the connection to this server was lost (the Mac slept, the network changed or the server restarted); reconnect and try again", data: null };
+    if (cmd === "connect") for (const sid of [...dropped]) if (sid.startsWith("s-" + args.profileId)) dropped.delete(sid);
     switch (cmd) {
       case "list_profiles": return profiles.map((p) => ({ ...p }));
       case "ssh_config_preview": return args.path ? { ...sshImport(), path: args.path.replace(/^\/Users\/[^/]+/, "~"), candidates: sshImport().candidates.slice(0, 2) } : sshImport();
@@ -722,9 +730,12 @@ export function install() {
           throw { kind: "UnknownHostKey", message: "unknown", data: { host: "staging.example.dev", port: 2222, algorithm: "ssh-ed25519", fingerprint: "SHA256:kq3W0dF7vYV1oR6nZQh2xJmUe8pT5cB4sLaGi9NwEo0" } };
         trusted.add(args.profileId);
         const p = profiles.find((x) => x.id === args.profileId)!;
+        // A new id for each connection, like the real app (the first one stays "s-<profile>").
+        const n = (connCount[p.id] = (connCount[p.id] ?? 0) + 1);
+        const sid = n === 1 ? "s-" + p.id : `s-${p.id}-${n}`;
         if (p.protocol !== "sftp")
-          return { id: "s-" + p.id, profileId: p.id, label: `${p.protocol === "s3" ? "s3" : "https"}://${p.username}@${p.host}`, home: "/", hasSystemd: false, dockerVersion: null, elevation: false, via: [], connectedAt: new Date().toISOString(), protocol: p.protocol };
-        return { protocol: "sftp", id: "s-" + p.id, profileId: p.id, label: `${p.username}@${p.host}`, home: "/home/deploy", hasSystemd: true, dockerVersion: "27.3.1", elevation: true, via: p.jumpProfileId ? ["deploy@203.0.113.10:22"] : [], connectedAt: new Date().toISOString() };
+          return { id: sid, profileId: p.id, label: `${p.protocol === "s3" ? "s3" : "https"}://${p.username}@${p.host}`, home: "/", hasSystemd: false, dockerVersion: null, elevation: false, via: [], connectedAt: new Date().toISOString(), protocol: p.protocol };
+        return { protocol: "sftp", id: sid, profileId: p.id, label: `${p.username}@${p.host}`, home: "/home/deploy", hasSystemd: true, dockerVersion: "27.3.1", elevation: true, via: p.jumpProfileId ? ["deploy@203.0.113.10:22"] : [], connectedAt: new Date().toISOString() };
       }
       case "list_dir": return args.sessionId === "s-p4" ? storageListing(storage, args.path) : args.sessionId === "s-p5" ? storageListing(cloud, args.path) : listing(args.path);
       case "list_tunnels": return tunnels.map((t) => ({ ...t }));
@@ -790,7 +801,7 @@ export function install() {
       case "safe_write": return { path: args.path, bytes: args.content.length, privileged: args.privileged, backupPath: args.path + ".orbital-bak-20261115011500", validator: "nginx", validatorOutput: "syntax is ok", newMtime: now(), suggestedReload: "nginx.service" };
       case "write_file": return now();
       case "metrics": return metric();
-      case "detect_tools": return [...(profiles.find((x) => "s-" + x.id === args.sessionId)?.name === "staging" ? tools.filter((t) => ["sshd", "cron"].includes(t.id)) : tools), ...[...demoInstalled].filter((id) => !tools.some((t) => t.id === id)).map((id) => ({ id, name: id === "certbot" ? "HTTPS certificates" : id[0].toUpperCase() + id.slice(1), category: "Installed", running: true, binary: `/usr/bin/${id}`, unit: `${id}.service`, unitState: "active", paths: [], onHost: true, containers: [] }))];
+      case "detect_tools": return [...(profiles.find((x) => String(args.sessionId).startsWith("s-" + x.id))?.name === "staging" ? tools.filter((t) => ["sshd", "cron"].includes(t.id)) : tools), ...[...demoInstalled].filter((id) => !tools.some((t) => t.id === id)).map((id) => ({ id, name: id === "certbot" ? "HTTPS certificates" : id[0].toUpperCase() + id.slice(1), category: "Installed", running: true, binary: `/usr/bin/${id}`, unit: `${id}.service`, unitState: "active", paths: [], onHost: true, containers: [] }))];
       case "nginx_config": return structuredClone(nginxConfig);
       case "website_plan": await new Promise((r) => setTimeout(r, 250)); return websitePlan(structuredClone(args.input));
       case "create_website":
@@ -1164,6 +1175,17 @@ export function install() {
       case "plugin:event|listen": return 1;
       case "save_text": return null;
       case "docker_version": return "27.3.1";
+      case "website_test": {
+        await new Promise((r) => setTimeout(r, 700));
+        const url = `${args.https ? "https" : "http"}://${args.domain}/`;
+        const outside = /stats|new/.test(args.domain) ? { url, status: null, error: "no answer within 10 s: a firewall (the server's or the cloud provider's) may block the port" } : { url, status: args.https ? 200 : 301, error: null };
+        return { configOk: true, configOutput: "nginx: the configuration file /etc/nginx/nginx.conf syntax is ok\nnginx: configuration file /etc/nginx/nginx.conf test is successful", server: { url, status: args.https ? 200 : 301, error: null }, internet: outside };
+      }
+      case "remove_website": {
+        await progress(args.progress, [[0, "step", `Removing ${args.file} and testing nginx …`], [600, "step", "Reloading nginx …"], ...(args.certificate ? [[500, "step", `Deleting the certificate ${args.certificate} …`]] as [number, "step", string][] : []), ...(args.root ? [[400, "step", `Deleting ${args.root} …`]] as [number, "step", string][] : [])]);
+        nginxConfig.sites = nginxConfig.sites.filter((x: any) => x.file !== args.file);
+        return `/var/backups/orbital-nginx/${args.file.split("/").pop()}.20261122101500`;
+      }
       case "install_options": return [
         { id: "docker", name: "Docker", category: "Containers", hint: "Run apps in containers; manage them, their logs and Compose files here", apt: ["docker.io"], dnf: ["moby-engine"] },
         { id: "nginx", name: "nginx", category: "Web server", hint: "Web server and reverse proxy; then New website and HTTPS in two clicks", apt: ["nginx"], dnf: ["nginx"] },

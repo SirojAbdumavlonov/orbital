@@ -7,6 +7,7 @@ import { JobProgress } from "../components/JobProgress";
 import { useRemote, withSafetyOverride } from "../lib/remote";
 import { SessionState, useStore } from "../store";
 import { useKept } from "../lib/kept";
+import { readiness } from "../lib/dnsReady";
 
 function DaysLeft({ c }: { c: Certificate }) {
   if (c.daysLeft == null) return <span className="faint">—</span>;
@@ -44,9 +45,10 @@ export function DnsReadiness({ sid, names }: { sid: string; names: string[] }) {
     return () => clearTimeout(t);
   }, [sid, key]);
   if (!key) return null;
-  const bad = res?.checks.filter((c) => !c.verified) ?? [];
+  const verdicts = res?.checks.map((c) => ({ c, r: readiness(c) })) ?? [];
+  const bad = verdicts.filter((v) => v.r.state !== "here").map((v) => v.c);
   return (
-    <div className={`notice dns-ready ${res && bad.length === 0 && res.checks.length > 0 ? "ok" : ""}`} style={{ margin: 0 }}>
+    <div className={`notice dns-ready ${res && bad.length === 0 && verdicts.length > 0 ? "ok" : ""}`} style={{ margin: 0 }}>
       <div className="dns-ready-head">
         <b>Do the names point at this server?</b>
         <span className="spacer" />
@@ -56,16 +58,18 @@ export function DnsReadiness({ sid, names }: { sid: string; names: string[] }) {
       {res && res.addresses.length === 0 && (
         <div className="faint">Orbital couldn't find a public address on this server (it may sit behind a NAT or load balancer), so it can't tell. Check the names on the Domains page.</div>
       )}
-      {res && res.checks.map((c) => {
-        const seen = [...new Set(c.answers.flatMap((a) => a.values))];
-        return (
-          <div key={c.name} className="dns-ready-row">
-            {c.verified ? <CheckCircle2 size={13} className="ok-text" /> : seen.length ? <XCircle size={13} className="bad-text" /> : <CircleDashed size={13} className="faint" />}
-            <span className="mono">{c.name}</span>
-            <span className="faint">{c.verified ? `→ ${c.expected.filter((e) => seen.includes(e)).join(", ")}` : seen.length ? `points at ${seen.join(", ")}, not this server (${res.addresses.join(", ")})` : `no ${c.type} record yet`}</span>
-          </div>
-        );
-      })}
+      {verdicts.map(({ c, r }) => (
+        <div key={c.name} className="dns-ready-row">
+          {r.state === "here" ? <CheckCircle2 size={13} className="ok-text" /> : r.state === "elsewhere" ? <XCircle size={13} className="bad-text" /> : <CircleDashed size={13} className="faint" />}
+          <span className="mono">{c.name}</span>
+          <span className="faint">
+            {r.state === "here" && `→ ${c.expected.join(", ")}${r.lagging.length ? ` (not yet visible at ${r.lagging.join(", ")}; new records take a few minutes to spread)` : ""}`}
+            {r.state === "elsewhere" && `points at ${r.others.join(", ")}, not this server (${res!.addresses.join(", ")})`}
+            {r.state === "none" && `no ${c.type} record yet, or it hasn't spread yet`}
+            {r.state === "unknown" && `couldn't check: ${r.error}`}
+          </span>
+        </div>
+      ))}
       {res && bad.length > 0 && (
         <div className="dns-ready-foot">
           <span className="faint">Let's Encrypt will refuse these until they point at {bad[0].expected.join(" or ")}.</span>

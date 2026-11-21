@@ -319,6 +319,8 @@ pub fn run() {
             commands::net_check,
             commands::move_preview,
             commands::install_options,
+            commands::website_test,
+            commands::remove_website,
             commands::docker_version,
             commands::install_software,
             commands::move_container,
