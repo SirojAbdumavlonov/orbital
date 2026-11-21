@@ -36,8 +36,13 @@ jobs:
           sleep 2
           sudo fail2ban-client status
           # Some runner images start Apache on port 80; the nginx tests need it.
-          sudo systemctl disable --now apache2 2>/dev/null || true
+          # Stop and mask it (so nothing starts it again), then make sure nginx answers there.
+          sudo systemctl stop apache2 2>/dev/null || true
+          sudo systemctl mask apache2 2>/dev/null || true
+          sudo pkill -x apache2 2>/dev/null || true
           sudo systemctl restart nginx
+          sleep 1
+          curl -sI http://127.0.0.1/ | grep -qi '^server: nginx' || { echo "nginx isn't on port 80:"; sudo ss -ltnp | grep ':80 '; exit 1; }
           echo 'export ORBITAL_IT_UFW=1 ORBITAL_IT_FAIL2BAN=1 ORBITAL_IT_USERS=1 ORBITAL_IT_NGINX=1' >> /tmp/it-env
       - name: Clippy
         run: cargo clippy -p orbital-core --all-targets -- -D warnings
