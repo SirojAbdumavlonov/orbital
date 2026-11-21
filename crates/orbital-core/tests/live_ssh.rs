@@ -313,8 +313,9 @@ async fn full_workflow_password_auth() {
     let ls = engine
         .run_command(
             &sid,
+            // As root: the file is now 640 root:root, so the login user can't read it.
             &format!("stat -c '%U %a' {rootdir}/sub/renamed.txt; cat {rootdir}/sub/renamed.txt; ls /tmp | grep -c orbital-upload || true"),
-            false,
+            true,
         )
         .await
         .unwrap();
