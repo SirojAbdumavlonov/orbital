@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.4.0 (2026-11-21)
+
 ### Added
 - **Adjust a container for its new server before moving it** (Move to server… → "Adjust for the new server"):
   - **ports**: publish each one on every address (public) or on this server only, on any port number, or not at all; public ports come with a reminder about the cloud firewall (for example Oracle Cloud's security list);
