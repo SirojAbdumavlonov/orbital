@@ -249,7 +249,7 @@ async fn full_workflow_password_auth() {
         .run_command(
             &sid,
             &format!(
-                "rm -rf {rootdir}; mkdir -p {rootdir}/locked && chmod 700 {rootdir}/locked && echo secret > {rootdir}/locked/inside.txt"
+                "rm -rf {rootdir}; mkdir -p {rootdir}/locked && echo secret > {rootdir}/locked/inside.txt && chown -R root:root {rootdir} && chmod 755 {rootdir} && chmod 700 {rootdir}/locked && chmod 644 {rootdir}/locked/inside.txt"
             ),
             true,
         )
@@ -257,6 +257,10 @@ async fn full_workflow_password_auth() {
         .unwrap()
         .check()
         .unwrap();
+    assert!(
+        !engine.run_command(&sid, &format!("test -w {rootdir}"), false).await.unwrap().ok(),
+        "the login user must not be able to write in {rootdir} for this test"
+    );
     engine.create_file(&sid, &format!("{rootdir}/new.txt")).await.unwrap();
     assert!(
         engine.create_file(&sid, &format!("{rootdir}/new.txt")).await.is_err(),
@@ -1618,8 +1622,13 @@ async fn new_website_server_block_is_written_validated_and_rolled_back() {
         .find(|x| x.server_names.contains(&domain))
         .expect("new site in nginx -T");
     assert_eq!(site.root.as_deref(), Some(root.as_str()));
+    // nginx applies a reload in the background: give it a few seconds to serve the new site.
     let page = engine
-        .run_command(&s.id, &format!("curl -s -H 'Host: {domain}' http://127.0.0.1/"), false)
+        .run_command(
+            &s.id,
+            &format!("for i in 1 2 3 4 5 6 7 8 9 10; do o=$(curl -s -H 'Host: {domain}' http://127.0.0.1/); case \"$o\" in *'is served by nginx'*) break;; esac; sleep 0.5; done; printf '%s' \"$o\""),
+            false,
+        )
         .await
         .unwrap();
     assert!(page.stdout.contains(&format!("{domain} is served by nginx")), "{page:?}");
