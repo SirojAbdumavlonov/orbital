@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.3.6 (2026-11-21)
+
 ### Fixed
 - **AI agent: "Problem: telegram: The read operation timed out" filled the activity list.** The agent waits for new Telegram messages over one long request; now and then the network between the server and Telegram stalls, that request gets no answer, and the next one works, so nothing was lost. Now:
   - a stall is silent; only Telegram being unreachable for 5 minutes or more is shown, once, in plain words ("Telegram didn't answer in time", "this server couldn't look up api.telegram.org", …), with a line when it's back;
