@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.3.8 (2026-11-21)
+
 ### Fixed
 - **Port forwarding that couldn't work said nothing.** The tunnel opened ("Portainer is on your computer at localhost:9000"), then the browser just failed when the server refused each connection. Orbital now tries the route once when you open a tunnel and says why it can't work: nothing listens on that port on the server, or the server's SSH settings don't allow forwarding (`AllowTcpForwarding no`). A tunnel that stops working later shows the reason in the Port forwarding tab.
 
