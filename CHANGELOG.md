@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.3.3 (2026-11-21)
+
 ### Added
 - **Anonymous usage statistics, only if you agree.** Orbital asks once whether it may send: the app version, your OS, how long it's open, and how many servers are connected and saved (numbers only), with a random install id. Never server names, addresses, user names, files, commands or anything typed. Change it any time in Settings → Privacy.
 
