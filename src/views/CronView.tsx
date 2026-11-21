@@ -5,6 +5,7 @@ import { api, asApiError, CronJob, CronPreview, CronReport, ExecOutput } from ".
 import { useRemote } from "../lib/remote";
 import { SessionState, useStore } from "../store";
 import { WithServicePane } from "./DatabaseView";
+import { useKept } from "../lib/kept";
 
 /** "in 3 h", "in 12 min", "tomorrow 03:00" — relative to the server's clock. */
 function when(iso: string | null | undefined, nowIso: string | null): string {
@@ -115,9 +116,9 @@ export function CronView({ s }: { s: SessionState }) {
   const { toast, openFile, showFolder } = useStore();
   const sid = s.info.id;
   const { data: r, setData, error, loading, reload } = useRemote(() => api.cronReport(sid), [sid]);
-  const [filter, setFilter] = useState<"all" | "user" | "system">("all");
-  const [q, setQ] = useState("");
-  const [sel, setSel] = useState<string | null>(null);
+  const [filter, setFilter] = useKept<"all" | "user" | "system">(`${s.info.id}:cron:filter`, "all");
+  const [q, setQ] = useKept(`${s.info.id}:cron:q`, "");
+  const [sel, setSel] = useKept<string | null>(`${s.info.id}:cron:sel`, null);
   const [editing, setEditing] = useState<CronJob | "new" | null>(null);
   const [out, setOut] = useState<{ title: string; o: ExecOutput } | null>(null);
   const [busy, setBusy] = useState(false);

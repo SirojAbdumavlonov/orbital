@@ -7,6 +7,7 @@ import { JobProgress } from "../components/JobProgress";
 import { rangeSeconds, useLogPane } from "../components/LogPane";
 import { bytes } from "../lib/format";
 import { SessionState, useStore } from "../store";
+import { useKept } from "../lib/kept";
 
 type Filter = "all" | "running" | "failed" | "stopped";
 
@@ -15,9 +16,9 @@ export function ServicesView({ s }: { s: SessionState }) {
   const sid = s.info.id;
   const [list, setList] = useState<Service[]>([]);
   const [loading, setLoading] = useState(false);
-  const [q, setQ] = useState("");
-  const [filter, setFilter] = useState<Filter>("running");
-  const [sel, setSel] = useState<string | null>(null);
+  const [q, setQ] = useKept(`${s.info.id}:services:q`, "");
+  const [filter, setFilter] = useKept<Filter>(`${s.info.id}:services:filter`, "running");
+  const [sel, setSel] = useKept<string | null>(`${s.info.id}:services:sel`, null);
   const [detail, setDetail] = useState<ServiceDetail | null>(null);
   const [busy, setBusy] = useState<ServiceAction | null>(null);
   const job = useRunningJob(`service:${sid}`);

@@ -2349,13 +2349,28 @@ impl Engine {
     }
 
     /// What moving a container to `to` would do, and what on `to` is in the way. Read-only.
-    pub async fn move_preview(&self, sid: &str, id: &str, to: &str) -> Result<crate::migrate::MovePreview> {
+    pub async fn move_preview(
+        &self,
+        sid: &str,
+        id: &str,
+        to: &str,
+        options: &crate::migrate::MoveOptions,
+    ) -> Result<crate::migrate::MovePreview> {
         use crate::migrate;
         if sid == to {
             return Err(Error::InvalidInput("pick another server".into()));
         }
         let (src, dst) = (self.session(sid).await?, self.session(to).await?);
-        let plan = migrate::plan(&migrate::inspect_for_move(&src, id).await?)?;
+        let mut plan = migrate::plan(&migrate::inspect_for_move(&src, id).await?)?;
+        // The original ports, before the dialog's changes, are what nginx here points at.
+        let original_ports = plan.host_ports.clone();
+        plan.apply(options)?;
+        if !original_ports.is_empty() {
+            if let Ok(cfg) = src.nginx_config().await {
+                plan.hints
+                    .extend(migrate::nginx_hints(&cfg, &original_ports, &src.label(), &dst.label()));
+            }
+        }
         let (o, _) = dst.exec_inspect(&migrate::preflight_script(&plan)).await?;
         Ok(migrate::MovePreview {
             clashes: migrate::parse_preflight(&o.stdout),
@@ -2375,11 +2390,12 @@ impl Engine {
         to: &str,
         mode: crate::migrate::MoveMode,
         force: bool,
+        options: &crate::migrate::MoveOptions,
     ) -> Result<crate::migrate::MovePlan> {
         use crate::migrate::{self, MoveMode};
         use crate::shell::quote;
         let t = Instant::now();
-        let preview = self.move_preview(sid, id, to).await?;
+        let preview = self.move_preview(sid, id, to, options).await?;
         let (src, dst) = (self.session(sid).await?, self.session(to).await?);
         let p = preview.plan;
         let c = preview.clashes;

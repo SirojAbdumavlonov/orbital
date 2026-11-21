@@ -56,8 +56,199 @@ pub struct MovePlan {
     pub network: Option<String>,
     /// Things worth knowing before moving.
     pub notes: Vec<String>,
+    /// Published ports, editable before moving.
+    pub ports: Vec<PortMap>,
+    /// Arguments after the image (the entry point's own plus the command), editable.
+    pub args: Vec<String>,
+    /// Environment, editable; values that look like secrets are left out (`value: None`).
+    pub env_vars: Vec<EnvVar>,
+    /// Settings that may tie it to the old server (domains in arguments or variables).
+    pub hints: Vec<String>,
     #[serde(skip)]
-    env: Vec<String>,
+    env: Vec<(String, String)>,
+    #[serde(skip)]
+    options: Vec<String>,
+    #[serde(skip)]
+    entrypoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PortMap {
+    /// "" or "0.0.0.0": every address; "127.0.0.1": this server only.
+    pub host_ip: String,
+    /// None: Docker picks a free port.
+    pub host_port: Option<u16>,
+    /// e.g. "9000/tcp".
+    pub container: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvVar {
+    pub key: String,
+    /// None when the name looks like a secret (password, token, key): not shown, kept unless changed.
+    pub value: Option<String>,
+    pub secret: bool,
+}
+
+/// Changes made in the Move dialog.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveOptions {
+    pub ports: Option<Vec<PortMap>>,
+    pub args: Option<Vec<String>>,
+    /// New or changed variables.
+    #[serde(default)]
+    pub env_set: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub env_remove: Vec<String>,
+}
+
+fn looks_secret(key: &str) -> bool {
+    let k = key.to_ascii_uppercase();
+    [
+        "PASSWORD",
+        "PASSWD",
+        "PASS",
+        "SECRET",
+        "TOKEN",
+        "KEY",
+        "PRIVATE",
+        "CREDENTIAL",
+        "AUTH",
+        "SALT",
+    ]
+    .iter()
+    .any(|w| k.contains(w))
+}
+
+static ENV_KEY: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$").unwrap());
+static CPORT: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"^\d{1,5}(/(tcp|udp|sctp))?$").unwrap());
+static DOMAIN: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"(?i)\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})\b").unwrap());
+
+/// Domain names mentioned in a value (file names like grafana.ini aren't domains).
+pub fn domains_in(v: &str) -> Vec<String> {
+    const FILES: &[&str] = &[
+        "ini", "conf", "json", "yml", "yaml", "toml", "sh", "py", "js", "log", "txt", "xml", "env", "pem", "crt", "key", "db", "sock",
+        "html", "php", "so", "jar",
+    ];
+    DOMAIN
+        .captures_iter(v)
+        .filter_map(|c| {
+            let m = c.get(1)?;
+            let d = m.as_str().to_ascii_lowercase();
+            let tld = d.rsplit('.').next().unwrap_or("");
+            // Part of a file path (…/grafana.ini), but not a URL's host (https://…).
+            let before = &v[..m.start()];
+            let after_slash = before.ends_with('/') && !before.ends_with("//");
+            (!FILES.contains(&tld) && !after_slash && !d.ends_with(".local") && d != "localhost").then_some(d)
+        })
+        .collect()
+}
+
+impl MovePlan {
+    /// Rebuild the `docker run` arguments and the derived lists from the editable parts.
+    fn rebuild(&mut self) {
+        let mut a = self.options.clone();
+        let mut ports = Vec::new();
+        for p in &self.ports {
+            a.push("-p".into());
+            let ip = p.host_ip.trim();
+            a.push(match (ip, p.host_port) {
+                ("" | "0.0.0.0" | "::", None) => p.container.clone(),
+                ("" | "0.0.0.0" | "::", Some(hp)) => format!("{hp}:{}", p.container),
+                (ip, None) => format!("{ip}::{}", p.container),
+                (ip, Some(hp)) => format!("{ip}:{hp}:{}", p.container),
+            });
+            if let Some(hp) = p.host_port {
+                if !ports.contains(&hp) {
+                    ports.push(hp);
+                }
+            }
+        }
+        if let Some(e) = &self.entrypoint {
+            a.push("--entrypoint".into());
+            a.push(e.clone());
+        }
+        a.push(self.image.clone());
+        a.extend(self.args.iter().cloned());
+        self.run_args = a;
+        self.host_ports = ports;
+        self.env_count = self.env.len();
+        self.env_vars = self
+            .env
+            .iter()
+            .map(|(k, v)| EnvVar {
+                key: k.clone(),
+                value: (!looks_secret(k)).then(|| v.clone()),
+                secret: looks_secret(k),
+            })
+            .collect();
+        let mut hints = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for (what, text) in self.args.iter().map(|a| ("an argument".to_string(), a.clone())).chain(
+            self.env
+                .iter()
+                .filter(|(k, _)| !looks_secret(k))
+                .map(|(k, v)| (format!("variable {k}"), v.clone())),
+        ) {
+            for d in domains_in(&text) {
+                if seen.insert(d.clone()) {
+                    hints.push(format!("{what} mentions {d}: if that name points to the old server, change it here or update its DNS and web server after moving."));
+                }
+            }
+        }
+        self.hints = hints;
+    }
+
+    /// Apply the dialog's changes, checking each one.
+    pub fn apply(&mut self, o: &MoveOptions) -> Result<()> {
+        if let Some(ports) = &o.ports {
+            for p in ports {
+                let ip = p.host_ip.trim();
+                if !ip.is_empty() && ip.parse::<std::net::IpAddr>().is_err() {
+                    return Err(Error::InvalidInput(format!("{ip:?} isn't an IP address")));
+                }
+                if !CPORT.is_match(&p.container) {
+                    return Err(Error::InvalidInput(format!(
+                        "{:?} isn't a container port like 9000/tcp",
+                        p.container
+                    )));
+                }
+                if p.host_port == Some(0) {
+                    return Err(Error::InvalidInput("port 0 can't be published".into()));
+                }
+            }
+            self.ports = ports.clone();
+        }
+        if let Some(args) = &o.args {
+            if args.iter().any(|a| a.contains('\0') || a.contains('\n')) {
+                return Err(Error::InvalidInput("an argument can't contain a line break".into()));
+            }
+            self.args = args.clone();
+        }
+        for k in &o.env_remove {
+            self.env.retain(|(key, _)| key != k);
+        }
+        for (k, v) in &o.env_set {
+            if !ENV_KEY.is_match(k) {
+                return Err(Error::InvalidInput(format!("{k:?} isn't a variable name")));
+            }
+            if v.contains('\n') || v.contains('\0') {
+                return Err(Error::InvalidInput(format!("variable {k} can't have several lines")));
+            }
+            match self.env.iter_mut().find(|(key, _)| key == k) {
+                Some(e) => e.1 = v.clone(),
+                None => self.env.push((k.clone(), v.clone())),
+            }
+        }
+        self.rebuild();
+        Ok(())
+    }
 }
 
 /// Mounts that belong to the host, not the container: used as they are on the target, never copied.
@@ -113,7 +304,7 @@ pub fn plan(inspect: &Value) -> Result<MovePlan> {
     }
 
     // Published ports: "3000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "3000"}]
-    let mut host_ports = Vec::new();
+    let mut ports = Vec::new();
     if let Some(pb) = s(hc, &["PortBindings"]).as_object() {
         let mut keys: Vec<&String> = pb.keys().collect();
         keys.sort();
@@ -121,16 +312,14 @@ pub fn plan(inspect: &Value) -> Result<MovePlan> {
             for b in pb[cport].as_array().into_iter().flatten() {
                 let ip = b.get("HostIp").and_then(Value::as_str).unwrap_or("");
                 let hp = b.get("HostPort").and_then(Value::as_str).unwrap_or("");
-                if let Ok(p) = hp.parse::<u16>() {
-                    if !host_ports.contains(&p) {
-                        host_ports.push(p);
-                    }
-                }
-                a.push("-p".into());
-                a.push(match (ip, hp) {
-                    ("" | "0.0.0.0" | "::", "") => cport.clone(),
-                    ("" | "0.0.0.0" | "::", hp) => format!("{hp}:{cport}"),
-                    (ip, hp) => format!("{ip}:{hp}:{cport}"),
+                ports.push(PortMap {
+                    host_ip: if ip == "0.0.0.0" || ip == "::" {
+                        String::new()
+                    } else {
+                        ip.to_string()
+                    },
+                    host_port: hp.parse().ok().filter(|p| *p > 0),
+                    container: cport.clone(),
                 });
             }
         }
@@ -267,47 +456,49 @@ pub fn plan(inspect: &Value) -> Result<MovePlan> {
     // Environment: passed through an env file (multi-line values can't be).
     let mut env = Vec::new();
     for e in strs(s(cfg, &["Env"])) {
-        if e.contains('\n') {
-            let k = e.split('=').next().unwrap_or("");
+        let (k, v) = e.split_once('=').unwrap_or((e.as_str(), ""));
+        if v.contains('\n') {
             notes.push(format!(
                 "Variable {k} has several lines and isn't copied; set it on the target yourself."
             ));
         } else {
-            env.push(e);
+            env.push((k.to_string(), v.to_string()));
         }
     }
 
     // Entry point and command, as the container has them.
     let ep = strs(s(cfg, &["Entrypoint"]));
-    let cmd = strs(s(cfg, &["Cmd"]));
-    if let Some(first) = ep.first() {
-        a.push("--entrypoint".into());
-        a.push(first.clone());
-    }
-    a.push(image.clone());
-    a.extend(ep.iter().skip(1).cloned());
-    a.extend(cmd);
+    let mut args: Vec<String> = ep.iter().skip(1).cloned().collect();
+    args.extend(strs(s(cfg, &["Cmd"])));
 
     let repo_digest = strs(s(inspect, &["ImageRepoDigests"])).into_iter().next();
-    Ok(MovePlan {
+    let mut p = MovePlan {
         name,
         image,
         image_id,
         repo_digest,
         running,
-        run_args: a,
-        env_count: env.len(),
-        host_ports,
+        run_args: Vec::new(),
+        env_count: 0,
+        host_ports: Vec::new(),
         copies,
         network,
         notes,
+        ports,
+        args,
+        env_vars: Vec::new(),
+        hints: Vec::new(),
         env,
-    })
+        options: a,
+        entrypoint: ep.first().cloned(),
+    };
+    p.rebuild();
+    Ok(p)
 }
 
 /// The env file's content (sent on stdin, never logged).
 pub fn env_file(p: &MovePlan) -> String {
-    p.env.iter().map(|e| format!("{e}\n")).collect()
+    p.env.iter().map(|(k, v)| format!("{k}={v}\n")).collect()
 }
 
 /// `docker run -d …` reading the env file from stdin into a private temp file.
@@ -411,6 +602,34 @@ pub struct MovePreview {
     pub clashes: Clashes,
     /// The target's name for messages.
     pub target: String,
+}
+
+/// nginx sites on the source that send traffic to one of these host ports.
+pub fn nginx_hints(cfg: &crate::nginx::NginxConfig, ports: &[u16], source: &str, target: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for site in &cfg.sites {
+        for loc in &site.locations {
+            let Some(pp) = &loc.proxy_pass else { continue };
+            let hit = ports.iter().find(|p| {
+                ["127.0.0.1", "localhost", "0.0.0.0", "[::1]"]
+                    .iter()
+                    .any(|h| pp.contains(&format!("{h}:{p}")))
+            });
+            if let Some(port) = hit {
+                let names = if site.server_names.is_empty() {
+                    "a catch-all site".to_string()
+                } else {
+                    site.server_names.join(", ")
+                };
+                out.push(format!(
+                    "nginx on {source} sends {names} to port {port} ({}). That site, its certificate and the DNS record stay with {source}: on {target} use Nginx → New website and point the DNS there, or reach it another way.",
+                    site.file
+                ));
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// Whether `docker` needs sudo on this server: the login user can't talk to
@@ -590,6 +809,128 @@ mod tests {
         assert_eq!(p.copies.len(), 2, "localtime is the host's, not copied");
         assert_eq!(p.network.as_deref(), Some("observability_default"));
         assert!(p.notes.iter().any(|n| n.contains("Compose project observability")));
+    }
+
+    #[test]
+    fn ports_args_and_env_can_be_adjusted() {
+        let mut v = grafana();
+        v["Config"]["Cmd"] = serde_json::json!(["--trusted-origins", "portainer.sayyah.uz"]);
+        v["Config"]["Env"] = serde_json::json!([
+            "GF_SECURITY_ADMIN_PASSWORD=s3cret",
+            "GF_SERVER_ROOT_URL=https://grafana.example.com/",
+            "PATH=/usr/bin"
+        ]);
+        let mut p = plan(&v).unwrap();
+        // What the dialog shows: ports, arguments, variables (secrets hidden), and domain hints.
+        assert_eq!(
+            p.ports[0],
+            PortMap {
+                host_ip: "127.0.0.1".into(),
+                host_port: Some(3000),
+                container: "3000/tcp".into()
+            }
+        );
+        assert_eq!(p.args, ["--trusted-origins", "portainer.sayyah.uz"]);
+        let pw = p.env_vars.iter().find(|e| e.key == "GF_SECURITY_ADMIN_PASSWORD").unwrap();
+        assert!(pw.secret && pw.value.is_none());
+        assert_eq!(
+            p.env_vars.iter().find(|e| e.key == "PATH").unwrap().value.as_deref(),
+            Some("/usr/bin")
+        );
+        assert_eq!(p.hints.len(), 2, "{:?}", p.hints);
+        assert!(p.hints[0].contains("portainer.sayyah.uz") && p.hints[1].contains("grafana.example.com"));
+
+        // Public on 9000, no domain argument, root URL changed, one variable dropped.
+        p.apply(&MoveOptions {
+            ports: Some(vec![PortMap {
+                host_ip: "".into(),
+                host_port: Some(9000),
+                container: "3000/tcp".into(),
+            }]),
+            args: Some(vec![]),
+            env_set: [("GF_SERVER_ROOT_URL".to_string(), "http://203.0.113.5:9000/".to_string())]
+                .into_iter()
+                .collect(),
+            env_remove: vec!["PATH".into()],
+        })
+        .unwrap();
+        let a = p.run_args.join(" ");
+        assert!(
+            a.contains("-p 9000:3000/tcp") && !a.contains("127.0.0.1") && a.ends_with("grafana/grafana:11.3.0"),
+            "{a}"
+        );
+        assert_eq!(p.host_ports, [9000]);
+        assert_eq!(
+            env_file(&p),
+            "GF_SECURITY_ADMIN_PASSWORD=s3cret\nGF_SERVER_ROOT_URL=http://203.0.113.5:9000/\n"
+        );
+        assert!(p.hints.is_empty(), "{:?}", p.hints);
+        // The secret is kept unless it's set again, and never ends up on the command line.
+        assert!(!run_command(&p).contains("s3cret"));
+
+        // Bad edits are refused.
+        for bad in [
+            MoveOptions {
+                ports: Some(vec![PortMap {
+                    host_ip: "everyone".into(),
+                    host_port: Some(1),
+                    container: "80/tcp".into(),
+                }]),
+                ..Default::default()
+            },
+            MoveOptions {
+                ports: Some(vec![PortMap {
+                    host_ip: "".into(),
+                    host_port: Some(1),
+                    container: "80; rm".into(),
+                }]),
+                ..Default::default()
+            },
+            MoveOptions {
+                ports: Some(vec![PortMap {
+                    host_ip: "".into(),
+                    host_port: Some(0),
+                    container: "80".into(),
+                }]),
+                ..Default::default()
+            },
+            MoveOptions {
+                args: Some(vec!["a\nb".into()]),
+                ..Default::default()
+            },
+            MoveOptions {
+                env_set: [("BAD-NAME".to_string(), "x".to_string())].into_iter().collect(),
+                ..Default::default()
+            },
+            MoveOptions {
+                env_set: [("OK".to_string(), "two\nlines".to_string())].into_iter().collect(),
+                ..Default::default()
+            },
+        ] {
+            assert!(plan(&grafana()).unwrap().apply(&bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn nginx_sites_pointing_at_the_container_are_named() {
+        let dump = "nginx: the configuration file /etc/nginx/nginx.conf syntax is ok\n# configuration file /etc/nginx/sites-enabled/portainer:\nserver {\n    listen 443 ssl;\n    server_name portainer.sayyah.uz;\n    location / {\n        proxy_pass http://127.0.0.1:9000;\n    }\n}\nserver {\n    server_name other.example.com;\n    location / { proxy_pass http://127.0.0.1:3000; }\n}\n";
+        let cfg = crate::nginx::parse_dump(dump, true);
+        let h = nginx_hints(&cfg, &[9000], "old", "new");
+        assert_eq!(h.len(), 1, "{h:?}");
+        assert!(
+            h[0].contains("portainer.sayyah.uz") && h[0].contains("port 9000") && h[0].contains("on new use Nginx"),
+            "{h:?}"
+        );
+        assert!(nginx_hints(&cfg, &[8080], "old", "new").is_empty());
+    }
+
+    #[test]
+    fn domains_but_not_file_names() {
+        assert_eq!(domains_in("--trusted-origins portainer.sayyah.uz"), ["portainer.sayyah.uz"]);
+        assert_eq!(domains_in("https://grafana.example.com/"), ["grafana.example.com"]);
+        assert!(domains_in("/etc/grafana/grafana.ini").is_empty());
+        assert!(domains_in("config.yml settings.json localhost").is_empty());
+        assert!(domains_in("/usr/bin:/bin").is_empty());
     }
 
     #[test]

@@ -7,6 +7,7 @@ import { relativeTime } from "../lib/format";
 import { runJob, useRunningJob } from "../lib/jobs";
 import { useRemote } from "../lib/remote";
 import { SessionState, useStore } from "../store";
+import { useKept } from "../lib/kept";
 
 /** System updates: what can be upgraded (security first), install them, reboot when needed. */
 export function UpdatesView({ s }: { s: SessionState }) {
@@ -14,7 +15,7 @@ export function UpdatesView({ s }: { s: SessionState }) {
   const { data: r, error, loading, reload } = useRemote(() => api.updates(sid), [sid]);
   const job = useRunningJob(`updates:${sid}`);
   const [out, setOut] = useState<{ title: string; o: ExecOutput } | null>(null);
-  const [q, setQ] = useState("");
+  const [q, setQ] = useKept(`${s.info.id}:updates:q`, "");
   const security = r?.packages.filter((p) => p.security).length ?? 0;
   const shown = useMemo(() => (r?.packages ?? []).filter((p) => !q || p.name.includes(q.toLowerCase())), [r, q]);
 

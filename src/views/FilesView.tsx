@@ -15,6 +15,7 @@ import { languageFor } from "../lib/language";
 import "../lib/monaco";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { isSsh, OpenFile, SessionState, useStore } from "../store";
+import { useKept } from "../lib/kept";
 
 export function FilesView({ s }: { s: SessionState }) {
   return (
@@ -33,9 +34,9 @@ function Browser({ s }: { s: SessionState }) {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sel, setSel] = useState<string | null>(null);
+  const [sel, setSel] = useKept<string | null>(`${s.info.id}:files:sel`, null);
   const [showHidden, setShowHidden] = useState(false);
-  const [filter, setFilter] = useState("");
+  const [filter, setFilter] = useKept(`${s.info.id}:files:filter`, "");
   const [rename, setRename] = useState<FileEntry | null>(null);
   const [chmodOf, setChmodOf] = useState<FileEntry | null>(null);
   const [newItem, setNewItem] = useState<"file" | "folder" | null>(null);

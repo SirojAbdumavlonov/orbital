@@ -4,6 +4,7 @@ import { confirm, Modal } from "../components/ui";
 import { api, asApiError, Fail2banStatus } from "../lib/api";
 import { seconds, useRemote } from "../lib/remote";
 import { SessionState, useStore } from "../store";
+import { useKept } from "../lib/kept";
 
 /** Fail2ban jails: who is banned, unban or ban an address, and where each jail looks. */
 export function Fail2banView({ s }: { s: SessionState }) {
@@ -11,7 +12,7 @@ export function Fail2banView({ s }: { s: SessionState }) {
   const sid = s.info.id;
   const tool = s.tools?.find((t) => t.id === "fail2ban");
   const { data: st, setData, error, loading, reload } = useRemote(() => api.fail2banStatus(sid), [sid]);
-  const [sel, setSel] = useState<string | null>(null);
+  const [sel, setSel] = useKept<string | null>(`${s.info.id}:fail2ban:sel`, null);
   const [banIp, setBanIp] = useState("");
   const [unbanAll, setUnbanAll] = useState(false);
   const [anyIp, setAnyIp] = useState("");

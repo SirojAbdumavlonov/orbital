@@ -4,6 +4,17 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Adjust a container for its new server before moving it** (Move to server… → "Adjust for the new server"):
+  - **ports**: publish each one on every address (public) or on this server only, on any port number, or not at all; public ports come with a reminder about the cloud firewall (for example Oracle Cloud's security list);
+  - **arguments** after the image: edit, remove or add (for example drop `--trusted-origins old.domain`);
+  - **environment variables**: change, remove or add; values that look like passwords or tokens stay hidden and are kept unless you type a new one.
+
+  The preview checks the target again as you edit (a port already in use there, …). It also points out what may still tie the container to the old server: domain names in its arguments or variables, and nginx sites on the old server that send a domain to this container's port (their certificate and DNS record stay behind).
+
+### Changed
+- **Switching tabs keeps your place.** Coming back to Docker, Services, Nginx, Users, Cron, Ports, Certificates, Fail2ban, Deploy, Updates, SSH server, Files or Monitor shows the same container, service or row selected, with the same search, filters, sort and sub-tab, while Orbital is open (forgotten when you disconnect). An open Move dialog stays open too.
+
 ## 1.3.9 (2026-11-21)
 
 ### Fixed

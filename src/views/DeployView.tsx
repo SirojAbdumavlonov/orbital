@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { confirm, Modal } from "../components/ui";
 import { api, App, AppInput, asApiError, Checkout, DeployRecord, RestartKind } from "../lib/api";
 import { SessionState, useStore } from "../store";
+import { useKept } from "../lib/kept";
 
 const blank = (): AppInput => ({ name: "", path: "/srv/", branch: "main", build: "", restartKind: "none", restartTarget: null });
 
@@ -76,7 +77,7 @@ export function DeployView({ s }: { s: SessionState }) {
   const toast = useStore((x) => x.toast);
   const sid = s.info.id;
   const [apps, setApps] = useState<App[] | null>(null);
-  const [sel, setSel] = useState<string | null>(null);
+  const [sel, setSel] = useKept<string | null>(`${s.info.id}:deploy:sel`, null);
   const [editing, setEditing] = useState<App | "new" | null>(null);
   const [checkout, setCheckout] = useState<Checkout | null>(null);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);

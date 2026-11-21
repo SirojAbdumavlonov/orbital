@@ -1085,7 +1085,7 @@ async fn server_details_and_compose_input() {
         Err(Error::InvalidInput(_))
     ));
     assert!(matches!(
-        engine.move_preview(&s.id, "anything", &s.id).await,
+        engine.move_preview(&s.id, "anything", &s.id, &Default::default()).await,
         Err(Error::InvalidInput(_))
     ));
     // Network checks from the server: itself answers on its SSH port; bad targets never run.

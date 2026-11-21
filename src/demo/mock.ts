@@ -1189,7 +1189,19 @@ export function install() {
         return {
           target: "db-primary",
           clashes: { noDocker: false, name: false, ports: [], paths: name === "grafana" ? ["/srv/observability/grafana.ini"] : [] },
-          plan: { name, image: c.image, imageId: "sha256:abc", repoDigest: c.image.includes("registry.example.com") ? null : `${c.image.split(":")[0]}@sha256:9f1c…`, running: c.state === "running", runArgs: [], envCount: 7, hostPorts: name === "grafana" ? [3000] : [], copies: name === "grafana" ? [{ source: "/var/lib/docker/volumes/grafana-data/_data", volume: "grafana-data", dest: "/var/lib/grafana" }, { source: "/srv/observability/grafana.ini", volume: null, dest: "/etc/grafana/grafana.ini" }] : [], network: c.composeProject ? `${c.composeProject}_default` : null, notes: c.composeProject ? [`It's part of Compose project ${c.composeProject}; on the target it runs as a plain container (docker run), not under Compose.`] : [] },
+          plan: { ...(() => {
+            const o = args.options ?? {};
+            const ports = o.ports ?? (name === "grafana" ? [{ hostIp: "127.0.0.1", hostPort: 3000, container: "3000/tcp" }] : []);
+            const cargs = o.args ?? (name === "grafana" ? ["--trusted-origins", "grafana.sayyah.uz"] : []);
+            const env = [{ key: "GF_SECURITY_ADMIN_PASSWORD", value: null, secret: true }, { key: "GF_SERVER_ROOT_URL", value: "https://grafana.sayyah.uz/", secret: false }, { key: "TZ", value: "Asia/Tashkent", secret: false }]
+              .filter((e) => !(o.envRemove ?? []).includes(e.key))
+              .map((e) => (o.envSet?.[e.key] !== undefined && !e.secret ? { ...e, value: o.envSet[e.key] } : e));
+            for (const [k, v] of Object.entries(o.envSet ?? {})) if (!env.some((e) => e.key === k)) env.push({ key: k, value: v as string, secret: false });
+            const texts = [...cargs, ...env.filter((e) => !e.secret).map((e) => e.value ?? "")].join(" ");
+            const hints = [...new Set(texts.match(/[a-z0-9-]+(\.[a-z0-9-]+)+\.[a-z]{2,}/g) ?? [])].map((d) => `an argument or variable mentions ${d}: if that name points to the old server, change it here or update its DNS and web server after moving.`);
+            if (name === "grafana" && (ports[0]?.hostPort ?? 3000) === 3000) hints.push("nginx on prod-web-01 sends grafana.sayyah.uz to port 3000 (/etc/nginx/sites-enabled/grafana). That site, its certificate and the DNS record stay with prod-web-01: on db-primary use Nginx → New website and point the DNS there, or reach it another way.");
+            return { ports, args: cargs, envVars: env, hints, hostPorts: ports.map((p: any) => p.hostPort).filter(Boolean) };
+          })(), name, image: c.image, imageId: "sha256:abc", repoDigest: c.image.includes("registry.example.com") ? null : `${c.image.split(":")[0]}@sha256:9f1c…`, running: c.state === "running", runArgs: [], envCount: 7, copies: name === "grafana" ? [{ source: "/var/lib/docker/volumes/grafana-data/_data", volume: "grafana-data", dest: "/var/lib/grafana" }, { source: "/srv/observability/grafana.ini", volume: null, dest: "/etc/grafana/grafana.ini" }] : [], network: c.composeProject ? `${c.composeProject}_default` : null, notes: c.composeProject ? [`It's part of Compose project ${c.composeProject}; on the target it runs as a plain container (docker run), not under Compose.`] : [] },
         };
       }
       case "move_container":

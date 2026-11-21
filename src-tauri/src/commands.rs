@@ -1155,8 +1155,14 @@ pub async fn install_software(
 }
 
 #[tauri::command]
-pub async fn move_preview(engine: Eng<'_>, session_id: String, id: String, to: String) -> R<orbital_core::migrate::MovePreview> {
-    engine.move_preview(&session_id, &id, &to).await
+pub async fn move_preview(
+    engine: Eng<'_>,
+    session_id: String,
+    id: String,
+    to: String,
+    options: Option<orbital_core::migrate::MoveOptions>,
+) -> R<orbital_core::migrate::MovePreview> {
+    engine.move_preview(&session_id, &id, &to, &options.unwrap_or_default()).await
 }
 
 #[tauri::command]
@@ -1168,12 +1174,14 @@ pub async fn move_container(
     to: String,
     mode: orbital_core::migrate::MoveMode,
     force: bool,
+    options: Option<orbital_core::migrate::MoveOptions>,
     progress: Channel<ProgressEvent>,
 ) -> R<orbital_core::migrate::MovePlan> {
+    let options = options.unwrap_or_default();
     progress::run_job(
         progress.id(),
         sink(progress),
-        engine.move_container(&session_id, &id, &to, mode, force),
+        engine.move_container(&session_id, &id, &to, mode, force, &options),
     )
     .await
 }

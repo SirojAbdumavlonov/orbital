@@ -447,7 +447,11 @@ export interface InstallOption { id: string; name: string; category: string; hin
 
 export type MoveMode = "copy" | "move";
 export interface MountCopy { source: string; volume: string | null; dest: string }
-export interface MovePlan { name: string; image: string; imageId: string; repoDigest: string | null; running: boolean; runArgs: string[]; envCount: number; hostPorts: number[]; copies: MountCopy[]; network: string | null; notes: string[] }
+export interface PortMap { hostIp: string; hostPort: number | null; container: string }
+export interface EnvVar { key: string; value: string | null; secret: boolean }
+export interface MovePlan { name: string; image: string; imageId: string; repoDigest: string | null; running: boolean; runArgs: string[]; envCount: number; hostPorts: number[]; copies: MountCopy[]; network: string | null; notes: string[]; ports: PortMap[]; args: string[]; envVars: EnvVar[]; hints: string[] }
+/** Changes made in the Move dialog. */
+export interface MoveOptions { ports?: PortMap[]; args?: string[]; envSet?: Record<string, string>; envRemove?: string[] }
 export interface MovePreview { plan: MovePlan; clashes: { noDocker: boolean; name: boolean; ports: number[]; paths: string[] }; target: string }
 
 export interface StatsState { available: boolean; enabled: boolean | null }
@@ -1028,10 +1032,10 @@ export const api = {
   installSoftware: (sessionId: string, id: string, force: boolean, onProgress?: OnProgress) =>
     invoke<ExecOutput>("install_software", { sessionId, id, force, progress: progressChannel(onProgress) }),
   /** What moving a container to `to` would do, and what's in the way there. */
-  movePreview: (sessionId: string, id: string, to: string) => invoke<MovePreview>("move_preview", { sessionId, id, to }),
+  movePreview: (sessionId: string, id: string, to: string, options: MoveOptions | null = null) => invoke<MovePreview>("move_preview", { sessionId, id, to, options }),
   /** Recreate a container on another server (image, volumes, files, network, options); a job. */
-  moveContainer: (sessionId: string, id: string, to: string, mode: MoveMode, force: boolean, onProgress?: OnProgress) =>
-    invoke<MovePlan>("move_container", { sessionId, id, to, mode, force, progress: progressChannel(onProgress) }),
+  moveContainer: (sessionId: string, id: string, to: string, mode: MoveMode, force: boolean, options: MoveOptions | null, onProgress?: OnProgress) =>
+    invoke<MovePlan>("move_container", { sessionId, id, to, mode, force, options, progress: progressChannel(onProgress) }),
   downloadFolder: (sessionId: string, remotePath: string, localPath: string, onProgress?: OnProgress) =>
     invoke<number>("download_folder", { sessionId, remotePath, localPath, progress: progressChannel(onProgress) }),
   agentStatus: (sessionId: string) => invoke<AgentStatus>("agent_status", { sessionId }),

@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { api, asApiError, SshdCheck } from "../lib/api";
 import { useRemote } from "../lib/remote";
 import { SessionState, useStore } from "../store";
+import { useKept } from "../lib/kept";
 
 const ICON = { bad: XCircle, warn: AlertTriangle, ok: CheckCircle2, info: Info };
 const COLOR = { bad: "var(--bad)", warn: "var(--warn)", ok: "var(--ok)", info: "var(--ink-3)" };
@@ -13,7 +14,7 @@ export function SshdView({ s }: { s: SessionState }) {
   const sid = s.info.id;
   const unit = s.tools?.find((t) => t.id === "sshd")?.unit ?? null;
   const { data: r, error, loading, reload } = useRemote(() => api.sshdReport(sid), [sid]);
-  const [q, setQ] = useState("");
+  const [q, setQ] = useKept(`${s.info.id}:sshd:q`, "");
   const [reloading, setReloading] = useState(false);
 
   const settings = useMemo(() => Object.entries(r?.settings ?? {}).filter(([k, v]) => !q || `${k} ${v}`.toLowerCase().includes(q.toLowerCase())), [r, q]);

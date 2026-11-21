@@ -6,6 +6,7 @@ import { asApiError } from "../lib/api";
 import { useRemote } from "../lib/remote";
 import { bytes, duration, rate } from "../lib/format";
 import { SessionState, useStore } from "../store";
+import { useKept } from "../lib/kept";
 
 const VIRT: Record<string, string> = { none: "Physical machine", kvm: "Virtual machine (KVM)", qemu: "Virtual machine (QEMU)", xen: "Virtual machine (Xen)", vmware: "Virtual machine (VMware)", microsoft: "Virtual machine (Hyper-V)", oracle: "Virtual machine (VirtualBox)", amazon: "Virtual machine (AWS Nitro)", lxc: "Container (LXC)", docker: "Container (Docker)", openvz: "Container (OpenVZ)", wsl: "WSL" };
 
@@ -37,7 +38,7 @@ async function stopProcess(s: SessionState, pid: number, name: string) {
 function UsageByProgram({ s, memTotal }: { s: SessionState; memTotal: number }) {
   const [r, setR] = useState<ProcessReport | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<UsageView>("byProgram");
+  const [view, setView] = useKept<UsageView>(`${s.info.id}:usage:view`, "byProgram");
   const [sort, setSort] = useState<"cpu" | "memory">("cpu");
   useEffect(() => {
     let stop = false;

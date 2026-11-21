@@ -4,6 +4,7 @@ import { DrawerClose } from "../components/ui";
 import { api, asApiError, NginxConfig, NginxSite } from "../lib/api";
 import { parentPath } from "../lib/format";
 import { SessionState, useStore } from "../store";
+import { useKept } from "../lib/kept";
 
 const siteKey = (x: NginxSite) => `${x.file}:${x.line}`;
 const siteName = (x: NginxSite) => x.serverNames.join(", ") || "Default (any name)";
@@ -27,8 +28,8 @@ export function NginxView({ s }: { s: SessionState }) {
   const [cfg, setCfg] = useState<NginxConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [q, setQ] = useState("");
-  const [sel, setSel] = useState<string | null>(null);
+  const [q, setQ] = useKept(`${s.info.id}:nginx:q`, "");
+  const [sel, setSel] = useKept<string | null>(`${s.info.id}:nginx:sel`, null);
   const [reloading, setReloading] = useState(false);
 
   const load = async () => {

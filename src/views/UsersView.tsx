@@ -4,6 +4,7 @@ import { confirm, DrawerClose, Modal, StateDot } from "../components/ui";
 import { api, asApiError, NewUser, UserAccount, UserChange, UsersReport } from "../lib/api";
 import { useRemote, withSafetyOverride } from "../lib/remote";
 import { SessionState, useStore } from "../store";
+import { useKept } from "../lib/kept";
 
 /** Groups people are usually added to, with what they grant. */
 const COMMON_GROUPS: Record<string, string> = {
@@ -161,9 +162,9 @@ export function UsersView({ s }: { s: SessionState }) {
   const sid = s.info.id;
   const me = s.profile.username;
   const { data: r, setData, error, loading, reload } = useRemote(() => api.listUsers(sid), [sid]);
-  const [q, setQ] = useState("");
+  const [q, setQ] = useKept(`${s.info.id}:users:q`, "");
   const [showSystem, setShowSystem] = useState(false);
-  const [sel, setSel] = useState<string | null>(null);
+  const [sel, setSel] = useKept<string | null>(`${s.info.id}:users:sel`, null);
   const [adding, setAdding] = useState(false);
   const [groups, setGroups] = useState<string[] | null>(null);
   const [pwFor, setPwFor] = useState(false);

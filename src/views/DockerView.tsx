@@ -12,6 +12,7 @@ import { VSplit } from "../components/VSplit";
 import { rangeIso, useLogPane } from "../components/LogPane";
 import { MoveContainerDialog } from "./MoveContainer";
 import { SessionState, useStore } from "../store";
+import { useKept } from "../lib/kept";
 
 type StateFilter = "all" | "running" | "stopped" | "paused";
 type SortKey = "name" | "state" | "image" | "cpu" | "memory";
@@ -106,15 +107,16 @@ export function DockerView({ s }: { s: SessionState }) {
   const [stats, setStats] = useState<ContainerStats[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [q, setQ] = useState("");
-  const [sel, setSel] = useState<string | null>(null);
-  const [pane, setPane] = useState<"inspect" | "compose">("inspect");
-  const [stateFilter, setStateFilter] = useState<StateFilter>("all");
-  const [sortKey, setSortKey] = useState<SortKey>("name");
-  const [desc, setDesc] = useState(false);
+  const [q, setQ] = useKept(`${s.info.id}:docker:q`, "");
+  const [sel, setSel] = useKept<string | null>(`${s.info.id}:docker:sel`, null);
+  const [pane, setPane] = useKept<"inspect" | "compose">(`${s.info.id}:docker:pane`, "inspect");
+  const [stateFilter, setStateFilter] = useKept<StateFilter>(`${s.info.id}:docker:stateFilter`, "all");
+  const [sortKey, setSortKey] = useKept<SortKey>(`${s.info.id}:docker:sortKey`, "name");
+  const [desc, setDesc] = useKept(`${s.info.id}:docker:desc`, false);
   const [inspect, setInspect] = useState<any>(null);
   const [busy, setBusy] = useState(false);
-  const [moving, setMoving] = useState<Container | null>(null);
+  // Kept too, so the Move dialog survives connecting the target (which switches servers for a moment).
+  const [movingId, setMovingId] = useKept<string | null>(`${s.info.id}:docker:moving`, null);
 
   const load = async () => {
     if (!s.info.dockerVersion) return;
@@ -131,12 +133,14 @@ export function DockerView({ s }: { s: SessionState }) {
   };
   useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [sid]);
   const cur = list.find((c) => c.id === sel);
+  const moving = list.find((c) => c.id === movingId) ?? null;
   useEffect(() => {
     if (!cur) return;
     if (!cur.composeProject) setPane("inspect");
     setInspect(null);
     api.inspectContainer(sid, cur.id).then(setInspect).catch(() => {});
-  }, [sel]);
+    // `cur` too: a kept selection only resolves once the container list has loaded.
+  }, [sel, !!cur]);
 
   const log = useLogPane({
     sid,
@@ -288,7 +292,7 @@ export function DockerView({ s }: { s: SessionState }) {
                     <SquareTerminal size={13} /> Shell
                   </button>
                 )}
-                <button className="btn" title="Recreate it on another server: image, volumes, files, network and options" onClick={() => setMoving(cur)}><Truck size={13} /> Move to server…</button>
+                <button className="btn" title="Recreate it on another server: image, volumes, files, network and options" onClick={() => setMovingId(cur.id)}><Truck size={13} /> Move to server…</button>
               </div>
               {cur.state === "running" && publishedPorts(cur.ports).length > 0 && (
                 <div className="port-forward">
@@ -325,7 +329,7 @@ export function DockerView({ s }: { s: SessionState }) {
           )}
         </aside>
       </div>
-      {moving && <MoveContainerDialog s={s} c={moving} onClose={() => setMoving(null)} />}
+      {moving && <MoveContainerDialog s={s} c={moving} onClose={() => setMovingId(null)} />}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, Container, ListeningPort } from "../lib/api";
 import { useRemote } from "../lib/remote";
 import { SessionState } from "../store";
+import { useKept } from "../lib/kept";
 
 type Filter = "all" | "network" | "local";
 
@@ -29,8 +30,8 @@ function FirewallBadge({ p, firewallActive }: { p: ListeningPort; firewallActive
 export function PortsView({ s }: { s: SessionState }) {
   const sid = s.info.id;
   const { data, error, loading, reload } = useRemote(() => api.listeningPorts(sid), [sid]);
-  const [filter, setFilter] = useState<Filter>("all");
-  const [q, setQ] = useState("");
+  const [filter, setFilter] = useKept<Filter>(`${s.info.id}:ports:filter`, "all");
+  const [q, setQ] = useKept(`${s.info.id}:ports:q`, "");
   const [containers, setContainers] = useState<Container[]>([]);
 
   const usesDocker = !!data?.ports.some((p) => p.process?.includes("docker-proxy"));

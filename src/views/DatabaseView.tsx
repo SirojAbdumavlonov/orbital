@@ -10,12 +10,13 @@ import { useRemote } from "../lib/remote";
 import { SessionState, useStore } from "../store";
 import { ToolView } from "./ToolView";
 import { usePlace } from "../components/PlacePicker";
+import { useKept } from "../lib/kept";
 
 const KIND: Record<string, DbKind> = { postgresql: "postgres", mysql: "mysql", mongodb: "mongo" };
 
 /** A tool tab with the tool's own page plus its service controls and logs (the generic tool view). */
 export function WithServicePane({ s, toolId, label, children }: { s: SessionState; toolId: string; label: string; children: ReactNode }) {
-  const [pane, setPane] = useState<"main" | "service">("main");
+  const [pane, setPane] = useKept<"main" | "service">(`${s.info.id}:svcpane:${toolId}:pane`, "main");
   return (
     <div className="view">
       <div className="subtabs">

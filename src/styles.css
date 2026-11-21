@@ -896,3 +896,20 @@ body.resizing-v { cursor: row-resize; user-select: none; }
 .picker-card.try > svg { color: var(--ink-3); }
 .picker-card.try:hover > svg { color: var(--amber); }
 .snippet-sudo { display: flex; align-items: center; gap: 10px; padding: 0 12px 10px; font-size: 12.5px; color: var(--ink-2); }
+.move-hints { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--warn-soft); border-radius: var(--radius-m); font-size: 12.5px; line-height: 1.45; }
+.move-hints > div { display: flex; gap: 8px; align-items: flex-start; }
+.move-hints svg { color: var(--warn); flex: none; margin-top: 2px; }
+.move-adjust { border: 1px solid var(--slate-4); border-radius: var(--radius-m); padding: 8px 12px; font-size: 12.5px; }
+.move-adjust > summary { cursor: pointer; display: flex; align-items: center; gap: 6px; color: var(--ink-2); list-style: none; }
+.move-adjust > summary::-webkit-details-marker { display: none; }
+.move-adjust[open] > summary { margin-bottom: 6px; color: var(--ink); }
+.adjust-title { margin: 10px 0 4px; font-weight: 600; color: var(--ink-2); font-size: 12px; }
+.adjust-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.adjust-row .input { height: 28px; flex: 1; min-width: 0; }
+.adjust-row select.input { flex: 0 1 220px; }
+.adjust-row .adjust-port { flex: 0 0 76px; }
+.adjust-cport { flex: 0 0 90px; }
+.adjust-key { flex: 0 0 210px !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adjust-row.removed .adjust-key { text-decoration: line-through; color: var(--ink-3); }
+.adjust-add { margin-top: 2px; height: 26px; }
+.adjust-note { margin: 2px 0 0; font-size: 12px; }

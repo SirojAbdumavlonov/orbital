@@ -3,6 +3,7 @@ import { toast as sonner } from "sonner";
 import { useSettings } from "./lib/settings";
 import { create } from "zustand";
 import { api, asApiError, ApiError, ConnectOpts, DetectedTool, Metrics, Profile, SessionInfo, Validator } from "./lib/api";
+import { forgetKept } from "./lib/kept";
 
 /** Built-in tabs, plus one `tool:<id>` tab per piece of detected software the user opened. */
 /** SFTP sessions are full SSH servers; FTP, WebDAV and S3 offer files only. */
@@ -286,6 +287,7 @@ export const useStore = create<State>((set, get) => ({
 
   async disconnect(sessionId) {
     await api.disconnect(sessionId).catch(() => {});
+    forgetKept(`${sessionId}:`);
     set((s) => {
       const sessions = { ...s.sessions };
       delete sessions[sessionId];

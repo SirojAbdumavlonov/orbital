@@ -6,6 +6,7 @@ import { runJob, useRunningJob } from "../lib/jobs";
 import { JobProgress } from "../components/JobProgress";
 import { useRemote, withSafetyOverride } from "../lib/remote";
 import { SessionState, useStore } from "../store";
+import { useKept } from "../lib/kept";
 
 function DaysLeft({ c }: { c: Certificate }) {
   if (c.daysLeft == null) return <span className="faint">—</span>;
@@ -176,7 +177,7 @@ export function CertbotView({ s }: { s: SessionState }) {
     const t = setTimeout(reload, 10_000);
     return () => clearTimeout(t);
   }, [fresh]);
-  const [sel, setSel] = useState<string | null>(null);
+  const [sel, setSel] = useKept<string | null>(`${s.info.id}:certbot:sel`, null);
   const [issuing, setIssuing] = useState<string[] | null>(null);
   const [output, setOutput] = useState<{ title: string; out: ExecOutput } | null>(null);
   const [busy, setBusy] = useState(false);
