@@ -2309,6 +2309,212 @@ impl Engine {
         out.check()
     }
 
+    /// What moving a container to `to` would do, and what on `to` is in the way. Read-only.
+    pub async fn move_preview(&self, sid: &str, id: &str, to: &str) -> Result<crate::migrate::MovePreview> {
+        use crate::migrate;
+        if sid == to {
+            return Err(Error::InvalidInput("pick another server".into()));
+        }
+        let (src, dst) = (self.session(sid).await?, self.session(to).await?);
+        let plan = migrate::plan(&migrate::inspect_for_move(&src, id).await?)?;
+        let (o, _) = dst.exec_inspect(&migrate::preflight_script(&plan)).await?;
+        Ok(migrate::MovePreview {
+            clashes: migrate::parse_preflight(&o.stdout),
+            plan,
+            target: dst.label(),
+        })
+    }
+
+    /// Recreate a container on another server with its image, volumes, bind-mounted
+    /// files, network and options (see `migrate`). In `Move` mode the original is
+    /// stopped first and stays stopped (started again if anything fails). Audited
+    /// on both servers. Existing files at bind paths on the target need `force`.
+    pub async fn move_container(
+        &self,
+        sid: &str,
+        id: &str,
+        to: &str,
+        mode: crate::migrate::MoveMode,
+        force: bool,
+    ) -> Result<crate::migrate::MovePlan> {
+        use crate::migrate::{self, MoveMode};
+        use crate::shell::quote;
+        let t = Instant::now();
+        let preview = self.move_preview(sid, id, to).await?;
+        let (src, dst) = (self.session(sid).await?, self.session(to).await?);
+        let p = preview.plan;
+        let c = preview.clashes;
+        let action = if mode == MoveMode::Move { "docker.move" } else { "docker.copy" };
+        let target = format!("{} → {}", p.name, dst.label());
+        let refuse = |e: Error| {
+            self.record_error(&src, Category::Docker, action, &target, None, &e);
+            e
+        };
+        if c.no_docker {
+            return Err(refuse(Error::InvalidInput(format!("Docker isn't installed on {}", dst.label()))));
+        }
+        if c.name {
+            return Err(refuse(Error::InvalidInput(format!(
+                "{} already has a container named {}",
+                dst.label(),
+                p.name
+            ))));
+        }
+        if !c.ports.is_empty() {
+            let ports: Vec<String> = c.ports.iter().map(u16::to_string).collect();
+            return Err(refuse(Error::InvalidInput(format!(
+                "port {} is already in use on {}",
+                ports.join(", "),
+                dst.label()
+            ))));
+        }
+        if !c.paths.is_empty() && !force {
+            return Err(refuse(Error::PreflightFailed {
+                check: "files already on the target".into(),
+                output: format!(
+                    "These already exist on {} and would be overwritten:\n{}",
+                    dst.label(),
+                    c.paths.join("\n")
+                ),
+            }));
+        }
+        let (src_docker, dst_docker) = (migrate::docker_root(&src).await?, migrate::docker_root(&dst).await?);
+        for s in [&src, &dst] {
+            if p.copies.iter().any(|c| c.volume.is_some()) && !s.elevation_needed() && s.profile.username != "root" {
+                return Err(refuse(Error::PermissionDenied(format!(
+                    "copying Docker volumes needs root on {}: turn on sudo for it",
+                    s.label()
+                ))));
+            }
+        }
+
+        let mut stopped = false;
+        if mode == MoveMode::Move && p.running {
+            progress::step(format!("Stopping {} on {} …", p.name, src.label()));
+            if let Err(e) = src
+                .container_action(id, crate::docker::ContainerAction::Stop)
+                .await
+                .and_then(|(_, o)| o.check())
+            {
+                return Err(refuse(e));
+            }
+            stopped = true;
+        }
+        let r: Result<ExecOutput> = async {
+            let dx = |cmd: String| {
+                let dst = Arc::clone(&dst);
+                async move {
+                    if dst_docker {
+                        dst.exec_privileged(&cmd).await
+                    } else {
+                        dst.exec(&cmd).await
+                    }
+                }
+            };
+            if let Some(n) = &p.network {
+                progress::step(format!("Creating network {n} on {} …", dst.label()));
+                dx(format!(
+                    "docker network inspect -- {q} >/dev/null 2>&1 || docker network create -- {q}",
+                    q = quote(n)
+                ))
+                .await?
+                .check()?;
+            }
+            let have = dx(format!("docker image inspect -- {} >/dev/null 2>&1", quote(&p.image_id)))
+                .await?
+                .ok();
+            if !have {
+                let pulled = match &p.repo_digest {
+                    Some(d) => {
+                        progress::step(format!("Pulling {d} on {} …", dst.label()));
+                        dx(format!("docker pull -- {} 2>&1", quote(d))).await?.ok()
+                    }
+                    None => false,
+                };
+                if !pulled {
+                    progress::step(format!("Copying image {} …", p.image));
+                    migrate::pipe(
+                        &src,
+                        &format!("docker save -- {}", quote(&p.image_id)),
+                        src_docker,
+                        &dst,
+                        "docker load",
+                        dst_docker,
+                        &p.image,
+                    )
+                    .await?;
+                }
+            }
+            if !p.image.starts_with("sha256:") {
+                dx(format!("docker tag {} {}", quote(&p.image_id), quote(&p.image)))
+                    .await?
+                    .check()?;
+            }
+            for m in &p.copies {
+                progress::step(format!(
+                    "Copying {} …",
+                    m.volume
+                        .as_deref()
+                        .map(|v| format!("volume {v}"))
+                        .unwrap_or_else(|| m.source.clone())
+                ));
+                let root_src = src.elevation_needed();
+                let root_dst = dst.elevation_needed();
+                migrate::pipe(&src, &migrate::tar_out(m), root_src, &dst, &migrate::tar_in(m), root_dst, &m.dest).await?;
+            }
+            progress::step(format!("Starting {} on {} …", p.name, dst.label()));
+            let cmd = migrate::run_command(&p);
+            let env = zeroize::Zeroizing::new(migrate::env_file(&p).into_bytes());
+            let o = if dst_docker {
+                dst.exec_privileged_with(&cmd, Some(&env), std::time::Duration::from_secs(600))
+                    .await?
+            } else {
+                dst.exec_with_input(&cmd, Some(&env), std::time::Duration::from_secs(600)).await?
+            };
+            Ok(o)
+        }
+        .await;
+        let ok = matches!(&r, Ok(o) if o.ok());
+        if !ok && stopped {
+            progress::step(format!("Starting {} again on {} …", p.name, src.label()));
+            let _ = src.container_action(id, crate::docker::ContainerAction::Start).await;
+        }
+        let details = serde_json::json!({
+            "to": dst.label(), "image": p.image, "copies": p.copies.len(), "mode": action,
+            "error": r.as_ref().err().map(|e| e.to_string()),
+        });
+        let outcome = if ok { Outcome::Success } else { Outcome::Failure };
+        let duration = Some(t.elapsed().as_millis() as i64);
+        self.record(
+            Some(&src),
+            NewEvent {
+                category: Some(Category::Docker),
+                action: format!("{action}_out"),
+                target: Some(target.clone()),
+                outcome: Some(outcome),
+                duration_ms: duration,
+                details: Some(details.clone()),
+                ..Default::default()
+            },
+        );
+        self.record(
+            Some(&dst),
+            NewEvent {
+                category: Some(Category::Docker),
+                action: format!("{action}_in"),
+                target: Some(p.name.clone()),
+                command: Some(migrate::run_command(&p)),
+                outcome: Some(outcome),
+                exit_code: r.as_ref().ok().map(|o| o.exit_code),
+                duration_ms: duration,
+                details: Some(details),
+                ..Default::default()
+            },
+        );
+        r?.check()?;
+        Ok(p)
+    }
+
     /// Apply, restart or pull a Compose project (or one of its services).
     /// Returns Compose's output whether it worked or not.
     pub async fn compose_action(&self, sid: &str, target: ComposeTarget, action: ComposeAction) -> Result<ExecOutput> {
@@ -2423,6 +2629,39 @@ impl Engine {
             std::time::Duration::from_secs(3600),
         )
         .await
+    }
+
+    /// Software Orbital can install (the "+" menu's "You may try").
+    pub fn install_options(&self) -> Vec<crate::install::InstallOption> {
+        crate::install::options()
+    }
+
+    /// Install one of `install::INSTALLABLE` from the server's own repositories
+    /// and start it. A web server when port 80 is taken needs `force`.
+    pub async fn install_software(&self, sid: &str, id: &str, force: bool) -> Result<ExecOutput> {
+        let s = self.session(sid).await?;
+        let item = crate::install::find(id).map_err(|e| self.refused_as(&s, Category::Command, "software.install", id, e))?;
+        if crate::install::needs_port80(item) && !force {
+            let (o, _) = s.exec_inspect(crate::install::PORT80_CHECK).await?;
+            if !o.stdout.trim().is_empty() {
+                let e = Error::PreflightFailed {
+                    check: "port 80 is already in use".into(),
+                    output: format!("Another program listens on port 80, so this web server would fail to start (or the other one would, after a reboot):\n{}", o.stdout.trim()),
+                };
+                self.record_error(&s, Category::Command, "software.install", id, None, &e);
+                return Err(e);
+            }
+        }
+        progress::step(format!("Installing {id} from the server's package repositories …"));
+        self.system_exec(
+            &s,
+            "software.install",
+            id,
+            &crate::install::script(item),
+            std::time::Duration::from_secs(1800),
+        )
+        .await?
+        .check()
     }
 
     /// Reboot the server. The connection drops a few seconds later.

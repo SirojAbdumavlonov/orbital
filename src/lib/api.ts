@@ -441,6 +441,13 @@ export interface TunnelInfo {
   label: string | null;
 }
 
+export interface InstallOption { id: string; name: string; category: string; hint: string; apt: string[]; dnf: string[] }
+
+export type MoveMode = "copy" | "move";
+export interface MountCopy { source: string; volume: string | null; dest: string }
+export interface MovePlan { name: string; image: string; imageId: string; repoDigest: string | null; running: boolean; runArgs: string[]; envCount: number; hostPorts: number[]; copies: MountCopy[]; network: string | null; notes: string[] }
+export interface MovePreview { plan: MovePlan; clashes: { noDocker: boolean; name: boolean; ports: number[]; paths: string[] }; target: string }
+
 export interface StatsState { available: boolean; enabled: boolean | null }
 
 export type NetCheck = "ping" | "dns" | "port" | "http" | "trace";
@@ -1013,6 +1020,15 @@ export const api = {
   /** Files and folders whose names contain `query`, below `dir` (skips .git and node_modules). */
   findFiles: (sessionId: string, dir: string, query: string) => invoke<FindReport>("find_files", { sessionId, dir, query }),
   /** A folder as one .tar.gz, streamed into `localPath`; a job (progress, stoppable). */
+  installOptions: () => invoke<InstallOption[]>("install_options"),
+  /** Install supported software from the server's package repositories and start it; a job. */
+  installSoftware: (sessionId: string, id: string, force: boolean, onProgress?: OnProgress) =>
+    invoke<ExecOutput>("install_software", { sessionId, id, force, progress: progressChannel(onProgress) }),
+  /** What moving a container to `to` would do, and what's in the way there. */
+  movePreview: (sessionId: string, id: string, to: string) => invoke<MovePreview>("move_preview", { sessionId, id, to }),
+  /** Recreate a container on another server (image, volumes, files, network, options); a job. */
+  moveContainer: (sessionId: string, id: string, to: string, mode: MoveMode, force: boolean, onProgress?: OnProgress) =>
+    invoke<MovePlan>("move_container", { sessionId, id, to, mode, force, progress: progressChannel(onProgress) }),
   downloadFolder: (sessionId: string, remotePath: string, localPath: string, onProgress?: OnProgress) =>
     invoke<number>("download_folder", { sessionId, remotePath, localPath, progress: progressChannel(onProgress) }),
   agentStatus: (sessionId: string) => invoke<AgentStatus>("agent_status", { sessionId }),

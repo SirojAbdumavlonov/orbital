@@ -229,6 +229,8 @@ const audit = [
 
 let statsState: { available: boolean; enabled: boolean | null } = { available: true, enabled: null };
 
+const demoInstalled = new Set<string>();
+
 const tools = ([
   { id: "nginx", name: "nginx", category: "Web server", running: true, binary: "/usr/sbin/nginx", unit: "nginx.service", unitState: "active", paths: [{ path: "/etc/nginx", isDir: true }, { path: "/var/log/nginx", isDir: true }] },
   { id: "docker", name: "Docker", category: "Containers", running: true, binary: "/usr/bin/docker", unit: "docker.service", unitState: "active", paths: [{ path: "/etc/docker/daemon.json", isDir: false }] },
@@ -787,7 +789,7 @@ export function install() {
       case "safe_write": return { path: args.path, bytes: args.content.length, privileged: args.privileged, backupPath: args.path + ".orbital-bak-20261115011500", validator: "nginx", validatorOutput: "syntax is ok", newMtime: now(), suggestedReload: "nginx.service" };
       case "write_file": return now();
       case "metrics": return metric();
-      case "detect_tools": return tools;
+      case "detect_tools": return [...(profiles.find((x) => "s-" + x.id === args.sessionId)?.name === "staging" ? tools.filter((t) => ["sshd", "cron"].includes(t.id)) : tools), ...[...demoInstalled].filter((id) => !tools.some((t) => t.id === id)).map((id) => ({ id, name: id === "certbot" ? "HTTPS certificates" : id[0].toUpperCase() + id.slice(1), category: "Installed", running: true, binary: `/usr/bin/${id}`, unit: `${id}.service`, unitState: "active", paths: [], onHost: true, containers: [] }))];
       case "nginx_config": return structuredClone(nginxConfig);
       case "website_plan": await new Promise((r) => setTimeout(r, 250)); return websitePlan(structuredClone(args.input));
       case "create_website":
@@ -1155,6 +1157,37 @@ export function install() {
       }
       case "plugin:event|listen": return 1;
       case "save_text": return null;
+      case "install_options": return [
+        { id: "docker", name: "Docker", category: "Containers", hint: "Run apps in containers; manage them, their logs and Compose files here", apt: ["docker.io"], dnf: ["moby-engine"] },
+        { id: "nginx", name: "nginx", category: "Web server", hint: "Web server and reverse proxy; then New website and HTTPS in two clicks", apt: ["nginx"], dnf: ["nginx"] },
+        { id: "postgresql", name: "PostgreSQL", category: "Database", hint: "Database; see databases, sizes and connections, back them up", apt: ["postgresql"], dnf: ["postgresql-server"] },
+        { id: "mysql", name: "MySQL / MariaDB", category: "Database", hint: "MariaDB (MySQL-compatible) database, with one-click backups", apt: ["mariadb-server"], dnf: ["mariadb-server"] },
+        { id: "redis", name: "Redis", category: "Database", hint: "In-memory cache and queue; memory, keys and hit rate at a glance", apt: ["redis-server"], dnf: ["redis"] },
+        { id: "certbot", name: "HTTPS certificates", category: "Certificates", hint: "Free HTTPS certificates from Let's Encrypt, renewed automatically", apt: ["certbot", "python3-certbot-nginx"], dnf: ["certbot", "python3-certbot-nginx"] },
+        { id: "fail2ban", name: "Fail2ban", category: "Access", hint: "Bans addresses that keep failing to sign in over SSH", apt: ["fail2ban"], dnf: ["fail2ban"] },
+        { id: "ufw", name: "UFW firewall", category: "Access", hint: "A simple firewall; installed off, turn it on from its tab with a lock-out check", apt: ["ufw"], dnf: ["ufw"] },
+        { id: "haproxy", name: "HAProxy", category: "Load balancer", hint: "Load balancer; backends, servers and their state", apt: ["haproxy"], dnf: ["haproxy"] },
+        { id: "apache", name: "Apache", category: "Web server", hint: "Apache web server; sites, virtual hosts and modules", apt: ["apache2"], dnf: ["httpd"] },
+      ];
+      case "install_software": {
+        if (args.id === "apache" && !args.force) throw { kind: "PreflightFailed", message: "port 80", data: { check: "port 80 is already in use", output: "Another program listens on port 80, so this web server would fail to start:\nLISTEN 0 511 0.0.0.0:80 users:((\"nginx\",pid=812))" } };
+        await progress(args.progress, [[0, "step", `Installing ${args.id} from the server's package repositories …`], [600, "line", "Reading package lists..."], [600, "line", `Setting up ${args.id} ...`], [600, "line", "Created symlink /etc/systemd/system/multi-user.target.wants/…"]]);
+        demoInstalled.add(args.id);
+        return { stdout: "", stderr: "", exitCode: 0, durationMs: 2100 };
+      }
+      case "move_preview": {
+        await new Promise((r) => setTimeout(r, 500));
+        const c = containers.find((x) => x.id === args.id)!;
+        const name = c.names.split(",")[0];
+        return {
+          target: "db-primary",
+          clashes: { noDocker: false, name: false, ports: [], paths: name === "grafana" ? ["/srv/observability/grafana.ini"] : [] },
+          plan: { name, image: c.image, imageId: "sha256:abc", repoDigest: c.image.includes("registry.example.com") ? null : `${c.image.split(":")[0]}@sha256:9f1c…`, running: c.state === "running", runArgs: [], envCount: 7, hostPorts: name === "grafana" ? [3000] : [], copies: name === "grafana" ? [{ source: "/var/lib/docker/volumes/grafana-data/_data", volume: "grafana-data", dest: "/var/lib/grafana" }, { source: "/srv/observability/grafana.ini", volume: null, dest: "/etc/grafana/grafana.ini" }] : [], network: c.composeProject ? `${c.composeProject}_default` : null, notes: c.composeProject ? [`It's part of Compose project ${c.composeProject}; on the target it runs as a plain container (docker run), not under Compose.`] : [] },
+        };
+      }
+      case "move_container":
+        await progress(args.progress, [[0, "step", "Stopping grafana on prod-web-01 …"], [500, "step", "Creating network observability_default on db-primary …"], [400, "step", "Pulling grafana/grafana@sha256:9f1c… on db-primary …"], [1300, "step", "Copying volume grafana-data …"], ...transferEvents(1, 212_000_000, ["/var/lib/grafana"], 2200), [300, "step", "Starting grafana on db-primary …"], [500, "step", "Done"]]);
+        return {};
       case "stats_state": return statsState;
       case "set_stats": statsState = { available: true, enabled: args.enabled }; return statsState;
       case "stats_ping": return null;

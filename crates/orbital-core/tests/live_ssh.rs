@@ -994,6 +994,15 @@ async fn server_details_and_compose_input() {
     // A log time range that isn't a date never reaches the server.
     let r = engine.container_logs(&s.id, "web", 100, Some("$(id)"), None).await;
     assert!(matches!(r, Err(Error::InvalidInput(_))), "{r:?}");
+    // Installing refuses anything outside the fixed list; moving a container needs another server.
+    assert!(matches!(
+        engine.install_software(&s.id, "x; reboot", false).await,
+        Err(Error::InvalidInput(_))
+    ));
+    assert!(matches!(
+        engine.move_preview(&s.id, "anything", &s.id).await,
+        Err(Error::InvalidInput(_))
+    ));
     // Network checks from the server: itself answers on its SSH port; bad targets never run.
     use orbital_core::netcheck::NetCheck;
     let r = engine.net_check(&s.id, NetCheck::Port, "127.0.0.1", Some(e.port)).await.unwrap();

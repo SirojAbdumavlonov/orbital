@@ -205,7 +205,7 @@ pub fn parse_stats(out: &str) -> Vec<ContainerStats> {
         .collect()
 }
 
-fn is_socket_denied(o: &ExecOutput) -> bool {
+pub(crate) fn is_socket_denied(o: &ExecOutput) -> bool {
     !o.ok() && o.stderr.to_lowercase().contains("permission denied") && o.stderr.contains("docker")
 }
 

@@ -875,3 +875,18 @@ body.resizing-v { cursor: row-resize; user-select: none; }
 .stats-ask { display: flex; gap: 14px; align-items: flex-start; }
 .stats-ask > svg { color: var(--amber); flex: none; margin-top: 2px; }
 .stats-ask p { margin: 0 0 10px; line-height: 1.5; }
+/* ---- Move a container to another server ---- */
+.move { display: flex; flex-direction: column; gap: 10px; }
+.move .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-2); }
+.move .row { display: flex; gap: 8px; }
+.move .row .input { flex: 1; height: 30px; }
+.move-mode { align-self: flex-start; }
+.move-hint { margin: 0; font-size: 12px; line-height: 1.5; }
+.move-plan { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--slate-4); border-radius: var(--radius-m); background: var(--slate-1); font-size: 12.5px; }
+.move-plan > div { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.move-plan svg { color: var(--ink-3); flex: none; }
+.move .alert { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; }
+.move .alert > svg { color: var(--warn); flex: none; margin-top: 2px; }
+.picker-card.try { border-style: dashed; }
+.picker-card.try > svg { color: var(--ink-3); }
+.picker-card.try:hover > svg { color: var(--amber); }

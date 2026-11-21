@@ -1,4 +1,4 @@
-import { AlertTriangle, Cable, SquareTerminal, ArrowDownWideNarrow, ArrowUpNarrowWide, Braces, Download, FileCode2, Pause, Pencil, Play, RefreshCw, RotateCw, ScrollText, Search, Square, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, Truck, Cable, SquareTerminal, ArrowDownWideNarrow, ArrowUpNarrowWide, Braces, Download, FileCode2, Pause, Pencil, Play, RefreshCw, RotateCw, ScrollText, Search, Square, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { confirm, StateDot, DrawerClose } from "../components/ui";
 import { Modal } from "../components/ui";
@@ -10,6 +10,7 @@ import { runJob, useRunningJob } from "../lib/jobs";
 import { JobProgress } from "../components/JobProgress";
 import { VSplit } from "../components/VSplit";
 import { rangeIso, useLogPane } from "../components/LogPane";
+import { MoveContainerDialog } from "./MoveContainer";
 import { SessionState, useStore } from "../store";
 
 type StateFilter = "all" | "running" | "stopped" | "paused";
@@ -113,6 +114,7 @@ export function DockerView({ s }: { s: SessionState }) {
   const [desc, setDesc] = useState(false);
   const [inspect, setInspect] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  const [moving, setMoving] = useState<Container | null>(null);
 
   const load = async () => {
     if (!s.info.dockerVersion) return;
@@ -286,6 +288,7 @@ export function DockerView({ s }: { s: SessionState }) {
                     <SquareTerminal size={13} /> Shell
                   </button>
                 )}
+                <button className="btn" title="Recreate it on another server: image, volumes, files, network and options" onClick={() => setMoving(cur)}><Truck size={13} /> Move to server…</button>
               </div>
               {cur.state === "running" && publishedPorts(cur.ports).length > 0 && (
                 <div className="port-forward">
@@ -322,6 +325,7 @@ export function DockerView({ s }: { s: SessionState }) {
           )}
         </aside>
       </div>
+      {moving && <MoveContainerDialog s={s} c={moving} onClose={() => setMoving(null)} />}
     </div>
   );
 }

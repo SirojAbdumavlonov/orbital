@@ -529,6 +529,29 @@ impl SshSession {
         }
     }
 
+    /// What a privileged command's stdin must start with: the sudo password
+    /// line when the profile uses one, else nothing. For commands whose stdin
+    /// is streamed (server-to-server copies).
+    pub(crate) fn sudo_input(&self) -> Result<Zeroizing<Vec<u8>>> {
+        let mut v = Zeroizing::new(Vec::new());
+        match (self.elevation_needed(), self.profile.sudo_mode, &self.sudo_password) {
+            (true, SudoMode::Password, Some(pw)) => {
+                v.extend_from_slice(pw.as_bytes());
+                v.push(b'\n');
+            }
+            (true, SudoMode::Password, None) => {
+                return Err(Error::CredentialsRequired {
+                    what: "Sudo password".into(),
+                    user: self.profile.username.clone(),
+                    host: self.profile.host.clone(),
+                    profile_id: self.profile.id.clone(),
+                })
+            }
+            _ => {}
+        }
+        Ok(v)
+    }
+
     /// Run with root privileges according to the profile's sudo policy. The sudo
     /// password goes through stdin (never the command line, never the audit log).
     pub async fn exec_privileged(&self, cmd: &str) -> Result<ExecOutput> {

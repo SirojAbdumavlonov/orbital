@@ -1128,6 +1128,46 @@ pub async fn find_files(engine: Eng<'_>, session_id: String, dir: String, query:
 }
 
 #[tauri::command]
+pub fn install_options(engine: Eng) -> Vec<orbital_core::install::InstallOption> {
+    engine.install_options()
+}
+
+#[tauri::command]
+pub async fn install_software(
+    engine: Eng<'_>,
+    session_id: String,
+    id: String,
+    force: bool,
+    progress: Channel<ProgressEvent>,
+) -> R<ExecOutput> {
+    progress::run_job(progress.id(), sink(progress), engine.install_software(&session_id, &id, force)).await
+}
+
+#[tauri::command]
+pub async fn move_preview(engine: Eng<'_>, session_id: String, id: String, to: String) -> R<orbital_core::migrate::MovePreview> {
+    engine.move_preview(&session_id, &id, &to).await
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn move_container(
+    engine: Eng<'_>,
+    session_id: String,
+    id: String,
+    to: String,
+    mode: orbital_core::migrate::MoveMode,
+    force: bool,
+    progress: Channel<ProgressEvent>,
+) -> R<orbital_core::migrate::MovePlan> {
+    progress::run_job(
+        progress.id(),
+        sink(progress),
+        engine.move_container(&session_id, &id, &to, mode, force),
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn download_folder(
     engine: Eng<'_>,
     session_id: String,

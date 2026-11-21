@@ -1,12 +1,14 @@
-import { Bot, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound, Radar } from "lucide-react";
+import { Bot, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound, Radar, Download } from "lucide-react";
 import { Activity, Boxes, Cable, Clock, Cpu, Database, FolderTree, Gauge, Globe, ListChecks, LockKeyhole, Network, Plus, RefreshCw, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, asApiError, DetectedTool } from "../lib/api";
+import { api, asApiError, DetectedTool, InstallOption } from "../lib/api";
+import { runJob } from "../lib/jobs";
+import { withSafetyOverride } from "../lib/remote";
 import { bytes, duration } from "../lib/format";
 import { useSettings } from "../lib/settings";
 import { ALWAYS_TOOLS, DEDICATED_TOOLS, isSsh, SessionState, Tab, useStore } from "../store";
 import { PROTOCOL_NAMES } from "./ProfileDialog";
-import { LiveNumber, Modal, Sparkline, StateDot } from "./ui";
+import { confirm, LiveNumber, Modal, Sparkline, StateDot } from "./ui";
 
 const TABS: { id: Tab; label: string; icon: typeof Gauge }[] = [
   { id: "files", label: "Files", icon: FolderTree },
@@ -47,6 +49,9 @@ function AddToolMenu({ s }: { s: SessionState }) {
   const [open, setOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [q, setQ] = useState("");
+  const [installable, setInstallable] = useState<InstallOption[]>([]);
+  const [installing, setInstalling] = useState<string | null>(null);
+  useEffect(() => { if (open && installable.length === 0) api.installOptions().then(setInstallable).catch(() => {}); }, [open]);
   const refresh = async () => {
     setRefreshing(true);
     await detectTools(s.info.id);
@@ -64,6 +69,33 @@ function AddToolMenu({ s }: { s: SessionState }) {
     setOpen(false);
     setQ("");
   };
+  // Supported software that isn't on this server (in a container counts as there).
+  const tryShown = isSsh(s) && s.tools !== null
+    ? installable.filter((o) => !(s.tools ?? []).some((t) => t.id === o.id) && hit(o.name, o.category, o.hint, o.id))
+    : [];
+  async function install(o: InstallOption) {
+    const ok = await confirm({
+      title: `Install ${o.name} on ${s.profile.name}?`,
+      body: `From the server's own package repositories (apt: ${o.apt.join(" ")}; dnf: ${o.dnf.join(" ")}), then started${o.id === "ufw" ? " (ufw stays off until you turn it on in its tab)" : ""}. It takes a minute or two; you can keep working.`,
+      confirmLabel: "Install",
+    });
+    if (!ok) return;
+    setInstalling(o.id);
+    try {
+      const done = await withSafetyOverride(
+        (force) => runJob((p) => api.installSoftware(s.info.id, o.id, force, p), { key: `install:${s.info.id}:${o.id}`, title: `Installing ${o.name}`, sid: s.info.id, done: () => `${o.name} is installed on ${s.profile.name}` }),
+        `${o.name} needs port 80`,
+      );
+      if (done) {
+        await detectTools(s.info.id);
+        pick(o.id);
+      }
+    } catch {
+      // The job reports the error.
+    } finally {
+      setInstalling(null);
+    }
+  }
   const first = foundShown[0]?.id ?? builtinShown[0];
   return (
     <>
@@ -93,6 +125,20 @@ function AddToolMenu({ s }: { s: SessionState }) {
                 );
               })}
             </div>
+            {tryShown.length > 0 && (
+              <>
+                <div className="picker-title">You may try <span className="faint">· not on this server yet; Orbital installs and starts it</span></div>
+                <div className="picker-grid">
+                  {tryShown.map((o) => (
+                    <button key={o.id} className="picker-card try" disabled={!!installing} onClick={() => install(o)} title={`Install ${o.name} (${o.apt.join(" ")})`}>
+                      <Download size={17} className={installing === o.id ? "spin" : ""} />
+                      <span className="picker-text"><b>{o.name}</b><small>{o.hint}</small></span>
+                      <span className="badge">{installing === o.id ? "installing…" : "Install"}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
             <div className="picker-title">Tools for every server</div>
             {builtinShown.length === 0 && <div className="faint picker-empty">{q ? "No tool matches." : "All of them are open."}</div>}
             <div className="picker-grid">

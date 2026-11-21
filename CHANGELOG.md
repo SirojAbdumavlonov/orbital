@@ -4,6 +4,11 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Move a container to another server** (Docker tab → a container → **Move to server…**): Orbital recreates it there with everything it needs: the image (pulled by its exact version when it came from a registry, otherwise copied), its volumes and bind-mounted files and folders, its network, ports, restart policy, labels, user, limits and environment. **Move** stops it here first so its data is copied as it is (and starts it here again if anything fails); **Copy** leaves it running. Before anything starts it shows what will be copied and what's in the way on the target (a container with that name, a port in use, files that would be overwritten). Environment variables travel in a private temporary file, so passwords in them never reach a command line or the activity log. Data goes through this computer; the servers don't connect to each other.
+- **"You may try" in the "+" window**: software Orbital has a tab for that isn't on this server yet (Docker, nginx, PostgreSQL, MariaDB, Redis, certbot, Fail2ban, ufw, HAProxy, Apache), installed from the server's own package repositories and started with one click, then its tab opens. ufw is installed switched off; a second web server when port 80 is taken asks first.
+
+
 ## 1.3.4 (2026-11-21)
 
 ### Changed
