@@ -383,7 +383,8 @@ async fn full_workflow_password_auth() {
     assert!(has("hostkey.trust", Outcome::Success));
     assert!(has("session.open", Outcome::Failure)); // wrong password
     assert!(has("file.write", Outcome::Failure)); // conflict
-    assert!(has("file.write", Outcome::Denied)); // root-owned via sftp
+                                                  // A root-owned file saved without sudo selected goes through sudo now, so it isn't refused.
+    assert!(!has("file.write", Outcome::Denied));
     assert!(has("config.write", Outcome::Success));
     assert!(has("command.run", Outcome::Success));
     assert!(has("terminal.open", Outcome::Success));
