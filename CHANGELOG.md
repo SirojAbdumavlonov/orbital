@@ -4,6 +4,9 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Fixed
+- **Docker: "permission denied while trying to connect to the docker API" in a container's logs** (and in Compose actions) on servers where the login user isn't in the docker group, even with sudo allowed. Orbital retries Docker commands with sudo when the daemon refuses the user, but only looked for that refusal in the error output, while logs and Compose fold errors into normal output. It now looks at both.
+
 ## 1.3.6 (2026-11-21)
 
 ### Fixed

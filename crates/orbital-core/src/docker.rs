@@ -205,8 +205,10 @@ pub fn parse_stats(out: &str) -> Vec<ContainerStats> {
         .collect()
 }
 
+/// The login user can't reach the Docker daemon. Looks at both outputs:
+/// several commands fold errors into stdout (`2>&1`, e.g. logs, compose).
 pub(crate) fn is_socket_denied(o: &ExecOutput) -> bool {
-    let e = o.stderr.to_lowercase();
+    let e = format!("{}\n{}", o.stderr, o.stdout).to_lowercase();
     !o.ok() && e.contains("permission denied") && e.contains("docker")
 }
 
@@ -342,6 +344,29 @@ fn validate_time(t: &str) -> Result<&str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn permission_errors_are_seen_in_either_output() {
+        let out = |stdout: &str, stderr: &str, code| crate::ssh::ExecOutput {
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+            exit_code: code,
+            duration_ms: 0,
+        };
+        let msg = "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock";
+        assert!(super::is_socket_denied(&out("", msg, 1)));
+        // `docker logs … 2>&1`: the error arrives on stdout.
+        assert!(super::is_socket_denied(&out(msg, "", 1)));
+        // Older Docker's wording.
+        assert!(super::is_socket_denied(&out(
+            "",
+            "Got permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock",
+            1
+        )));
+        // A log line that merely mentions it isn't a failure.
+        assert!(!super::is_socket_denied(&out(msg, "", 0)));
+        assert!(!super::is_socket_denied(&out("", "Error: No such container: web", 1)));
+    }
+
     #[test]
     fn scripts_run_inside_a_container() {
         let a = super::in_container_args("shop-db-1", "psql -c 'select 1'").unwrap();
