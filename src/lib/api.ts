@@ -439,6 +439,8 @@ export interface TunnelInfo {
   totalConnections: number;
   bytes: number;
   label: string | null;
+  /** Why the server refused the last connection (null while it works). */
+  lastError: string | null;
 }
 
 export interface InstallOption { id: string; name: string; category: string; hint: string; apt: string[]; dnf: string[] }

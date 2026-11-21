@@ -729,7 +729,8 @@ export function install() {
       case "list_dir": return args.sessionId === "s-p4" ? storageListing(storage, args.path) : args.sessionId === "s-p5" ? storageListing(cloud, args.path) : listing(args.path);
       case "list_tunnels": return tunnels.map((t) => ({ ...t }));
       case "open_tunnel": {
-        const t = { id: "tn" + (tunnels.length + 2), sessionId: args.sessionId, localPort: args.localPort ?? (args.remotePort >= 1024 ? args.remotePort : 40000 + args.remotePort), remoteHost: args.remoteHost, remotePort: args.remotePort, openConnections: 0, totalConnections: 0, bytes: 0, label: args.label ?? null };
+        if (args.remotePort === 9443) throw { kind: "InvalidInput", message: `Invalid input: nothing answers on ${args.remoteHost}:9443 on the server: is the program running, and listening on that address?` };
+        const t = { id: "tn" + (tunnels.length + 2), sessionId: args.sessionId, localPort: args.localPort ?? (args.remotePort >= 1024 ? args.remotePort : 40000 + args.remotePort), remoteHost: args.remoteHost, remotePort: args.remotePort, openConnections: 0, totalConnections: 0, bytes: 0, label: args.label ?? null, lastError: null };
         tunnels = [...tunnels, t];
         return t;
       }

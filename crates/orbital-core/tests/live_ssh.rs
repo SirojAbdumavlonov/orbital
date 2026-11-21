@@ -1343,6 +1343,11 @@ async fn tunnels_logs_and_deploys() {
     assert_eq!(&buf, b"SSH-2.0-");
     assert_eq!(engine.list_tunnels().await.len(), 1);
     assert!(engine.open_tunnel(&s.id, "x;id", 22, None, None).await.is_err());
+    // Nothing listens there: refused when opened, in plain words, instead of failing later in a browser.
+    match engine.open_tunnel(&s.id, "127.0.0.1", 1, None, None).await {
+        Err(Error::InvalidInput(m)) => assert!(m.contains("nothing answers on 127.0.0.1:1"), "{m}"),
+        other => panic!("{other:?}"),
+    }
     engine.close_tunnel(&t.id).await.unwrap();
     assert!(engine.list_tunnels().await.is_empty());
 

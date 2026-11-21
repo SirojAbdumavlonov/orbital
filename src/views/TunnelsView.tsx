@@ -109,7 +109,7 @@ export function TunnelsView({ s }: { s: SessionState }) {
                 <tr key={t.id}>
                   <td><b className="mono">{address(t)}</b>{t.label && <div className="faint" style={{ fontSize: 12 }}>{KNOWN_PORTS[t.remotePort]?.hint ?? "Use"} this address</div>}</td>
                   <td style={{ width: 20 }}><ArrowRight size={14} className="faint" /></td>
-                  <td className="mono muted">{t.remoteHost}:{t.remotePort}{t.label && <div className="faint" style={{ fontSize: 12, fontFamily: "var(--sans)" }}>{t.label}</div>}</td>
+                  <td className="mono muted">{t.remoteHost}:{t.remotePort}{t.label && <div className="faint" style={{ fontSize: 12, fontFamily: "var(--sans)" }}>{t.label}</div>}{t.lastError && <div className="bad-text" style={{ fontSize: 12, fontFamily: "var(--sans)", whiteSpace: "normal" }}>Not working: {t.lastError}</div>}</td>
                   <td className="num">{t.openConnections} open <span className="faint">/ {t.totalConnections}</span></td>
                   <td className="num muted">{bytes(t.bytes)}</td>
                   <td className="nowrap" style={{ textAlign: "right" }}>

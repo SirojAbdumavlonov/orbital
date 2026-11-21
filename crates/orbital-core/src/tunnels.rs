@@ -27,6 +27,8 @@ pub struct TunnelInfo {
     pub total_connections: u64,
     pub bytes: u64,
     pub label: Option<String>,
+    /// Why the server refused the last connection, in plain words (None while it works).
+    pub last_error: Option<String>,
 }
 
 pub struct Tunnel {
@@ -34,6 +36,7 @@ pub struct Tunnel {
     open: Arc<AtomicUsize>,
     total: Arc<AtomicU64>,
     bytes: Arc<AtomicU64>,
+    last_error: Arc<std::sync::Mutex<Option<String>>>,
     task: JoinHandle<()>,
 }
 
@@ -43,6 +46,7 @@ impl Tunnel {
             open_connections: self.open.load(Ordering::Relaxed),
             total_connections: self.total.load(Ordering::Relaxed),
             bytes: self.bytes.load(Ordering::Relaxed),
+            last_error: self.last_error.lock().map(|e| e.clone()).unwrap_or(None),
             ..self.info.clone()
         }
     }
@@ -80,6 +84,36 @@ pub async fn bind_local(wanted: Option<u16>, remote_port: u16) -> Result<TcpList
     Ok(TcpListener::bind(("127.0.0.1", 0)).await?)
 }
 
+/// Why the server refused a `direct-tcpip` channel, in plain words.
+pub fn refusal(e: &Error, host: &str, port: u16) -> String {
+    let t = e.to_string();
+    if t.contains("AdministrativelyProhibited") || t.contains("administratively") || t.contains("prohibited") {
+        "the server's SSH settings don't allow port forwarding (AllowTcpForwarding is off in /etc/ssh/sshd_config)".into()
+    } else if t.contains("ConnectFailed") || t.contains("Connect failed") || t.contains("connect failed") || t.contains("refused") {
+        format!("nothing answers on {host}:{port} on the server: is the program running, and listening on that address?")
+    } else if t.contains("UnknownChannelType") || t.contains("ResourceShortage") {
+        format!("the server couldn't open the connection ({t})")
+    } else {
+        format!("the server refused the connection to {host}:{port} ({t})")
+    }
+}
+
+/// Open one connection to `host:port` through the server and close it again,
+/// so a tunnel that can't work says why when it's opened, not later in a browser.
+pub async fn probe(session: &SshSession, host: &str, port: u16) -> Result<()> {
+    match session
+        .handle()
+        .channel_open_direct_tcpip(host.to_string(), port as u32, "127.0.0.1".to_string(), 0)
+        .await
+    {
+        Ok(ch) => {
+            let _ = ch.close().await;
+            Ok(())
+        }
+        Err(e) => Err(Error::InvalidInput(refusal(&e.into(), host, port))),
+    }
+}
+
 /// Start forwarding: every connection to the local listener becomes a
 /// `direct-tcpip` channel to `remote_host:remote_port` as seen from the server.
 pub fn start(
@@ -93,10 +127,11 @@ pub fn start(
     let open = Arc::new(AtomicUsize::new(0));
     let total = Arc::new(AtomicU64::new(0));
     let bytes = Arc::new(AtomicU64::new(0));
-    let (o, t, b, host) = (open.clone(), total.clone(), bytes.clone(), remote_host.clone());
+    let last_error = Arc::new(std::sync::Mutex::new(None));
+    let (o, t, b, host, le) = (open.clone(), total.clone(), bytes.clone(), remote_host.clone(), last_error.clone());
     let task = tokio::spawn(async move {
         while let Ok((mut sock, peer)) = listener.accept().await {
-            let (s, o, b, host) = (session.clone(), o.clone(), b.clone(), host.clone());
+            let (s, o, b, host, le) = (session.clone(), o.clone(), b.clone(), host.clone(), le.clone());
             t.fetch_add(1, Ordering::Relaxed);
             tokio::spawn(async move {
                 let ch = match s
@@ -104,9 +139,18 @@ pub fn start(
                     .channel_open_direct_tcpip(host.clone(), remote_port as u32, peer.ip().to_string(), peer.port() as u32)
                     .await
                 {
-                    Ok(ch) => ch,
+                    Ok(ch) => {
+                        if let Ok(mut l) = le.lock() {
+                            *l = None;
+                        }
+                        ch
+                    }
                     Err(e) => {
-                        tracing::warn!("tunnel to {host}:{remote_port} refused by the server: {e}");
+                        let why = refusal(&e.into(), &host, remote_port);
+                        tracing::warn!("tunnel to {host}:{remote_port}: {why}");
+                        if let Ok(mut l) = le.lock() {
+                            *l = Some(why);
+                        }
                         return;
                     }
                 };
@@ -130,10 +174,12 @@ pub fn start(
             total_connections: 0,
             bytes: 0,
             label,
+            last_error: None,
         },
         open,
         total,
         bytes,
+        last_error,
         task,
     })
 }
@@ -141,6 +187,14 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refusals_in_plain_words() {
+        let e = |t: &str| Error::Ssh(t.into());
+        assert!(refusal(&e("Channel open failure: AdministrativelyProhibited"), "127.0.0.1", 9000).contains("AllowTcpForwarding"));
+        assert!(refusal(&e("Channel open failure: ConnectFailed"), "127.0.0.1", 9000).starts_with("nothing answers on 127.0.0.1:9000"));
+        assert!(refusal(&e("something odd"), "db", 5432).contains("db:5432"));
+    }
 
     #[test]
     fn targets() {

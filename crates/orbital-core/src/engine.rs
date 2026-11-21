@@ -1548,6 +1548,8 @@ impl Engine {
             if remote_port == 0 {
                 return Err(Error::InvalidInput("choose the port on the server".into()));
             }
+            // Check the route first, so a tunnel that can't work says why now.
+            tunnels::probe(&s, &host, remote_port).await?;
             let listener = tunnels::bind_local(local_port, remote_port).await?;
             let mut t = tunnels::start(s.clone(), listener, host, remote_port, label)?;
             t.info.session_id = sid.to_string();
