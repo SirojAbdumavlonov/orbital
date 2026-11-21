@@ -6,6 +6,7 @@ import { ACCENTS, ThemePref, useResolvedTheme, useSettings } from "../lib/settin
 import { bytes } from "../lib/format";
 import { useUpdates } from "../lib/updates";
 import { useStore } from "../store";
+import { STATS_WHAT, useStats } from "../lib/stats";
 
 function Row({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -85,6 +86,7 @@ function UpdateRow({ version }: { version: string }) {
 /** Preferences for the app itself (this computer), not for any server. */
 export function SettingsView() {
   const st = useSettings();
+  const stats = useStats((x) => x.state);
   const resolved = useResolvedTheme();
   const { toast, setGlobalView } = useStore();
   const [version, setVersion] = useState("1.0.0");
@@ -155,6 +157,15 @@ export function SettingsView() {
           <Row title="Check automatically" hint="Look for a new version when Orbital starts, every hour, and when you come back to it. Nothing is installed until you click Update.">
             <input type="checkbox" className="switch" checked={st.autoUpdates} onChange={(e) => st.set({ autoUpdates: e.target.checked })} />
           </Row>
+
+          {stats?.available && (
+            <>
+              <h3 className="settings-title">Privacy</h3>
+              <Row title="Share anonymous usage statistics" hint={STATS_WHAT}>
+                <input type="checkbox" className="switch" checked={stats.enabled === true} onChange={(e) => void useStats.getState().set(e.target.checked)} />
+              </Row>
+            </>
+          )}
 
           <h3 className="settings-title">Security</h3>
           <Row title={isMac ? "Touch ID, trusted hosts" : "Trusted hosts"} hint={isMac ? "Touch ID before saved passwords are used, and the host keys you have trusted." : "The host keys you have trusted."}>

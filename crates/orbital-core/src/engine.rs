@@ -399,6 +399,27 @@ impl Engine {
 
     // ---------- profiles & credentials ----------
 
+    // ---------- anonymous usage statistics ----------
+
+    pub fn stats_state(&self) -> Result<crate::stats::StatsState> {
+        crate::stats::state(&self.db)
+    }
+
+    /// The user's yes or no to anonymous usage statistics.
+    pub fn set_stats(&self, enabled: bool) -> Result<crate::stats::StatsState> {
+        crate::stats::set_enabled(&self.db, enabled)?;
+        self.stats_state()
+    }
+
+    /// Send "opened" or "active" with the two counts, if the user said yes (see `stats`).
+    pub async fn stats_ping(&self, event: crate::stats::StatsEvent) {
+        let counts = crate::stats::Counts {
+            servers_connected: self.sessions.read().await.len() + self.storage.read().await.len(),
+            servers_saved: self.list_profiles().map(|p| p.len()).unwrap_or(0),
+        };
+        crate::stats::send(&self.db, event, counts).await;
+    }
+
     pub fn list_profiles(&self) -> Result<Vec<Profile>> {
         profiles::list(&self.db)
     }

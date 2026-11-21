@@ -27,6 +27,8 @@ import { SettingsView } from "./views/SettingsView";
 import { useApplyTheme, useSettings } from "./lib/settings";
 import { usePanelResizing } from "./lib/resize";
 import { useUpdateChecks } from "./lib/updates";
+import { useStatsPings } from "./lib/stats";
+import { StatsPrompt } from "./components/StatsPrompt";
 import { isSidebarKey, mod } from "./lib/platform";
 import { useUptimeAlerts } from "./lib/uptime";
 import { UptimeView } from "./views/UptimeView";
@@ -159,6 +161,7 @@ export default function App() {
   const sidebarHidden = useSettings((x) => x.sidebarHidden);
   usePanelResizing();
   useUpdateChecks();
+  useStatsPings();
   useUptimeAlerts();
 
   useEffect(() => {
@@ -213,6 +216,7 @@ export default function App() {
     {/* Outside the grid: these draw floating layers, not columns. */}
     <Toasts />
     <CommandMenu />
+    <StatsPrompt />
     </>
   );
 }

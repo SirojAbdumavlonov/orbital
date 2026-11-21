@@ -227,6 +227,8 @@ const audit = [
   prevHash: "a3c1…", hash: "5be0d2f4c8a1e9b7…",
 }));
 
+let statsState: { available: boolean; enabled: boolean | null } = { available: true, enabled: null };
+
 const tools = ([
   { id: "nginx", name: "nginx", category: "Web server", running: true, binary: "/usr/sbin/nginx", unit: "nginx.service", unitState: "active", paths: [{ path: "/etc/nginx", isDir: true }, { path: "/var/log/nginx", isDir: true }] },
   { id: "docker", name: "Docker", category: "Containers", running: true, binary: "/usr/bin/docker", unit: "docker.service", unitState: "active", paths: [{ path: "/etc/docker/daemon.json", isDir: false }] },
@@ -1153,6 +1155,9 @@ export function install() {
       }
       case "plugin:event|listen": return 1;
       case "save_text": return null;
+      case "stats_state": return statsState;
+      case "set_stats": statsState = { available: true, enabled: args.enabled }; return statsState;
+      case "stats_ping": return null;
       case "plugin:dialog|save": return `/Users/demo/Downloads/${args.options?.defaultPath ?? "download"}`;
       // Picking an SSH config file in the import dialog.
       case "plugin:dialog|open": return args.options?.title?.includes("SSH config") ? "/Users/demo/work/ssh_config" : null;

@@ -802,6 +802,22 @@ pub fn audit_export(engine: Eng, format: String, path: String) -> R<()> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn stats_state(engine: Eng) -> R<orbital_core::stats::StatsState> {
+    engine.stats_state()
+}
+
+#[tauri::command]
+pub fn set_stats(engine: Eng, enabled: bool) -> R<orbital_core::stats::StatsState> {
+    engine.set_stats(enabled)
+}
+
+#[tauri::command]
+pub async fn stats_ping(engine: Eng<'_>, event: orbital_core::stats::StatsEvent) -> R<()> {
+    engine.stats_ping(event).await;
+    Ok(())
+}
+
 /// Save text the UI already shows (a log pane) to a file the user picked in the save dialog.
 #[tauri::command]
 pub fn save_text(path: String, text: String) -> R<()> {

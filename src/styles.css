@@ -872,3 +872,6 @@ body.resizing-v { cursor: row-resize; user-select: none; }
 .net-out { margin: 0 14px 10px; max-height: 320px; }
 .ok-ic { color: var(--ok); flex: none; }
 .bad-ic { color: var(--bad); flex: none; }
+.stats-ask { display: flex; gap: 14px; align-items: flex-start; }
+.stats-ask > svg { color: var(--amber); flex: none; margin-top: 2px; }
+.stats-ask p { margin: 0 0 10px; line-height: 1.5; }

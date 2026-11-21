@@ -38,6 +38,7 @@ pub mod ssh;
 pub mod ssh_config;
 pub mod sshd;
 pub mod sshkeys;
+pub mod stats;
 pub mod storage;
 pub mod streams;
 pub mod sysinfo;

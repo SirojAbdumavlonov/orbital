@@ -24,6 +24,10 @@ name: Release
 # Its public half is plugins.updater.pubkey in src-tauri/tauri.conf.json. Lose
 # the private key and installed copies can't be updated any more: back it up.
 #
+# Anonymous usage statistics (optional, asked before anything is sent): the
+# variable ORBITAL_POSTHOG_KEY (Settings → Variables), a PostHog project key
+# (phc_…, public by design). Unset, the builds send nothing.
+#
 # Where releases go: this repository, unless the variable RELEASES_REPO
 # (Settings → Variables) names another, e.g. "you/orbital-releases" for
 # public downloads from a private code repository. That needs the secret
@@ -145,6 +149,8 @@ jobs:
           GITHUB_TOKEN: ${{ vars.RELEASES_REPO && secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Anonymous usage statistics (opt-in, see crates/orbital-core/src/stats.rs); unset = none sent.
+          ORBITAL_POSTHOG_KEY: ${{ vars.ORBITAL_POSTHOG_KEY }}
           # APPLE_* come from the "Signing certificate" step, only when usable.
         with:
           tagName: ${{ github.ref_name }}
@@ -192,6 +198,8 @@ jobs:
           GITHUB_TOKEN: ${{ vars.RELEASES_REPO && secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Anonymous usage statistics (opt-in, see crates/orbital-core/src/stats.rs); unset = none sent.
+          ORBITAL_POSTHOG_KEY: ${{ vars.ORBITAL_POSTHOG_KEY }}
         with:
           releaseId: ${{ needs.macos.outputs.release_id }}
           owner: ${{ steps.prep.outputs.owner }}
@@ -238,6 +246,8 @@ jobs:
           GITHUB_TOKEN: ${{ vars.RELEASES_REPO && secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Anonymous usage statistics (opt-in, see crates/orbital-core/src/stats.rs); unset = none sent.
+          ORBITAL_POSTHOG_KEY: ${{ vars.ORBITAL_POSTHOG_KEY }}
           APPIMAGE_EXTRACT_AND_RUN: 1
         with:
           releaseId: ${{ needs.macos.outputs.release_id }}

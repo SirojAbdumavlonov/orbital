@@ -441,6 +441,8 @@ export interface TunnelInfo {
   label: string | null;
 }
 
+export interface StatsState { available: boolean; enabled: boolean | null }
+
 export type NetCheck = "ping" | "dns" | "port" | "http" | "trace";
 export interface NetResult { ok: boolean; summary: string; output: string; command: string }
 
@@ -1232,6 +1234,9 @@ export const api = {
   auditQuery: (filter: { profileId?: string; category?: AuditCategory; search?: string; limit?: number; beforeSeq?: number }) =>
     invoke<AuditEvent[]>("audit_query", { filter }),
   auditVerify: () => invoke<{ ok: boolean; checked: number; firstBrokenSeq: number | null }>("audit_verify"),
+  statsState: () => invoke<StatsState>("stats_state"),
+  setStats: (enabled: boolean) => invoke<StatsState>("set_stats", { enabled }),
+  statsPing: (event: "opened" | "active") => invoke<void>("stats_ping", { event }),
   saveText: (path: string, text: string) => invoke<void>("save_text", { path, text }),
   auditExport: (format: "json" | "csv", path: string) => invoke<void>("audit_export", { format, path }),
   /** Results and alerts from the uptime checks, for as long as the page lives. */
