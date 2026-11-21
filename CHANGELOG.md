@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.3.9 (2026-11-21)
+
 ### Fixed
 - **Files: "permission denied" in folders only root can change, even with sudo allowed.** The Files tab works over SFTP, which always runs as the login user and can't use sudo. Now, when the server refuses and the server's profile allows sudo, every action is done with sudo instead:
   - creating files and folders, renaming, deleting and permissions;
