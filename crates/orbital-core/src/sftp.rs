@@ -93,6 +93,101 @@ fn kind_of(a: &FileAttributes) -> EntryKind {
     }
 }
 
+/// SFTP or a shell command refused for lack of permission (a sudo retry may work).
+pub(crate) fn denied(e: &Error) -> bool {
+    match e {
+        Error::PermissionDenied(_) => true,
+        Error::Remote { stderr, .. } => {
+            let t = stderr.to_lowercase();
+            t.contains("permission denied") || t.contains("operation not permitted")
+        }
+        _ => false,
+    }
+}
+
+/// One folder's entries as root: type, target type, mode, size, mtime, uid, gid, owner, group, name.
+pub fn list_command(path: &str) -> String {
+    format!(
+        "find {} -mindepth 1 -maxdepth 1 -printf '%y\\t%Y\\t%m\\t%s\\t%T@\\t%U\\t%G\\t%u\\t%g\\t%f\\0'",
+        quote(path)
+    )
+}
+
+pub fn parse_listing(dir: &str, out: &str) -> Vec<FileEntry> {
+    let mut v: Vec<FileEntry> = out
+        .split('\0')
+        .filter_map(|rec| {
+            let f: Vec<&str> = rec.trim_start_matches('\n').splitn(10, '\t').collect();
+            if f.len() != 10 || f[9].is_empty() || f[9] == "." || f[9] == ".." {
+                return None;
+            }
+            let kind = match (f[0], f[1]) {
+                ("d", _) | ("l", "d") => EntryKind::Dir,
+                ("f", _) => EntryKind::File,
+                ("l", _) => EntryKind::Symlink,
+                _ => EntryKind::Other,
+            };
+            let perm = u32::from_str_radix(f[2], 8).unwrap_or(0) & 0o7777;
+            let name = f[9].to_string();
+            Some(FileEntry {
+                hidden: name.starts_with('.'),
+                path: join(dir, &name),
+                kind,
+                size: f[3].parse().unwrap_or(0),
+                mode: mode_string(perm),
+                mode_octal: perm,
+                mtime: f[4].split('.').next().and_then(|t| t.parse().ok()),
+                uid: f[5].parse().ok(),
+                gid: f[6].parse().ok(),
+                owner: Some(f[7].to_string()),
+                group: Some(f[8].to_string()),
+                name,
+            })
+        })
+        .collect();
+    sort_entries(&mut v);
+    v
+}
+
+fn sort_entries(v: &mut [FileEntry]) {
+    v.sort_by(|a, b| {
+        (b.kind == EntryKind::Dir)
+            .cmp(&(a.kind == EntryKind::Dir))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+}
+
+/// New empty file as root; refuses if something is already there.
+pub fn create_command(path: &str) -> String {
+    let q = quote(path);
+    format!("if [ -e {q} ] || [ -L {q} ]; then echo 'already exists' >&2; exit 1; fi; : > {q}")
+}
+
+/// Rename as root; refuses to replace something already at `to`.
+pub fn rename_command(from: &str, to: &str) -> String {
+    let t = quote(to);
+    format!(
+        "if [ -e {t} ] || [ -L {t} ]; then echo 'already exists' >&2; exit 1; fi; mv -- {} {t}",
+        quote(from)
+    )
+}
+
+/// Delete as root: a file or link, an empty folder, or a folder with everything in it.
+pub fn remove_command(path: &str, recursive: bool) -> String {
+    let q = quote(path);
+    if recursive {
+        format!("rm -rf -- {q}")
+    } else {
+        format!("if [ -d {q} ] && [ ! -L {q} ]; then rmdir -- {q}; else rm -f -- {q}; fi")
+    }
+}
+
+/// Put a staged upload in place as root (merging into an existing folder).
+pub fn place_command(staged: &str, remote: &str) -> String {
+    let (s, r) = (quote(staged), quote(remote));
+    format!("if [ -d {s} ]; then mkdir -p -- {r} && cp -R -- {s}/. {r}; else mkdir -p -- \"$(dirname -- {r})\" && cp -- {s} {r}; fi")
+}
+
 fn looks_binary(bytes: &[u8]) -> bool {
     bytes.iter().take(8192).any(|b| *b == 0)
 }
@@ -118,7 +213,18 @@ impl SshSession {
         validate_path(path)?;
         let sftp = self.sftp().await?;
         let mut out = Vec::new();
-        for e in sftp.read_dir(path).await? {
+        let entries = match sftp.read_dir(path).await {
+            Ok(v) => v,
+            Err(e) => {
+                let e: Error = e.into();
+                if denied(&e) && self.elevation_needed() {
+                    let o = self.exec_privileged(&list_command(path)).await?.check()?;
+                    return Ok(parse_listing(path, &o.stdout));
+                }
+                return Err(e);
+            }
+        };
+        for e in entries {
             let name = e.file_name();
             if name == "." || name == ".." {
                 continue;
@@ -151,11 +257,7 @@ impl SshSession {
                 group: a.group.clone(),
             });
         }
-        out.sort_by(|a, b| {
-            (b.kind == EntryKind::Dir)
-                .cmp(&(a.kind == EntryKind::Dir))
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
+        sort_entries(&mut out);
         Ok(out)
     }
 
@@ -169,7 +271,29 @@ impl SshSession {
     pub async fn read_text(&self, path: &str) -> Result<FileContent> {
         validate_path(path)?;
         let sftp = self.sftp().await?;
-        let attrs = sftp.metadata(path).await?;
+        let attrs = match sftp.metadata(path).await {
+            Ok(a) => a,
+            Err(e) => {
+                let e: Error = e.into();
+                if !(denied(&e) && self.elevation_needed()) {
+                    return Err(e);
+                }
+                // The folder isn't readable by the login user: size and time from root's view.
+                let o = self
+                    .exec_privileged(&format!("stat -c '%s %Y %a %F' -- {}", quote(path)))
+                    .await?
+                    .check()?;
+                let mut it = o.stdout.split_whitespace();
+                let mut a = FileAttributes::empty();
+                a.size = it.next().and_then(|v| v.parse().ok());
+                a.mtime = it.next().and_then(|v| v.parse().ok());
+                a.permissions = it.next().and_then(|v| u32::from_str_radix(v, 8).ok());
+                if o.stdout.contains("directory") {
+                    return Err(Error::InvalidInput(format!("{path} is a directory")));
+                }
+                a
+            }
+        };
         if attrs.is_dir() {
             return Err(Error::InvalidInput(format!("{path} is a directory")));
         }
@@ -226,35 +350,91 @@ impl SshSession {
                 }
             }
         }
-        let mut f = sftp
+        match sftp
             .open_with_flags(path, OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE)
-            .await?;
-        f.write_all(data).await?;
-        f.flush().await?;
-        f.shutdown().await?;
-        Ok(sftp.metadata(path).await.ok().and_then(|a| a.mtime))
+            .await
+        {
+            Ok(mut f) => {
+                f.write_all(data).await?;
+                f.flush().await?;
+                f.shutdown().await?;
+            }
+            Err(e) => {
+                let e: Error = e.into();
+                if !(denied(&e) && self.elevation_needed()) {
+                    return Err(e);
+                }
+                // In place as root: same inode, owner and mode.
+                self.exec_privileged_with(&format!("cat > {}", quote(path)), Some(data), std::time::Duration::from_secs(300))
+                    .await?
+                    .check()?;
+            }
+        }
+        Ok(self.mtime_of(path).await)
+    }
+
+    /// A file's mtime, as root if the login user can't see it.
+    async fn mtime_of(&self, path: &str) -> Option<u32> {
+        if let Ok(a) = self.sftp().await.ok()?.metadata(path).await {
+            return a.mtime;
+        }
+        let o = self.exec_privileged(&format!("stat -c %Y -- {}", quote(path))).await.ok()?;
+        o.stdout.trim().parse().ok()
+    }
+
+    /// Run `cmd` as root (after SFTP was refused), failing with its own message.
+    async fn as_root(&self, cmd: &str) -> Result<()> {
+        self.exec_privileged(cmd).await?.check()?;
+        Ok(())
     }
 
     pub async fn mkdir(&self, path: &str) -> Result<()> {
         validate_path(path)?;
-        Ok(self.sftp().await?.create_dir(path).await?)
+        match self.sftp().await?.create_dir(path).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let e: Error = e.into();
+                if denied(&e) && self.elevation_needed() {
+                    self.as_root(&format!("mkdir -- {}", quote(path))).await
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     pub async fn create_file(&self, path: &str) -> Result<()> {
         validate_path(path)?;
         let sftp = self.sftp().await?;
-        if sftp.try_exists(path).await? {
-            return Err(Error::InvalidInput(format!("{path} already exists")));
+        let tried = async {
+            if sftp.try_exists(path).await? {
+                return Err(Error::InvalidInput(format!("{path} already exists")));
+            }
+            let mut f = sftp.create(path).await?;
+            f.shutdown().await?;
+            Ok(())
         }
-        let mut f = sftp.create(path).await?;
-        f.shutdown().await?;
-        Ok(())
+        .await;
+        match tried {
+            Err(e) if denied(&e) && self.elevation_needed() => self.as_root(&create_command(path)).await,
+            r => r,
+        }
     }
 
     pub async fn rename(&self, from: &str, to: &str) -> Result<()> {
         validate_path(from)?;
         validate_path(to)?;
-        Ok(self.sftp().await?.rename(from, to).await?)
+        match self.sftp().await?.rename(from, to).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let e: Error = e.into();
+                if denied(&e) && self.elevation_needed() {
+                    self.as_root(&rename_command(from, to)).await
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     /// Delete a file, or a directory recursively (via `rm -rf`, quoted).
@@ -264,17 +444,24 @@ impl SshSession {
             return Err(Error::InvalidInput("refusing to delete /".into()));
         }
         let sftp = self.sftp().await?;
-        let a = sftp.symlink_metadata(path).await?;
-        if a.is_dir() {
-            if recursive {
-                self.exec(&format!("rm -rf -- {}", quote(path))).await?.check()?;
+        let tried = async {
+            let a = sftp.symlink_metadata(path).await?;
+            if a.is_dir() {
+                if recursive {
+                    self.exec(&format!("rm -rf -- {}", quote(path))).await?.check()?;
+                } else {
+                    sftp.remove_dir(path).await?;
+                }
             } else {
-                sftp.remove_dir(path).await?;
+                sftp.remove_file(path).await?;
             }
-        } else {
-            sftp.remove_file(path).await?;
+            Ok(())
         }
-        Ok(())
+        .await;
+        match tried {
+            Err(e) if denied(&e) && self.elevation_needed() => self.as_root(&remove_command(path, recursive)).await,
+            r => r,
+        }
     }
 
     pub async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
@@ -282,18 +469,86 @@ impl SshSession {
         let sftp = self.sftp().await?;
         let mut a = FileAttributes::empty();
         a.permissions = Some(mode & 0o7777);
-        sftp.set_metadata(path, a).await?;
-        Ok(())
+        match sftp.set_metadata(path, a).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let e: Error = e.into();
+                if denied(&e) && self.elevation_needed() {
+                    self.as_root(&format!("chmod {:o} -- {}", mode & 0o7777, quote(path))).await
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     /// Stream a remote file to a local path. Returns bytes copied.
     pub async fn download(&self, remote: &str, local: &std::path::Path) -> Result<u64> {
         validate_path(remote)?;
-        let mut src = self.sftp().await?.open(remote).await?;
+        let mut src = match self.sftp().await?.open(remote).await {
+            Ok(f) => f,
+            Err(e) => {
+                let e: Error = e.into();
+                if !(denied(&e) && self.elevation_needed()) {
+                    return Err(e);
+                }
+                let name = remote.rsplit('/').next().unwrap_or(remote);
+                let (n, code, err) = self.stream_to_file(&format!("cat -- {}", quote(remote)), true, local, name).await?;
+                if code != Some(0) {
+                    let _ = tokio::fs::remove_file(local).await;
+                    return Err(crate::filetools::stream_error(code, &err, "couldn't read the file"));
+                }
+                return Ok(n);
+            }
+        };
         let mut dst = tokio::fs::File::create(local).await?;
         let n = tokio::io::copy(&mut src, &mut dst).await?;
         dst.flush().await?;
         Ok(n)
+    }
+
+    /// Like [`copy_to`], into a place the destination login can't write:
+    /// staged in /tmp on `dst`, then put in place as root there.
+    pub async fn copy_to_as_root(&self, src_path: &str, dst: &SshSession, dst_path: &str, overwrite: bool) -> Result<TransferReport> {
+        validate_path(dst_path)?;
+        if !overwrite && dst.exec_privileged(&format!("[ -e {} ]", quote(dst_path))).await?.ok() {
+            return Err(Error::InvalidInput(format!("{dst_path} already exists on {}", dst.label())));
+        }
+        let o = dst.exec("mktemp -d /tmp/orbital-copy-XXXXXX").await?.check()?;
+        let tmp_dir = o.stdout.trim().to_string();
+        validate_path(&tmp_dir)?;
+        let name = dst_path.trim_end_matches('/').rsplit('/').next().unwrap_or("copy");
+        let staged = join(&tmp_dir, name);
+        let r = async {
+            let rep = self.copy_to(src_path, dst, &staged, true).await?;
+            crate::progress::step(format!("Putting it in place with sudo: {dst_path} …"));
+            dst.as_root(&place_command(&staged, dst_path)).await?;
+            Ok(rep)
+        }
+        .await;
+        let _ = dst.exec(&format!("rm -rf -- {}", quote(&tmp_dir))).await;
+        r
+    }
+
+    /// Upload into a place the login user can't write: to a private folder in
+    /// /tmp first, then copied into place as root (owned by root, like any
+    /// file made with sudo) and the temporary copy removed.
+    pub async fn upload_as_root(&self, local: &std::path::Path, remote: &str) -> Result<TransferReport> {
+        validate_path(remote)?;
+        let o = self.exec("mktemp -d /tmp/orbital-upload-XXXXXX").await?.check()?;
+        let tmp_dir = o.stdout.trim().to_string();
+        validate_path(&tmp_dir)?;
+        let name = remote.trim_end_matches('/').rsplit('/').next().unwrap_or("upload");
+        let staged = join(&tmp_dir, name);
+        let r = async {
+            let rep = self.upload_tree(local, &staged).await?;
+            crate::progress::step(format!("Putting it in place with sudo: {remote} …"));
+            self.as_root(&place_command(&staged, remote)).await?;
+            Ok(rep)
+        }
+        .await;
+        let _ = self.exec(&format!("rm -rf -- {}", quote(&tmp_dir))).await;
+        r
     }
 
     /// Upload a local file, or a folder with everything in it, to `remote`.
@@ -533,6 +788,58 @@ impl Meter {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn root_fallback_commands_and_listing() {
+        use super::*;
+        assert!(denied(&Error::PermissionDenied("x".into())));
+        assert!(denied(&Error::Remote {
+            code: 1,
+            stderr: "rm: cannot remove 'x': Permission denied".into()
+        }));
+        assert!(!denied(&Error::NotFound("x".into())));
+        assert_eq!(
+            list_command("/opt/my app"),
+            r"find '/opt/my app' -mindepth 1 -maxdepth 1 -printf '%y\t%Y\t%m\t%s\t%T@\t%U\t%G\t%u\t%g\t%f\0'"
+        );
+        let out = "f\tf\t644\t12\t1763700000.5\t0\t0\troot\troot\tb.conf\0d\td\t755\t4096\t1763700001.0\t0\t0\troot\troot\tsites\0l\td\t777\t9\t1763700002.0\t0\t0\troot\troot\tlink\0l\tf\t777\t9\t1\t0\t0\troot\troot\t.hidden\0";
+        let v = parse_listing("/etc/x", out);
+        let names: Vec<_> = v.iter().map(|e| (e.name.as_str(), e.kind)).collect();
+        assert_eq!(
+            names,
+            [
+                ("link", EntryKind::Dir),
+                ("sites", EntryKind::Dir),
+                (".hidden", EntryKind::Symlink),
+                ("b.conf", EntryKind::File)
+            ]
+        );
+        let b = v.iter().find(|e| e.name == "b.conf").unwrap();
+        assert_eq!(
+            (b.path.as_str(), b.size, b.mode.as_str(), b.mtime, b.owner.as_deref()),
+            ("/etc/x/b.conf", 12, "rw-r--r--", Some(1763700000), Some("root"))
+        );
+        assert!(v[2].hidden);
+        assert_eq!(
+            create_command("/opt/a b"),
+            "if [ -e '/opt/a b' ] || [ -L '/opt/a b' ]; then echo 'already exists' >&2; exit 1; fi; : > '/opt/a b'"
+        );
+        assert!(rename_command("/a", "/b").ends_with("mv -- /a /b"));
+        assert_eq!(remove_command("/a", true), "rm -rf -- /a");
+        assert!(remove_command("/a", false).contains("rmdir -- /a; else rm -f -- /a"));
+        assert!(place_command("/tmp/x/s", "/opt/s").contains("cp -R -- /tmp/x/s/. /opt/s"));
+        // Every command is valid sh.
+        for c in [
+            list_command("/x"),
+            create_command("/x"),
+            rename_command("/x", "/y"),
+            remove_command("/x", false),
+            place_command("/a", "/b"),
+        ] {
+            let o = std::process::Command::new("sh").arg("-n").arg("-c").arg(&c).output().unwrap();
+            assert!(o.status.success(), "{c}");
+        }
+    }
+
     use super::*;
     #[test]
     fn modes() {

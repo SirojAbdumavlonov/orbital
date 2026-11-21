@@ -52,6 +52,10 @@ pub struct SnippetRun {
     pub command: String,
     pub output: Option<ExecOutput>,
     pub error: Option<String>,
+    /// Refused as the login user, and this server allows sudo: the UI offers
+    /// to run it again with sudo (never automatically: a command may not be
+    /// safe to run twice).
+    pub needs_sudo: bool,
 }
 
 pub fn params(command: &str) -> Vec<String> {

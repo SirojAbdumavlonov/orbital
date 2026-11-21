@@ -10,6 +10,7 @@
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::shell::{quote, validate_path, validate_unit};
+use crate::ssh::{ExecOutput, SshSession};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use rusqlite::{params, OptionalExtension, Row};
@@ -366,8 +367,54 @@ pub fn custom_restart_command(path: &str, cmd: &str) -> Result<String> {
     Ok(format!("cd -- {} && {}", quote(validate_path(path)?), cmd.trim()))
 }
 
+/// Output that means "not allowed as this user" (worth one more try with sudo).
+pub fn refused(out: &str) -> bool {
+    let t = out.to_lowercase();
+    t.contains("permission denied")
+        || t.contains("operation not permitted")
+        || t.contains("dubious ownership")
+        || t.contains("insufficient permission")
+}
+
+/// `cmd` for running with sudo in a checkout owned by someone else: git
+/// would refuse it ("dubious ownership"), so the folder is trusted for this
+/// one command only (environment, not a config change).
+pub fn as_root(cmd: &str) -> String {
+    format!("export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'; {cmd}")
+}
+
+impl SshSession {
+    /// A read in the app's folder: as the login user, again with sudo if refused.
+    pub async fn deploy_read(&self, cmd: &str) -> Result<ExecOutput> {
+        let o = self.exec(cmd).await?;
+        if !o.ok() && refused(&format!("{}{}", o.stdout, o.stderr)) && self.elevation_needed() {
+            if let Ok(r) = self.exec_privileged(&as_root(cmd)).await {
+                return Ok(r);
+            }
+        }
+        Ok(o)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn refusals_and_root_retry() {
+        use super::*;
+        assert!(refused("fatal: detected dubious ownership in repository at '/srv/app'"));
+        assert!(refused("error: cannot open .git/FETCH_HEAD: Permission denied"));
+        assert!(refused("npm ERR! Error: EACCES: permission denied, mkdir '/srv/app/node_modules'"));
+        assert!(!refused("fatal: couldn't find remote ref main"));
+        assert!(as_root("git -C /srv/app fetch").starts_with("export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory"));
+        let o = std::process::Command::new("sh")
+            .arg("-n")
+            .arg("-c")
+            .arg(as_root("true"))
+            .output()
+            .unwrap();
+        assert!(o.status.success());
+    }
+
     use super::*;
 
     fn input() -> AppInput {

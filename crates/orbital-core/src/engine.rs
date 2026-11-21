@@ -1083,7 +1083,14 @@ impl Engine {
             return self.storage_audited(&st, "file.upload", remote, st.upload(local, remote)).await;
         }
         let s = self.session(sid).await?;
-        self.audited(&s, Category::File, "file.upload", Some(remote), None, s.upload_tree(local, remote))
+        let up = async {
+            match s.upload_tree(local, remote).await {
+                // A folder only root can write: through /tmp, then sudo.
+                Err(e) if crate::sftp::denied(&e) && s.elevation_needed() => s.upload_as_root(local, remote).await,
+                r => r,
+            }
+        };
+        self.audited(&s, Category::File, "file.upload", Some(remote), None, up)
             .await
             .map(|r| r.bytes)
     }
@@ -1105,7 +1112,13 @@ impl Engine {
             Err(Error::InvalidInput("choose a different server to copy to".into()))
         } else {
             progress::step(format!("Copying {src_path} from {} to {} …", src.label(), dst.label()));
-            src.copy_to(src_path, &dst, dst_path, overwrite).await
+            match src.copy_to(src_path, &dst, dst_path, overwrite).await {
+                // The destination folder needs root there: stage it in /tmp, then sudo.
+                Err(e) if crate::sftp::denied(&e) && dst.elevation_needed() => {
+                    src.copy_to_as_root(src_path, &dst, dst_path, overwrite).await
+                }
+                r => r,
+            }
         };
         let from = format!("{}:{}", src.label(), src_path);
         let (outcome, details) = match &r {
@@ -1685,7 +1698,7 @@ impl Engine {
     pub async fn app_checkout(&self, sid: &str, app_id: &str) -> Result<Checkout> {
         let s = self.session(sid).await?;
         let app = deploy::get_app(&self.db, app_id)?;
-        let o = s.exec(&deploy::inspect_script(&app.path)?).await?;
+        let o = s.deploy_read(&deploy::inspect_script(&app.path)?).await?;
         match o.exit_code {
             3 => Err(Error::NotFound(format!("{} doesn't exist on this server", app.path))),
             4 => Err(Error::InvalidInput(format!("{} is not a git checkout", app.path))),
@@ -1795,7 +1808,7 @@ impl Engine {
         }
 
         let to = s
-            .exec(&deploy::head_command(&app.path)?)
+            .deploy_read(&deploy::head_command(&app.path)?)
             .await
             .ok()
             .map(|o| o.stdout.trim().to_string())
@@ -1809,7 +1822,7 @@ impl Engine {
                 (Some(f), Some(t)) if f == t => "Already up to date".to_string(),
                 (Some(f), Some(t)) => {
                     let n = s
-                        .exec(&deploy::changes_command(&app.path, f, t)?)
+                        .deploy_read(&deploy::changes_command(&app.path, f, t)?)
                         .await
                         .map(|o| o.stdout.lines().count())
                         .unwrap_or(0);
@@ -1858,6 +1871,33 @@ impl Engine {
     {
         sink(DeployEvent::Step { name: name.to_string() });
         log.lock().unwrap().push_str(&format!("\n$ {name}\n"));
+        let mark = log.lock().unwrap().len();
+        let mut code = self.deploy_run(s, cmd, privileged, sink, log).await;
+        // Refused as the login user (a folder owned by root, git's ownership
+        // check): the same step once more with sudo, saying so.
+        let said = log.lock().unwrap()[mark..].to_string();
+        if code != Some(0) && !privileged && s.elevation_needed() && deploy::refused(&said) {
+            let text = format!("\nNot allowed as {}; running this step again with sudo …\n", s.profile.username);
+            log.lock().unwrap().push_str(&text);
+            sink(DeployEvent::Output { text });
+            code = self.deploy_run(s, &deploy::as_root(cmd), true, sink, log).await;
+        }
+        let ok = code == Some(0);
+        sink(DeployEvent::StepEnd { ok, code });
+        ok
+    }
+
+    async fn deploy_run<F>(
+        &self,
+        s: &SshSession,
+        cmd: &str,
+        privileged: bool,
+        sink: &Arc<F>,
+        log: &Arc<std::sync::Mutex<String>>,
+    ) -> Option<i32>
+    where
+        F: Fn(DeployEvent) + Send + Sync + 'static,
+    {
         let (out_sink, out_log) = (sink.clone(), log.clone());
         let stream = s
             .open_stream(cmd, privileged, move |ev| {
@@ -1868,7 +1908,7 @@ impl Engine {
                 }
             })
             .await;
-        let code = match stream {
+        match stream {
             Ok(st) => st.wait().await,
             Err(e) => {
                 let text = format!("{e}\n");
@@ -1876,10 +1916,7 @@ impl Engine {
                 sink(DeployEvent::Output { text });
                 None
             }
-        };
-        let ok = code == Some(0);
-        sink(DeployEvent::StepEnd { ok, code });
-        ok
+        }
     }
 
     // ---------- scheduled jobs ----------
@@ -3360,6 +3397,7 @@ impl Engine {
         id: &str,
         session_ids: &[String],
         values: &HashMap<String, String>,
+        with_sudo: bool,
     ) -> Result<Vec<snippets::SnippetRun>> {
         let snip = snippets::get(&self.db, id)?;
         let command = snippets::render(&snip.command, values)?;
@@ -3382,15 +3420,13 @@ impl Engine {
                             command,
                             output: None,
                             error: Some(e.to_string()),
+                            needs_sudo: false,
                         }
                     }
                 };
-                let sent = if snip.sudo {
-                    s.privileged_command(&command)
-                } else {
-                    command.clone()
-                };
-                let r = if snip.sudo {
+                let sudo = snip.sudo || with_sudo;
+                let sent = if sudo { s.privileged_command(&command) } else { command.clone() };
+                let r = if sudo {
                     s.exec_privileged(&command).await
                 } else {
                     s.exec(&command).await
@@ -3399,12 +3435,16 @@ impl Engine {
                     Ok(o) => self.record_exec(&s, Category::Command, "snippet.run", &name, &sent, o),
                     Err(e) => self.record_error(&s, Category::Command, "snippet.run", &name, Some(sent.clone()), e),
                 }
+                let needs_sudo = !sudo
+                    && s.elevation_needed()
+                    && matches!(&r, Ok(o) if !o.ok() && deploy::refused(&format!("{}{}", o.stdout, o.stderr)));
                 snippets::SnippetRun {
                     session_id: sid.clone(),
                     server: s.label(),
                     command,
                     error: r.as_ref().err().map(|e| e.to_string()),
                     output: r.ok(),
+                    needs_sudo,
                 }
             }
         });

@@ -348,7 +348,9 @@ pub fn parse_detect(out: &str) -> Vec<DetectedTool> {
 
 impl SshSession {
     pub async fn detect_tools(&self) -> crate::Result<Vec<DetectedTool>> {
-        let mut tools = parse_detect(&self.exec(&detect_script()).await?.stdout);
+        // As root when sudo works: config files in folders only root can read are found too.
+        let (o, _) = self.exec_inspect(&detect_script()).await?;
+        let mut tools = parse_detect(&o.stdout);
         if tools.iter().any(|t| t.id == "docker" && t.running) {
             if let Ok(cs) = self.list_containers().await {
                 add_containers(&mut tools, &cs);

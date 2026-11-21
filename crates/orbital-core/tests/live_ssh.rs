@@ -229,8 +229,10 @@ async fn full_workflow_password_auth() {
     if engine.run_command(&sid, &format!("test -f {root_cfg}"), false).await.unwrap().ok() {
         let fc = engine.read_file(&sid, root_cfg).await.unwrap();
         assert!(!fc.writable);
-        let denied = engine.write_file(&sid, root_cfg, "x\n", None).await;
-        assert!(matches!(denied, Err(Error::PermissionDenied(_))), "{denied:?}");
+        // A plain save of a root-owned file goes through sudo, in place: still root's.
+        engine.write_file(&sid, root_cfg, "x\n", None).await.unwrap();
+        let owner = engine.run_command(&sid, &format!("stat -c %U {root_cfg}"), false).await.unwrap();
+        assert_eq!(owner.stdout.trim(), "root");
         let rep = engine
             .safe_write(&sid, root_cfg, "mode=from-orbital\n", true, true, None)
             .await
@@ -240,6 +242,83 @@ async fn full_workflow_password_auth() {
         assert_eq!(owner.stdout.trim(), "root");
         assert_eq!(engine.read_file(&sid, root_cfg).await.unwrap().content, "mode=from-orbital\n");
     }
+
+    // --- the Files tab in a folder only root can write: every action falls back to sudo ---
+    let rootdir = "/opt/orbital-it-root";
+    engine
+        .run_command(
+            &sid,
+            &format!(
+                "rm -rf {rootdir}; mkdir -p {rootdir}/locked && chmod 700 {rootdir}/locked && echo secret > {rootdir}/locked/inside.txt"
+            ),
+            true,
+        )
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    engine.create_file(&sid, &format!("{rootdir}/new.txt")).await.unwrap();
+    assert!(
+        engine.create_file(&sid, &format!("{rootdir}/new.txt")).await.is_err(),
+        "no silent overwrite"
+    );
+    engine
+        .write_file(&sid, &format!("{rootdir}/new.txt"), "hello\n", None)
+        .await
+        .unwrap();
+    engine.mkdir(&sid, &format!("{rootdir}/sub")).await.unwrap();
+    engine
+        .rename(&sid, &format!("{rootdir}/new.txt"), &format!("{rootdir}/sub/renamed.txt"))
+        .await
+        .unwrap();
+    engine.chmod(&sid, &format!("{rootdir}/sub/renamed.txt"), 0o640).await.unwrap();
+    let listed = engine.list_dir(&sid, &format!("{rootdir}/locked")).await.unwrap();
+    assert_eq!(
+        listed.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+        ["inside.txt"],
+        "unreadable folder listed as root"
+    );
+    assert_eq!(
+        engine
+            .read_file(&sid, &format!("{rootdir}/locked/inside.txt"))
+            .await
+            .unwrap()
+            .content,
+        "secret\n"
+    );
+    let local_dl = std::env::temp_dir().join("orbital-it-dl.txt");
+    assert_eq!(
+        engine
+            .download(&sid, &format!("{rootdir}/locked/inside.txt"), &local_dl)
+            .await
+            .unwrap(),
+        7
+    );
+    let local_up = std::env::temp_dir().join("orbital-it-up");
+    std::fs::create_dir_all(local_up.join("a")).unwrap();
+    std::fs::write(local_up.join("a/b.txt"), "up\n").unwrap();
+    engine.upload(&sid, &local_up, &format!("{rootdir}/uploaded")).await.unwrap();
+    assert_eq!(
+        engine
+            .read_file(&sid, &format!("{rootdir}/uploaded/a/b.txt"))
+            .await
+            .unwrap()
+            .content,
+        "up\n"
+    );
+    let ls = engine
+        .run_command(
+            &sid,
+            &format!("stat -c '%U %a' {rootdir}/sub/renamed.txt; cat {rootdir}/sub/renamed.txt; ls /tmp | grep -c orbital-upload || true"),
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(ls.stdout, "root 640\nhello\n0\n", "{ls:?}");
+    engine.remove(&sid, &format!("{rootdir}/sub/renamed.txt"), false).await.unwrap();
+    engine.remove(&sid, &format!("{rootdir}/sub"), false).await.unwrap();
+    engine.remove(&sid, rootdir, true).await.unwrap();
+    assert!(!engine.run_command(&sid, &format!("test -e {rootdir}"), false).await.unwrap().ok());
 
     // --- metrics ---
     let m1 = engine.metrics(&sid).await.unwrap();
@@ -1662,15 +1741,51 @@ async fn snippet_runs_with_quoted_parameters() {
         .unwrap();
     let tricky = "a b; echo INJECTED $(id) 'q'";
     let values = [("text".to_string(), tricky.to_string())].into_iter().collect();
-    let runs = engine.run_snippet(&snip.id, std::slice::from_ref(&s.id), &values).await.unwrap();
+    let runs = engine
+        .run_snippet(&snip.id, std::slice::from_ref(&s.id), &values, false)
+        .await
+        .unwrap();
     let out = runs[0].output.as_ref().expect("ran");
     assert_eq!(out.stdout.trim_end(), tricky, "the value arrived as one argument");
-    let missing = engine.run_snippet(&snip.id, std::slice::from_ref(&s.id), &Default::default()).await;
+    assert!(!runs[0].needs_sudo);
+    let missing = engine
+        .run_snippet(&snip.id, std::slice::from_ref(&s.id), &Default::default(), false)
+        .await;
     assert!(matches!(missing, Err(Error::InvalidInput(_))));
     let audit = engine.audit_query(&AuditFilter::default()).unwrap();
     assert!(audit
         .iter()
         .any(|ev| ev.action == "snippet.run" && ev.command.as_deref().is_some_and(|c| c.contains("'a b; echo"))));
+
+    // Refused as the login user: offered again with sudo, which then works (only if this login isn't root).
+    let sudo_ok = engine.run_command(&s.id, "true", true).await.is_ok_and(|o| o.ok());
+    if e.user != "root" && sudo_ok {
+        let root_only = engine
+            .save_snippet(
+                None,
+                &SnippetInput {
+                    name: "root only".into(),
+                    command: "touch /root/.orbital-it-snippet && rm -f /root/.orbital-it-snippet".into(),
+                    description: None,
+                    sudo: false,
+                },
+            )
+            .unwrap();
+        let runs = engine
+            .run_snippet(&root_only.id, std::slice::from_ref(&s.id), &Default::default(), false)
+            .await
+            .unwrap();
+        assert!(runs[0].needs_sudo, "{:?}", runs[0]);
+        let again = engine
+            .run_snippet(&root_only.id, std::slice::from_ref(&s.id), &Default::default(), true)
+            .await
+            .unwrap();
+        assert!(
+            again[0].output.as_ref().is_some_and(|o| o.ok()) && !again[0].needs_sudo,
+            "{:?}",
+            again[0]
+        );
+    }
     engine.disconnect(&s.id).await.unwrap();
 }
 

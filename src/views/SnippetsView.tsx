@@ -1,4 +1,4 @@
-import { CheckCircle2, Copy, Play, Plus, Save, Shield, Sparkles, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, Copy, Play, Plus, Save, Shield, Sparkles, Trash2, XCircle , ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { confirm } from "../components/ui";
 import { api, asApiError, Snippet, SnippetInput, SnippetRun } from "../lib/api";
@@ -107,6 +107,19 @@ function SnippetPage({ snippet, onSaved, onDeleted }: { snippet: Snippet | null;
     }
   }
 
+  async function sudoAgain(sid: string) {
+    setBusy("run");
+    try {
+      if (!snippet) return;
+      const [again] = await api.runSnippet(snippet.id, [sid], values, true);
+      setRuns((rs) => rs?.map((r) => (r.sessionId === sid && again ? again : r)) ?? null);
+    } catch (e) {
+      toast({ kind: "error", title: "Couldn't run it with sudo", body: asApiError(e).message });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function remove() {
     if (!snippet) return;
     if (!(await confirm({ title: `Delete "${snippet.name}"?`, body: "Only the saved command is deleted; nothing changes on any server.", confirmLabel: "Delete", danger: true }))) return;
@@ -181,6 +194,12 @@ function SnippetPage({ snippet, onSaved, onDeleted }: { snippet: Snippet | null;
                 {text && <button className="icon-btn" aria-label="Copy output" onClick={() => { navigator.clipboard?.writeText(text).catch(() => {}); toast({ kind: "success", title: "Output copied" }); }}><Copy size={13} /></button>}
               </div>
               {r.error && <div className="bad-text" style={{ padding: "0 12px 10px" }}>{r.error}</div>}
+              {r.needsSudo && (
+                <div className="snippet-sudo">
+                  <span>The server refused it as the login user.</span>
+                  <button className="btn" disabled={!!busy} onClick={() => sudoAgain(r.sessionId)}><ShieldCheck size={13} /> Run again with sudo</button>
+                </div>
+              )}
               {r.output && <pre className="output">{text || "(no output)"}</pre>}
             </div>
           );

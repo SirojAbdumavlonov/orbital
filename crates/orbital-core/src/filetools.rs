@@ -88,19 +88,51 @@ pub fn tar_command(remote: &str) -> Result<String> {
 
 impl SshSession {
     pub async fn find_files(&self, dir: &str, query: &str) -> Result<FindReport> {
-        let out = self.exec(&find_command(dir, query)?).await?;
+        // As root when sudo works, so folders the login user can't read are searched too.
+        let (out, _) = self.exec_inspect(&find_command(dir, query)?).await?;
         Ok(parse_find(&out.stdout))
     }
 
     /// Stream `tar czf -` of a folder into `local`. Returns the archive's size.
     /// tar's exit code 1 ("some files changed while being read") still gives a
-    /// usable archive; 2 or more doesn't.
+    /// usable archive; 2 or more doesn't. Packed as root when sudo works, so
+    /// folders the login user can't read come along too.
     pub async fn download_folder(&self, remote: &str, local: &std::path::Path) -> Result<u64> {
         let cmd = tar_command(remote)?;
         let name = remote.trim_end_matches('/').rsplit('/').next().unwrap_or(remote).to_string();
         crate::progress::step(format!("Packing {remote} on the server and downloading it …"));
+        let root = self.sudo_works().await;
+        let (total, code, err) = self.stream_to_file(&cmd, root, local, &name).await?;
+        match code {
+            Some(0) | Some(1) if total > 0 => Ok(total),
+            _ => {
+                let _ = tokio::fs::remove_file(local).await;
+                Err(stream_error(code, &err, "tar couldn't pack the folder"))
+            }
+        }
+    }
+
+    /// Run `cmd` (as root when `root`; the sudo password goes first on stdin)
+    /// and write its stdout into `local`, with transfer progress; stoppable.
+    /// Returns (bytes, exit code, the end of stderr).
+    pub(crate) async fn stream_to_file(
+        &self,
+        cmd: &str,
+        root: bool,
+        local: &std::path::Path,
+        name: &str,
+    ) -> Result<(u64, Option<u32>, Vec<u8>)> {
+        let full = if root { self.privileged_command(cmd) } else { cmd.to_string() };
+        let pre = if root && self.elevation_needed() {
+            self.sudo_input()?
+        } else {
+            Default::default()
+        };
         let mut ch = self.handle().channel_open_session().await?;
-        ch.exec(true, cmd).await?;
+        ch.exec(true, full).await?;
+        if !pre.is_empty() {
+            ch.data(&pre[..]).await?;
+        }
         ch.eof().await?;
         let mut file = tokio::fs::File::create(local).await?;
         let (mut total, mut err, mut code) = (0u64, Vec::new(), None);
@@ -123,7 +155,7 @@ impl SshSession {
                     total += data.len() as u64;
                     if last.elapsed() >= std::time::Duration::from_millis(250) {
                         last = std::time::Instant::now();
-                        crate::progress::transfer(1, total, &name);
+                        crate::progress::transfer(1, total, name);
                     }
                 }
                 ChannelMsg::ExtendedData { data, .. } if err.len() < 16_384 => err.extend_from_slice(&data),
@@ -132,22 +164,16 @@ impl SshSession {
             }
         }
         file.flush().await?;
-        crate::progress::transfer(1, total, &name);
-        match code {
-            Some(0) | Some(1) if total > 0 => Ok(total),
-            _ => {
-                let _ = tokio::fs::remove_file(local).await;
-                let why = String::from_utf8_lossy(&err).trim().lines().last().unwrap_or("").to_string();
-                Err(Error::Remote {
-                    code: code.map(|c| c as i32).unwrap_or(-1),
-                    stderr: if why.is_empty() {
-                        "tar couldn't pack the folder".into()
-                    } else {
-                        why
-                    },
-                })
-            }
-        }
+        crate::progress::transfer(1, total, name);
+        Ok((total, code, err))
+    }
+}
+
+pub(crate) fn stream_error(code: Option<u32>, err: &[u8], fallback: &str) -> Error {
+    let why = String::from_utf8_lossy(err).trim().lines().last().unwrap_or("").to_string();
+    Error::Remote {
+        code: code.map(|c| c as i32).unwrap_or(-1),
+        stderr: if why.is_empty() { fallback.into() } else { why },
     }
 }
 

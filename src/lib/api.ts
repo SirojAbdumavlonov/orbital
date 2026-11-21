@@ -862,7 +862,7 @@ export interface SshdReport {
 
 export interface Snippet { id: string; name: string; command: string; description: string | null; sudo: boolean; params: string[]; createdAt: string; updatedAt: string }
 export interface SnippetInput { name: string; command: string; description: string | null; sudo: boolean }
-export interface SnippetRun { sessionId: string; server: string; command: string; output: ExecOutput | null; error: string | null }
+export interface SnippetRun { sessionId: string; server: string; command: string; output: ExecOutput | null; error: string | null; /** Refused as the login user; sudo is allowed there. */ needsSudo: boolean }
 
 // ---------- SSH keys ----------
 
@@ -1226,7 +1226,7 @@ export const api = {
   saveSnippet: (id: string | null, input: SnippetInput) => invoke<Snippet>("save_snippet", { id, input }),
   deleteSnippet: (id: string) => invoke<void>("delete_snippet", { id }),
   addExampleSnippets: () => invoke<Snippet[]>("add_example_snippets"),
-  runSnippet: (id: string, sessionIds: string[], values: Record<string, string>) => invoke<SnippetRun[]>("run_snippet", { id, sessionIds, values }),
+  runSnippet: (id: string, sessionIds: string[], values: Record<string, string>, withSudo = false) => invoke<SnippetRun[]>("run_snippet", { id, sessionIds, values, withSudo }),
   localSshKeys: () => invoke<LocalKey[]>("local_ssh_keys"),
   generateSshKey: (name: string, comment: string, passphrase: string | null) => invoke<LocalKey>("generate_ssh_key", { name, comment, passphrase }),
   authorizedKeys: (sessionId: string) => invoke<AuthorizedKeys>("authorized_keys", { sessionId }),

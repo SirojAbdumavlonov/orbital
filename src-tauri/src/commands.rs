@@ -983,8 +983,14 @@ pub fn add_example_snippets(engine: Eng) -> R<Vec<Snippet>> {
 }
 
 #[tauri::command]
-pub async fn run_snippet(engine: Eng<'_>, id: String, session_ids: Vec<String>, values: HashMap<String, String>) -> R<Vec<SnippetRun>> {
-    engine.run_snippet(&id, &session_ids, &values).await
+pub async fn run_snippet(
+    engine: Eng<'_>,
+    id: String,
+    session_ids: Vec<String>,
+    values: HashMap<String, String>,
+    with_sudo: Option<bool>,
+) -> R<Vec<SnippetRun>> {
+    engine.run_snippet(&id, &session_ids, &values, with_sudo.unwrap_or(false)).await
 }
 
 /// A system notification for a job that finished while Orbital was in the

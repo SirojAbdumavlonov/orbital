@@ -1083,7 +1083,12 @@ export function install() {
         if (missing.length) throw { kind: "InvalidInput", message: `fill in ${missing.join(", ")}` };
         const cmd = s.command.replace(/\{\{\s*([A-Za-z_][A-Za-z0-9_]{0,31})\s*\}\}/g, (_: string, n: string) => shq(args.values[n]));
         await new Promise((r) => setTimeout(r, 900));
-        return args.sessionIds.map((sid: string, i: number) => ({ sessionId: sid, server: sid === "s-p1" ? "deploy@203.0.113.10" : sid === "s-p2" ? "ops@10.0.4.21" : "sirojiddin@staging.example.dev", command: cmd, output: { ...fakeRun(cmd, sid), durationMs: 380 + i * 210 }, error: null }));
+        return args.sessionIds.map((sid: string, i: number) => {
+          // Demo: writing under /etc is refused without sudo, with a button to retry.
+          const refused = !s.sudo && !args.withSudo && /\/etc\//.test(cmd) && /tee|>|cp |mv |rm /.test(cmd);
+          const output = refused ? { stdout: "", stderr: `tee: /etc/motd: Permission denied`, exitCode: 1, durationMs: 120 } : { ...fakeRun(cmd, sid), durationMs: 380 + i * 210 };
+          return { sessionId: sid, server: sid === "s-p1" ? "deploy@203.0.113.10" : sid === "s-p2" ? "ops@10.0.4.21" : "sirojiddin@staging.example.dev", command: cmd, output, error: null, needsSudo: refused };
+        });
       }
       case "local_ssh_keys": return localKeys.map((k) => ({ ...k }));
       case "generate_ssh_key": {

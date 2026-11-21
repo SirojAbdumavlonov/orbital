@@ -4,6 +4,23 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Fixed
+- **Files: "permission denied" in folders only root can change, even with sudo allowed.** The Files tab works over SFTP, which always runs as the login user and can't use sudo. Now, when the server refuses and the server's profile allows sudo, every action is done with sudo instead:
+  - creating files and folders, renaming, deleting and permissions;
+  - saving (in place, so the file keeps its owner and mode);
+  - opening and listing folders the login user can't read;
+  - downloading files and whole folders;
+  - uploads and server-to-server copies into protected folders (sent to a private folder in /tmp first, then put in place with sudo and the temporary copy removed);
+  - finding files (now also searches folders only root can read).
+
+  Files and folders made this way belong to root, as with sudo on the command line. Each action is still recorded in the activity log.
+- **Sudo when the server refuses, everywhere else too:**
+  - **Deploy**: a step refused as the login user (an app folder owned by root, git's "dubious ownership" check, `EACCES` from npm) runs once more with sudo, and the log says so; git trusts the folder for that one run only. The checkout view (commit, changes) reads the same way.
+  - **Snippets** run without sudo that the server refuses show **Run again with sudo** (not automatic, since running a command twice isn't always safe).
+  - **Software detection** looks as root when sudo works, so config files only root can read are found.
+
+  Reading screens (disk usage, processes, ports, users, cron, logs, nginx, sshd, updates, cleanup, databases) already looked as root when sudo works, and changes to the system (services, Docker, firewall, packages, certificates, users) already used sudo.
+
 ## 1.3.8 (2026-11-21)
 
 ### Fixed
