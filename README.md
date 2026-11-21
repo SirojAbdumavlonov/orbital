@@ -38,7 +38,7 @@ After that Orbital updates itself, without any warning: it checks for a new vers
 - **Passwords, keys and passphrases stay on your computer**, encrypted in Orbital's own vault (ChaCha20-Poly1305, readable only on this machine). They are never uploaded anywhere.
 - **Nothing is installed on your servers.** Orbital uses the SSH connection and the tools already there. The one exception is the optional AI agent, which you set up yourself and can remove with one click.
 - **Every change is logged** on your computer in a tamper-evident activity log.
-- **Anonymous usage statistics only if you say yes** (Orbital asks once; Settings → Privacy changes it): the app version, your OS, how long Orbital is open, and how many servers are connected and saved, as numbers. A random install id counts people. Never server names, addresses, user names, files, commands or anything you type. What is sent is fixed in [stats.rs](crates/orbital-core/src/stats.rs).
+- **Anonymous usage statistics only if you say yes** (Orbital asks once; Settings → Privacy changes it): the app version, your OS, how long Orbital is open, and how many servers are connected and saved, as numbers. A random install id counts people. Never server names, addresses, user names, files, commands or anything you type. It goes only to Orbital's own small statistics server ([stats-server](stats-server/), no outside analytics service), and what is sent is fixed in [stats.rs](crates/orbital-core/src/stats.rs).
 
 ## What it does
 

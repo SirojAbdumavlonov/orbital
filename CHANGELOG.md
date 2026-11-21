@@ -4,6 +4,9 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Changed
+- **Usage statistics go only to Orbital's own server**, never to an outside analytics service: `stats-server/` is one Python file with SQLite and a password-protected dashboard, set up with `install.sh`. Builds ask and send only when the `ORBITAL_STATS_URL` address is set (https only). What is sent is unchanged.
+
 ## 1.3.3 (2026-11-21)
 
 ### Added
