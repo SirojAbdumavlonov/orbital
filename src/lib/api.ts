@@ -1,20 +1,77 @@
 // Typed bridge to the Rust engine. Types mirror orbital-core's serde output.
 import { invoke as tauriInvoke, Channel } from "@tauri-apps/api/core";
 
-/** Told about every call that found its server's connection gone (the store marks it lost). */
+/** Told about every call that found its server's connection gone and couldn't reconnect (the store marks it lost). */
 let onNotConnected: ((sessionId: string) => void) | null = null;
 export function setNotConnectedHandler(f: (sessionId: string) => void) {
   onNotConnected = f;
 }
 
-/** Every backend call: a "connection lost" answer also marks that server as disconnected. */
+/**
+ * Reconnects a server quietly (the store's `reconnect` with `quiet`): the new
+ * session id, or null when it can't (no network, a password nobody saved, …).
+ */
+let reconnector: ((sessionId: string) => Promise<string | null>) | null = null;
+export function setReconnector(f: (sessionId: string) => Promise<string | null>) {
+  reconnector = f;
+}
+
+/** One reconnect per lost session, shared by every call that finds it gone at the same time. */
+const reconnecting = new Map<string, Promise<string | null>>();
+/** Old session id → its replacement, for calls that still use the old one. */
+const replacedBy = new Map<string, string>();
+
+/** Calls that are never repeated on a new connection: connecting itself, and terminals (they died with it). */
+export const NO_RETRY = /^(connect|disconnect|terminal_|open_terminal|close_terminal|resize_terminal|write_terminal|tmux_)/;
+
+/** The same arguments, pointing at the new session. */
+export function withSession(args: Record<string, unknown>, from: string, to: string): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...args };
+  for (const k of ["sessionId", "srcSessionId", "dstSessionId"]) if (out[k] === from) out[k] = to;
+  return out;
+}
+
+const sessionOf = (args?: Record<string, unknown>) => {
+  const sid = args && (args.sessionId ?? args.srcSessionId ?? args.dstSessionId);
+  return typeof sid === "string" ? sid : null;
+};
+const isNotConnected = (e: unknown) => !!e && typeof e === "object" && (e as { kind?: string }).kind === "NotConnected";
+
+/**
+ * Every backend call. When it finds its server's connection gone, Orbital
+ * reconnects in the background (a few tries) and makes the call once more on
+ * the new connection, so a dropped connection goes unnoticed. Only when that
+ * fails is the server marked as disconnected (its header offers Reconnect).
+ */
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  // A call made with the id of a session that was already replaced goes to its replacement.
+  let sid = sessionOf(args);
+  if (sid && replacedBy.has(sid) && args) {
+    let to = sid;
+    while (replacedBy.has(to)) to = replacedBy.get(to)!;
+    args = withSession(args, sid, to);
+    sid = to;
+  }
   try {
     return await tauriInvoke<T>(cmd, args);
   } catch (e) {
-    const sid = args && (args.sessionId ?? args.srcSessionId ?? args.dstSessionId);
-    if (e && typeof e === "object" && (e as { kind?: string }).kind === "NotConnected" && typeof sid === "string") onNotConnected?.(sid);
-    throw e;
+    if (!isNotConnected(e) || !sid || !args) throw e;
+    if (!reconnector || NO_RETRY.test(cmd)) {
+      onNotConnected?.(sid);
+      throw e;
+    }
+    let job = reconnecting.get(sid);
+    if (!job) {
+      job = reconnector(sid).finally(() => reconnecting.delete(sid!));
+      reconnecting.set(sid, job);
+    }
+    const fresh = await job.catch(() => null);
+    if (!fresh) {
+      onNotConnected?.(sid);
+      throw e;
+    }
+    replacedBy.set(sid, fresh);
+    return await tauriInvoke<T>(cmd, withSession(args, sid, fresh));
   }
 }
 
@@ -473,6 +530,17 @@ export interface MovePlan { name: string; image: string; imageId: string; repoDi
 /** Changes made in the Move dialog. */
 export interface MoveOptions { ports?: PortMap[]; args?: string[]; envSet?: Record<string, string>; envRemove?: string[] }
 export interface MovePreview { plan: MovePlan; clashes: { noDocker: boolean; name: boolean; ports: number[]; paths: string[] }; target: string }
+
+// ---------- nginx routes ----------
+export type RouteTarget =
+  | { kind: "app"; host: string; port: number; keepPrefix: boolean; websockets: boolean }
+  | { kind: "folder"; dir: string }
+  | { kind: "redirect"; to: string; code: number };
+export interface Route { path: string; exact: boolean; target: RouteTarget }
+export type RouteChange = { op: "add"; route: Route } | { op: "replace"; spec: string; route: Route } | { op: "remove"; spec: string };
+export interface RouteInfo { spec: string; line: number; route: Route | null; summary: string; text: string }
+export interface RoutesView { file: string; line: number; routes: RouteInfo[] }
+export interface RouteChangeReport { file: string; before: string; after: string; applied: boolean; backupPath: string | null; reloaded: boolean; reloadOutput: string }
 
 export type FeedbackKind = "problem" | "idea" | "praise" | "other";
 export interface FeedbackInput { kind: FeedbackKind; about: string; message: string; contact: string }
@@ -1229,6 +1297,13 @@ export const api = {
   redisAction: (sessionId: string, action: RedisAction, container: string | null = null) => invoke<RedisInfo>("redis_action", { sessionId, action, container }),
   systemInfo: (sessionId: string) => invoke<SystemInfo>("system_info", { sessionId }),
   metrics: (sessionId: string) => invoke<Metrics>("metrics", { sessionId }),
+  /** A server block's routes (location blocks), from its real file. */
+  nginxRoutes: (sessionId: string, file: string, line: number) => invoke<RoutesView>("nginx_routes", { sessionId, file, line }),
+  /** Preview (apply false) or make a route change: safe save with nginx -t, then reload. */
+  nginxRouteChange: (sessionId: string, file: string, line: number, change: RouteChange, apply: boolean, onProgress?: OnProgress) =>
+    invoke<RouteChangeReport>("nginx_route_change", { sessionId, file, line, change, apply, progress: progressChannel(onProgress) }),
+  /** Services systemd reports as failed (for the health dot and the overview). */
+  failedUnits: (sessionId: string) => invoke<string[]>("failed_units", { sessionId }),
   listServices: (sessionId: string) => invoke<Service[]>("list_services", { sessionId }),
   /** Ping, DNS, a TCP port, HTTP(S) or traceroute, run on the server. */
   netCheck: (sessionId: string, check: NetCheck, target: string, port: number | null) => invoke<NetResult>("net_check", { sessionId, check, target, port }),

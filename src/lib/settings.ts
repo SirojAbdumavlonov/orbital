@@ -35,6 +35,8 @@ export interface Settings {
   terminalSuggestions: boolean;
   /** New terminals run in tmux, so they survive disconnects and can be reattached. */
   terminalTmux: boolean;
+  /** At launch, reopen the servers that were open, on the same tab and folder. */
+  restoreSession: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -51,6 +53,7 @@ const DEFAULTS: Settings = {
   sshConfigPath: "",
   terminalSuggestions: true,
   terminalTmux: false,
+  restoreSession: true,
 };
 
 const KEY = "orbital.settings";

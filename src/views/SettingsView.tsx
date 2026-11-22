@@ -148,6 +148,11 @@ export function SettingsView() {
             <input type="checkbox" className="switch" checked={st.terminalSuggestions} onChange={(e) => st.set({ terminalSuggestions: e.target.checked })} />
           </Row>
 
+          <h3 className="settings-title">Starting Orbital</h3>
+          <Row title="Reopen the servers you had open" hint="At launch, Orbital connects again to the servers that were open when it closed, on the same tab and folder. Servers that need a password or a new host key are left for you to open.">
+            <input type="checkbox" className="switch" checked={st.restoreSession} onChange={(e) => st.set({ restoreSession: e.target.checked })} />
+          </Row>
+
           <h3 className="settings-title">Monitoring</h3>
           <Row title="Refresh every" hint="How often CPU, memory and network are sampled for the server in view. Servers in the background refresh every 10 seconds.">
             <div className="segmented">

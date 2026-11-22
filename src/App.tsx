@@ -34,6 +34,8 @@ import { FeedbackView } from "./views/FeedbackView";
 import { ChangesView, useWhatsNewAnnounce, WhatsNewDialog } from "./components/WhatsNew";
 import { isMac, isSidebarKey, mod } from "./lib/platform";
 import { isPaneKey, usePanes } from "./lib/panes";
+import { useFailedPolling } from "./lib/health";
+import { useSessionRestore } from "./lib/restore";
 import { useUptimeAlerts } from "./lib/uptime";
 import { UptimeView } from "./views/UptimeView";
 import { MonitorView } from "./views/MonitorView";
@@ -185,6 +187,9 @@ export default function App() {
   useStatsPings();
   useWhatsNewAnnounce();
   useUptimeAlerts();
+  useFailedPolling();
+  const profilesLoaded = useStore((x) => x.profilesLoaded);
+  useSessionRestore(profilesLoaded);
 
   useEffect(() => {
     loadProfiles();

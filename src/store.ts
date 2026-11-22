@@ -2,7 +2,7 @@ import type { TermLaunch } from "./lib/api";
 import { toast as sonner } from "sonner";
 import { useSettings } from "./lib/settings";
 import { create } from "zustand";
-import { api, asApiError, ApiError, ConnectOpts, DetectedTool, Metrics, Profile, SessionInfo, Validator , setNotConnectedHandler } from "./lib/api";
+import { api, asApiError, ApiError, ConnectOpts, DetectedTool, Metrics, Profile, SessionInfo, Validator , setNotConnectedHandler, setReconnector } from "./lib/api";
 import { usePanes } from "./lib/panes";
 import { forgetKept, restoreKept, takeKept } from "./lib/kept";
 
@@ -90,6 +90,8 @@ export interface Toast {
 
 interface State {
   profiles: Profile[];
+  /** The server list has been read once (session restore waits for it). */
+  profilesLoaded: boolean;
   sessions: Record<string, SessionState>;
   order: string[];
   active: string | null;
@@ -117,6 +119,10 @@ interface State {
   /** Close and reopen a server's connection, keeping the tab the user was on. */
   /** A new connection to the same server, keeping the tab, folder, selections and an open New website dialog. Returns the new session id. */
   reconnect(sessionId: string): Promise<string | null>;
+  /** On launch: reopen the servers you had open, where you were; returns the names that couldn't be reopened. */
+  restoreSessions(places: SavedPlace[], activeProfileId: string | null): Promise<string[]>;
+  /** After a dropped connection: reconnect in the background (a few tries) without moving the user; the new id, or null. */
+  quietReconnect(sessionId: string): Promise<string | null>;
   /** After a profile was saved: mark its sessions for reconnect if connection settings changed. */
   profileSaved(before: Profile | null, after: Profile, secretsChanged: boolean): "reconnect" | "none";
   setReconnectAsk(sessionId: string | null): void;
@@ -167,6 +173,7 @@ let termSeq = 0;
 
 export const useStore = create<State>((set, get) => ({
   profiles: [],
+  profilesLoaded: false,
   sessions: {},
   order: [],
   active: null,
@@ -228,6 +235,79 @@ export const useStore = create<State>((set, get) => ({
     return fresh.info.id;
   },
 
+  async restoreSessions(places, activeProfileId) {
+    const skipped: string[] = [];
+    for (const place of places) {
+      const profile = get().profiles.find((p) => p.id === place.profileId);
+      if (!profile || Object.values(get().sessions).some((x) => x.profile.id === profile.id && !x.lost)) continue;
+      set((st) => ({ connecting: { ...st.connecting, [profile.id]: true } }));
+      try {
+        const info = await api.connect(profile.id);
+        const session = newSession(info, profile);
+        const tab = place.tab === "terminal" ? "files" : place.tab;
+        set((st) => ({
+          sessions: { ...st.sessions, [info.id]: { ...session, tab, cwd: place.cwd || info.home, toolTabs: info.protocol === "sftp" ? place.toolTabs : [] } },
+          order: [...st.order, info.id],
+          // Show the server you were on; the others open behind it.
+          active: profile.id === activeProfileId || !st.active ? info.id : st.active,
+        }));
+        if (info.protocol === "sftp") get().detectTools(info.id);
+      } catch {
+        // Needs you (a password, a new host key) or is unreachable: leave it in the sidebar.
+        skipped.push(profile.name);
+      } finally {
+        set((st) => ({ connecting: { ...st.connecting, [profile.id]: false } }));
+      }
+    }
+    return skipped;
+  },
+
+  async quietReconnect(sessionId) {
+    const old = get().sessions[sessionId];
+    if (!old) return null;
+    let info: SessionInfo | null = null;
+    for (const wait of QUIET_RETRY_MS) {
+      if (wait) await new Promise((r) => setTimeout(r, wait));
+      if (!get().sessions[sessionId]) return null; // closed meanwhile
+      try {
+        info = await api.connect(old.profile.id);
+        break;
+      } catch (e) {
+        // Something only the user can answer (a changed host key, a password): stop, and let the prompt ask.
+        if (NEEDS_USER.includes(asApiError(e).kind)) return null;
+      }
+    }
+    if (!info) return null;
+    const fresh = info;
+    // The new connection takes the old one's place: same tab, folder, open files (with unsaved edits),
+    // tool tabs and selections; only terminals, which ended with the connection, are gone.
+    const kept = takeKept(`${sessionId}:`);
+    set((st) => {
+      const cur = st.sessions[sessionId] ?? old;
+      const sessions = { ...st.sessions };
+      delete sessions[sessionId];
+      sessions[fresh.id] = {
+        ...cur,
+        info: fresh,
+        profile: st.profiles.find((p) => p.id === cur.profile.id) ?? cur.profile,
+        lost: false,
+        terminals: [],
+        activeTerminal: null,
+        tab: cur.tab === "terminal" ? "files" : cur.tab,
+      };
+      return {
+        sessions,
+        order: st.order.map((id) => (id === sessionId ? fresh.id : id)),
+        active: st.active === sessionId ? fresh.id : st.active,
+        newWebsite: st.newWebsite === sessionId ? fresh.id : st.newWebsite,
+        reconnectAsk: st.reconnectAsk === sessionId ? null : st.reconnectAsk,
+      };
+    });
+    restoreKept(`${fresh.id}:`, kept);
+    void api.disconnect(sessionId).catch(() => {});
+    return fresh.id;
+  },
+
   profileSaved(before, after, secretsChanged) {
     const live = Object.values(get().sessions).filter((x) => x.profile.id === after.id && !x.lost);
     if (live.length === 0) return "none";
@@ -248,7 +328,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async loadProfiles() {
-    set({ profiles: await api.listProfiles() });
+    set({ profiles: await api.listProfiles(), profilesLoaded: true });
   },
 
   async connect(profileId, opts) {
@@ -265,21 +345,7 @@ export const useStore = create<State>((set, get) => ({
     set((s) => ({ connecting: { ...s.connecting, [profileId]: true } }));
     try {
       const info = await api.connect(profileId, opts);
-      const session: SessionState = {
-        info,
-        profile,
-        tab: "files",
-        cwd: info.home,
-        files: [],
-        activeFile: null,
-        terminals: [],
-        activeTerminal: null,
-        metrics: [],
-        lost: false,
-        tools: null,
-        // First visit: Docker opens by itself when the server has it, as before.
-        toolTabs: info.protocol !== "sftp" ? [] : loadToolTabs(profileId) ?? (info.dockerVersion ? ["docker"] : []),
-      };
+      const session = newSession(info, profile);
       set((s) => ({
         sessions: { ...s.sessions, [info.id]: session },
         order: [...s.order, info.id],
@@ -451,10 +517,45 @@ export const useStore = create<State>((set, get) => ({
 }));
 
 // A call that found its connection gone marks the server as disconnected, so its header offers Reconnect.
+// A call that finds its connection gone reconnects quietly and is made again (lib/api.ts).
+setReconnector((sid) => useStore.getState().quietReconnect(sid));
+
 setNotConnectedHandler((sid) => {
   const s = useStore.getState().sessions[sid];
   if (s && !s.lost) useStore.getState().patch(sid, { lost: true });
 });
+
+/** Tries for a quiet reconnect: at once, then after 3 and 10 seconds (a Mac waking up may need a moment for its network). */
+const QUIET_RETRY_MS = [0, 3000, 10000];
+/** Connection answers that need the user, so a quiet reconnect stops and the Reconnect prompt asks. */
+const NEEDS_USER = ["UnknownHostKey", "HostKeyMismatch", "CredentialsRequired", "AuthFailed", "PresenceRequired"];
+
+/** A freshly connected server's state: Files in its home folder. */
+function newSession(info: SessionInfo, profile: Profile): SessionState {
+  return {
+    info,
+    profile,
+    tab: "files",
+    cwd: info.home,
+    files: [],
+    activeFile: null,
+    terminals: [],
+    activeTerminal: null,
+    metrics: [],
+    lost: false,
+    tools: null,
+    // First visit: Docker opens by itself when the server has it, as before.
+    toolTabs: info.protocol !== "sftp" ? [] : loadToolTabs(profile.id) ?? (info.dockerVersion ? ["docker"] : []),
+  };
+}
+
+/** Where you were in a server, remembered between launches (lib/restore.ts). */
+export interface SavedPlace {
+  profileId: string;
+  tab: Tab;
+  cwd: string;
+  toolTabs: string[];
+}
 
 // ---- back / forward ----
 

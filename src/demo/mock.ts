@@ -238,6 +238,31 @@ let statsState: { available: boolean; enabled: boolean | null } = { available: t
 
 const demoInstalled = new Set<string>();
 let defaultSiteOff = false;
+/** Demo nginx routes per server block, from the fake nginx config. */
+const routeStore = new Map<string, any[]>();
+function demoRoutes(file: string, line: number): any[] {
+  const k = `${file}:${line}`;
+  if (!routeStore.has(k)) {
+    const site = nginxConfig.sites.find((x: any) => x.file === file && x.line === line);
+    routeStore.set(k, (site?.locations ?? []).map((l: any) => {
+      const m = /^http:\/\/([^:/]+):(\d+)(\/?)/.exec(l.proxyPass ?? "");
+      const route = m
+        ? { path: l.path, exact: false, target: { kind: "app", host: m[1], port: Number(m[2]), keepPrefix: !m[3] && l.path !== "/", websockets: true } }
+        : l.root && l.path.startsWith("/") ? { path: l.path, exact: false, target: { kind: "folder", dir: l.root } } : null;
+      return { spec: l.path, line: l.line, route, summary: l.proxyPass ?? l.root ?? "", text: "" };
+    }));
+  }
+  return routeStore.get(k)!;
+}
+function demoSiteText(file: string, routes: any[]): string {
+  const name = file.split("/").pop();
+  const body = routes.map((r) => {
+    const t = r.route?.target;
+    const inner = !t ? `        ${r.summary};` : t.kind === "app" ? `        proxy_pass http://${t.host}:${t.port}${t.keepPrefix ? "" : "/"};\n        proxy_set_header Host $host;` : t.kind === "folder" ? `        alias ${t.dir}/;` : `        return ${t.code} ${t.to};`;
+    return `    location ${r.spec} {\n${inner}\n    }\n`;
+  }).join("\n");
+  return `server {\n    listen 80;\n    server_name ${name};\n\n${body}}\n`;
+}
 
 const tools = ([
   { id: "nginx", name: "nginx", category: "Web server", running: true, binary: "/usr/sbin/nginx", unit: "nginx.service", unitState: "active", paths: [{ path: "/etc/nginx", isDir: true }, { path: "/var/log/nginx", isDir: true }] },
@@ -824,6 +849,31 @@ export function install() {
           defaultMissing: broken ? [missing] : [],
         };
       }
+      case "nginx_routes": return { file: args.file.replace("/sites-enabled/", "/sites-available/"), line: args.line, routes: demoRoutes(args.file, args.line) };
+      case "nginx_route_change": {
+        const list = demoRoutes(args.file, args.line);
+        const before = demoSiteText(args.file, list);
+        const c = args.change;
+        const r = c.route;
+        if (r) {
+          if (!/^\/[A-Za-z0-9._~@%+\-/]*$/.test(r.path)) throw { kind: "InvalidInput", message: `Invalid input: "${r.path}" isn't a path; use something like /api or /static/` };
+          if (r.target.kind === "app" && !r.target.port) throw { kind: "InvalidInput", message: "Invalid input: choose the port the app listens on (1–65535)" };
+        }
+        const norm = (p: string, exact: boolean) => (exact ? `= ${p}` : p === "/" || p.endsWith("/") ? p : `${p}/`);
+        let next = list.slice();
+        if (c.op === "add") {
+          const spec = norm(r.path, r.exact);
+          if (list.some((x) => x.spec === spec)) throw { kind: "InvalidInput", message: `Invalid input: this site already has a route for ${spec}; change that one instead` };
+          next.push({ spec, line: 99, route: { ...r, path: norm(r.path, false) }, summary: "", text: "" });
+        } else if (c.op === "replace") next = list.map((x) => (x.spec === c.spec ? { ...x, spec: norm(r.path, r.exact), route: { ...r, path: norm(r.path, false) } } : x));
+        else next = list.filter((x) => x.spec !== c.spec);
+        const after = demoSiteText(args.file, next);
+        if (args.apply) {
+          await progress(args.progress, [[0, "step", `Writing ${args.file} and testing it with nginx -t …`], [700, "step", "Reloading nginx …"]]);
+          routeStore.set(`${args.file}:${args.line}`, next);
+        }
+        return { file: args.file.replace("/sites-enabled/", "/sites-available/"), before, after, applied: !!args.apply, backupPath: args.apply ? `${args.file}.orbital-bak-1` : null, reloaded: !!args.apply, reloadOutput: "" };
+      }
       case "disable_default_site":
         await progress(args.progress, [[0, "step", "Turning nginx's default site off (its link only) and testing nginx …"], [700, "line", "nginx: configuration file /etc/nginx/nginx.conf test is successful"], [500, "step", "Reloading nginx …"]]);
         defaultSiteOff = true;
@@ -1112,6 +1162,8 @@ export function install() {
       case "audit_query": return audit.filter((e) => !args.filter?.category || e.category === args.filter.category);
       case "audit_verify": return { ok: true, checked: 1284, firstBrokenSeq: null };
       case "snippets": return snippetList.map((s) => ({ ...s }));
+      // The health dot: the first server has a failed service.
+      case "failed_units": return String(args.sessionId).startsWith("s-p1") ? ["shop-worker.service"] : [];
       case "add_example_snippets": if (!snippetList.length) snippetList = EXAMPLES.map((e, i) => mkSnippet("sn" + i, e)).sort((a, b) => a.name.localeCompare(b.name)); return snippetList.map((s) => ({ ...s }));
       case "save_snippet": {
         if (!args.input.name.trim() || !args.input.command.trim()) throw { kind: "InvalidInput", message: "give the snippet a short name" };

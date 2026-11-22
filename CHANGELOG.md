@@ -4,6 +4,16 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **nginx routes** (Nginx tab → a site → **Routes**): send a path to an app on a port (`/api` → `127.0.0.1:3000`, with WebSockets), serve a folder (`/static` → `/var/www/…`), or redirect (`/old` → `https://…`, 301/302/307/308). Add, change or remove routes; each change is previewed as the lines that change, written to the site's own file (the real file behind its sites-enabled link) through safe save: a backup, `nginx -t`, and rolled back if nginx rejects it, then nginx reloads. The rest of the file stays exactly as it was. Routes written by hand are listed (and can be removed); nginx's own files (`default`, nginx.conf) are never changed.
+- **All your servers on Home**: a card for every saved server, connected ones first, with CPU, memory, the fullest disk and uptime, and what needs attention (a disk nearly full, memory or load high, a failed service). Click a card to open or connect.
+- **Health dots in the sidebar**: a connected server's dot turns orange or red when something needs attention, with the reason under its name (for example "Disk / 93%" or "nginx failed"); hover for all of them. Failed services are checked every minute.
+- **Reopen where you left off**: at launch, Orbital connects again to the servers that were open, on the same tab, folder and tool tabs, with the same one in front. Servers that need a password or a new host key are left for you (one note says which). Turn it off in Settings → Starting Orbital.
+- **Favourite actions**: the ☆ at the end of a server's tabs adds a one-click button under its name: restart or reload a service, open a file or a folder, or run a snippet. Hover a button and click × to remove it.
+
+### Changed
+- **A dropped connection reconnects by itself.** When the Mac slept, the network changed or the server restarted, the next action used to fail with "the connection to this server was lost" and a Reconnect button. Now Orbital reconnects in the background (right away, then after 3 and 10 seconds) and finishes what you were doing on the new connection: same tab, folder, open files with unsaved edits, and selections. Terminals end with the connection, as before (tmux sessions carry on). Only when it can't reconnect, or needs you (a password that isn't saved, a changed host key), does it ask.
+
 ## 1.4.4 (2026-11-22)
 
 ### Fixed

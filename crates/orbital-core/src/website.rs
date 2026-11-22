@@ -353,7 +353,7 @@ pub fn plan(input: &WebsiteInput, probe: &Probe, cfg: &NginxConfig) -> Result<We
     })
 }
 
-fn nginx_test() -> Validator {
+pub(crate) fn nginx_test() -> Validator {
     Validator {
         name: "nginx".into(),
         command: "nginx -t".into(),

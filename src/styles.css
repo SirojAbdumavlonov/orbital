@@ -998,7 +998,7 @@ kbd { font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border: 1px
 /* A tab's right-hand pane, hidden (⌘\\ or the button at the end of the tab row) */
 .main.pane-hidden .files, .main.pane-hidden .split { grid-template-columns: minmax(0, 1fr); }
 .main.pane-hidden .files > .editor, .main.pane-hidden .split > .drawer { display: none; }
-.tabs .pane-toggle { align-self: center; margin-left: auto; flex: none; }
+.tabs-end { margin-left: auto; display: flex; align-items: center; gap: 2px; flex: none; }
 
 /* Install progress in the "+" window */
 .progress-ring { flex: none; }
@@ -1008,3 +1008,60 @@ kbd { font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border: 1px
 .picker-card.try .badge { font-variant-numeric: tabular-nums; }
 .default-off { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--danger-line); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .default-off p { margin: 0; }
+
+/* Health of a connected server (sidebar dot and reason, overview cards) */
+.server .dot.live.health-warn { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+.server .dot.live.health-bad { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+.health-reason { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.health-reason.warn { color: var(--warn); }
+.health-reason.bad { color: var(--bad); }
+
+/* All-servers overview on Home */
+.welcome-inner.with-overview { max-width: 980px; }
+.overview { margin-top: 28px; display: flex; flex-direction: column; gap: 8px; }
+.overview-title { font-size: 12px; }
+.overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.server-card { display: flex; flex-direction: column; gap: 6px; align-items: stretch; text-align: left; padding: 12px; border: 1px solid var(--slate-4); border-radius: var(--radius-m); background: var(--slate-2); color: inherit; cursor: pointer; min-width: 0; }
+.server-card:hover { border-color: var(--amber); }
+.server-card.warn { border-color: var(--warn-soft); }
+.server-card.bad { border-color: var(--bad); }
+.server-card.off { opacity: .8; }
+.server-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.server-card-head b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.server-card .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--slate-4); flex: none; }
+.server-card .dot.live { background: var(--amber); }
+.server-card .dot.live.health-warn { background: var(--warn); }
+.server-card .dot.live.health-bad { background: var(--bad); }
+.server-card-addr { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.server-card-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; font-variant-numeric: tabular-nums; font-size: 13px; color: var(--ink); }
+.server-card-stats span { display: flex; flex-direction: column; min-width: 0; }
+.server-card-stats small { color: var(--ink-3); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.server-card-note { font-size: 12px; }
+.server-card-reasons { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.server-card-reasons.warn { color: var(--warn); }
+.server-card-reasons.bad { color: var(--bad); }
+
+/* Favourite actions under the server's name */
+.fav-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 8px; }
+.fav { position: relative; display: inline-flex; }
+.fav-btn { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border: 1px solid var(--slate-4); border-radius: 12px; background: var(--slate-2); color: var(--ink-2); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.fav-btn:hover:not(:disabled) { border-color: var(--amber); color: var(--ink); }
+.fav-btn:disabled { opacity: .6; }
+.fav-x { position: absolute; top: -5px; right: -5px; width: 15px; height: 15px; display: none; place-items: center; padding: 0; border: 1px solid var(--slate-4); border-radius: 50%; background: var(--slate-3); color: var(--ink-3); cursor: pointer; }
+.fav:hover .fav-x { display: grid; }
+.fav-x:hover { color: var(--bad); }
+.fav-form { display: flex; flex-direction: column; gap: 12px; }
+
+/* nginx routes (Nginx tab → a site) */
+.routes { display: flex; flex-direction: column; padding-bottom: 10px; }
+.routes-head { display: flex; align-items: center; padding: 10px 14px 6px; }
+.routes-empty, .routes-file { padding: 4px 14px; font-size: 12px; }
+.route { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-top: 1px solid var(--row-line); font-size: 12.5px; min-width: 0; }
+.route:hover { background: var(--slate-3); }
+.route-path { color: var(--ink); white-space: nowrap; }
+.route-to { color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.route-hand { font-size: 11px; }
+.route-form { display: flex; flex-direction: column; gap: 14px; }
+.route-diff { margin: 0; max-height: 260px; overflow: auto; padding: 8px 10px; background: var(--term-bg); border: 1px solid var(--slate-4); border-radius: var(--radius-s); font-size: 12px; line-height: 1.5; }
+.route-diff .add { color: var(--ok); }
+.route-diff .del { color: var(--bad); text-decoration: line-through; text-decoration-color: var(--bad-soft); }

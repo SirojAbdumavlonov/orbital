@@ -240,6 +240,34 @@ pub async fn rename(engine: Eng<'_>, session_id: String, from: String, to: Strin
 }
 
 #[tauri::command]
+pub async fn nginx_routes(engine: Eng<'_>, session_id: String, file: String, line: usize) -> R<orbital_core::routes::RoutesView> {
+    engine.nginx_routes(&session_id, &file, line).await
+}
+
+#[tauri::command]
+pub async fn nginx_route_change(
+    engine: Eng<'_>,
+    session_id: String,
+    file: String,
+    line: usize,
+    change: orbital_core::routes::RouteChange,
+    apply: bool,
+    progress: Channel<ProgressEvent>,
+) -> R<orbital_core::routes::RouteChangeReport> {
+    progress::run_job(
+        progress.id(),
+        sink(progress),
+        engine.nginx_route_change(&session_id, &file, line, &change, apply),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn failed_units(engine: Eng<'_>, session_id: String) -> R<Vec<String>> {
+    engine.failed_units(&session_id).await
+}
+
+#[tauri::command]
 pub async fn copy_within(engine: Eng<'_>, session_id: String, from: String, to: String, progress: Channel<ProgressEvent>) -> R<()> {
     progress::run_job(progress.id(), sink(progress), engine.copy_within(&session_id, &from, &to)).await
 }

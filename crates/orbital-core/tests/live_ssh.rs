@@ -1675,6 +1675,61 @@ async fn new_website_server_block_is_written_validated_and_rolled_back() {
     assert!(t.config_ok, "{}", t.config_output);
     assert!(t.server.status.is_some_and(|c| c == 200 || c == 301), "{:?}", t.server);
 
+    // Routes: a redirect added to the site's server block is written to its real file
+    // (not the sites-enabled link), passes nginx -t, is served after the reload, and
+    // removing it gives the file back as it was.
+    {
+        use orbital_core::routes::{Route, RouteChange, RouteTarget};
+        let cfg = engine.nginx_config(&s.id).await.unwrap();
+        let site = cfg.sites.iter().find(|x| x.server_names.contains(&domain)).unwrap();
+        let view = engine.nginx_routes(&s.id, &site.file, site.line).await.unwrap();
+        assert!(
+            view.file.ends_with(&domain) && !view.file.contains("sites-enabled"),
+            "{}",
+            view.file
+        );
+        assert_eq!(view.routes.len(), 1, "{:?}", view.routes);
+        let original = engine.run_command(&s.id, &format!("cat {}", view.file), true).await.unwrap().stdout;
+        let redirect = Route {
+            path: "/old".into(),
+            exact: true,
+            target: RouteTarget::Redirect {
+                to: "/new".into(),
+                code: 301,
+            },
+        };
+        let add = RouteChange::Add { route: redirect };
+        let preview = engine.nginx_route_change(&s.id, &site.file, site.line, &add, false).await.unwrap();
+        assert!(!preview.applied && preview.after.contains("location = /old"));
+        let done = engine.nginx_route_change(&s.id, &site.file, site.line, &add, true).await.unwrap();
+        assert!(done.applied && done.reloaded && done.backup_path.is_some(), "{done:?}");
+        let head = engine
+            .run_command(
+                &s.id,
+                &format!("for i in 1 2 3 4 5 6 7 8 9 10; do o=$(curl -s -o /dev/null -w '%{{http_code}} %{{redirect_url}}' -H 'Host: {domain}' http://127.0.0.1/old); case \"$o\" in 301*) break;; esac; sleep 0.5; done; printf '%s' \"$o\""),
+                false,
+            )
+            .await
+            .unwrap()
+            .stdout;
+        assert!(head.starts_with("301") && head.ends_with("/new"), "{head}");
+        engine
+            .nginx_route_change(&s.id, &site.file, site.line, &RouteChange::Remove { spec: "= /old".into() }, true)
+            .await
+            .unwrap();
+        let back = engine.run_command(&s.id, &format!("cat {}", view.file), true).await.unwrap().stdout;
+        assert_eq!(back, original, "adding and removing a route leaves the file as it was");
+        // nginx's own files are refused.
+        assert!(engine.nginx_routes(&s.id, "/etc/nginx/nginx.conf", 1).await.is_err());
+        let log = engine
+            .audit_query(&AuditFilter {
+                limit: Some(500),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(log.iter().any(|ev| ev.action == "nginx.route" && ev.outcome == Outcome::Success));
+    }
+
     // Remove it (and its folder): the file and its link are gone, a backup is kept, nginx still passes.
     let backup = engine
         .remove_website(&s.id, &rep.plan.file, None, Some(root.as_str()))
@@ -2329,4 +2384,16 @@ async fn nginx_default_site_is_never_changed() {
 
     root("ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default && systemctl reload nginx").await;
     engine.disconnect(&s.id).await.unwrap();
+}
+
+/// The health dot's failed-services check runs on a real server (empty or a list of units, never an error).
+#[tokio::test]
+async fn failed_units_are_listed() {
+    let Some(e) = env() else { return };
+    let Some(key) = e.key.clone() else { return };
+    let engine = engine();
+    let p = engine.create_profile(profile(&e, AuthMethod::Key, Some(key))).unwrap();
+    let a = connect(&engine, &p.id, None).await;
+    let failed = engine.failed_units(&a.id).await.unwrap();
+    assert!(failed.iter().all(|u| u.ends_with(".service")), "{failed:?}");
 }

@@ -31,6 +31,7 @@ pub mod ports;
 pub mod presence;
 pub mod profiles;
 pub mod progress;
+pub mod routes;
 pub mod secrets;
 pub mod services;
 pub mod sftp;

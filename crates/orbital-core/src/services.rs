@@ -129,7 +129,25 @@ pub fn action_command(unit: &str, action: ServiceAction) -> Result<String> {
     Ok(format!("systemctl {} -- {}", action.verb(), quote(unit)))
 }
 
+/// Failed services, for the sidebar's health dot and the overview: one cheap,
+/// read-only command (nothing interpolated).
+pub const FAILED_COMMAND: &str = "systemctl list-units --type=service --state=failed --no-legend --plain --no-pager 2>/dev/null; true";
+
+/// Unit names from `FAILED_COMMAND`'s output (systemd may prefix a row with ● or *).
+pub fn parse_failed(out: &str) -> Vec<String> {
+    out.lines()
+        .filter_map(|l| l.split_whitespace().find(|w| *w != "●" && *w != "*"))
+        .filter(|u| u.ends_with(".service") && validate_unit(u).is_ok())
+        .map(str::to_string)
+        .collect()
+}
+
 impl SshSession {
+    /// Services systemd reports as failed (empty without systemd).
+    pub async fn failed_units(&self) -> Result<Vec<String>> {
+        Ok(parse_failed(&self.exec(FAILED_COMMAND).await?.stdout))
+    }
+
     pub async fn has_systemd(&self) -> bool {
         self.exec("test -d /run/systemd/system && command -v systemctl")
             .await
@@ -217,6 +235,14 @@ pub fn journal_command(unit: &str, tail: u32, since: Option<i64>, until: Option<
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn failed_units_are_read_from_systemctl() {
+        let out = "\u{25cf} mysql.service loaded failed failed MySQL Community Server\nnginx.service      loaded failed failed A high performance web server\n\n0 loaded units listed.\n";
+        assert_eq!(parse_failed(out), ["mysql.service", "nginx.service"]);
+        assert!(parse_failed("").is_empty());
+        assert!(parse_failed("bad;rm.service loaded failed failed x\n").is_empty());
+    }
+
     #[test]
     fn journal_between_two_times() {
         use super::journal_command;

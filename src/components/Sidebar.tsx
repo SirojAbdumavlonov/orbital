@@ -6,6 +6,7 @@ import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Profile } from "../lib/api";
 import { goTo, useStore } from "../store";
+import { useSessionHealth } from "../lib/health";
 
 export function Sidebar() {
   const { profiles, sessions, active, connecting, connect, disconnect, setEditing, globalView, setGlobalView } = useStore();
@@ -58,9 +59,10 @@ export function Sidebar() {
                   onDoubleClick={() => setEditing(p)}
                   title={`${p.username}@${p.host}:${p.port}`}
                 >
-                  <span className={`dot ${sid ? "live" : ""}`} style={!sid && p.color ? { background: p.color } : undefined} />
+                  {sid ? <HealthDot sid={sid} /> : <span className="dot" style={p.color ? { background: p.color } : undefined} />}
                   <div style={{ minWidth: 0 }}>
                     <div className="name">{p.name}</div>
+                    {sid && <HealthReason sid={sid} />}
                     <div className="addr">
                       {(p.protocol ?? "sftp") !== "sftp" && <span className="proto">{PROTOCOL_NAMES[p.protocol].replace(" (HTTPS)", "S")}</span>}
                       {p.protocol === "s3" ? p.initialPath || p.host : <>{p.username}@{p.host}{p.port !== 22 && (p.protocol ?? "sftp") === "sftp" ? `:${p.port}` : ""}</>}
@@ -177,6 +179,24 @@ function AddMenu() {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** A connected server's dot: amber when all is well, the warning or alarm colour when something needs attention. */
+function HealthDot({ sid }: { sid: string }) {
+  const h = useSessionHealth(sid);
+  const what = h.level === "ok" ? "Connected; all looks fine" : h.level === "unknown" ? "Connected" : h.reasons.join("\n");
+  return <span className={`dot live health-${h.level}`} title={what} aria-label={what} />;
+}
+
+/** The first reason, under the server's name, while something needs attention. */
+function HealthReason({ sid }: { sid: string }) {
+  const h = useSessionHealth(sid);
+  if (h.level !== "warn" && h.level !== "bad") return null;
+  return (
+    <div className={`health-reason ${h.level}`} title={h.reasons.join("\n")}>
+      {h.reasons[0]}{h.reasons.length > 1 ? ` +${h.reasons.length - 1}` : ""}
     </div>
   );
 }

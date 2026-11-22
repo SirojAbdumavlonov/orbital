@@ -7,6 +7,7 @@ import { api, asApiError, Certificate, NginxConfig, NginxSite } from "../lib/api
 import { parentPath } from "../lib/format";
 import { SessionState, useStore } from "../store";
 import { useKept } from "../lib/kept";
+import { RoutesPanel } from "../components/NginxRoutes";
 
 const siteKey = (x: NginxSite) => `${x.file}:${x.line}`;
 const siteName = (x: NginxSite) => x.serverNames.join(", ") || "Default (any name)";
@@ -157,7 +158,9 @@ export function NginxView({ s }: { s: SessionState }) {
                   {cur.redirect && <><dt>Redirect</dt><dd className="mono">{cur.redirect}</dd></>}
                   <dt>Defined in</dt><dd className="mono">{cur.file}:{cur.line}</dd>
                 </dl>
-                <div className="scroll" style={{ borderTop: "1px solid var(--slate-4)" }}>
+                {routesEditable(cur.file)
+                  ? <div className="scroll" style={{ borderTop: "1px solid var(--slate-4)" }}><RoutesPanel key={siteKey(cur)} sid={sid} file={cur.file} line={cur.line} onChanged={() => void load()} /></div>
+                  : (<div className="scroll" style={{ borderTop: "1px solid var(--slate-4)" }}>
                   <table className="table">
                     <thead><tr><th>Location</th><th>Goes to</th></tr></thead>
                     <tbody>
@@ -176,7 +179,7 @@ export function NginxView({ s }: { s: SessionState }) {
                     </tbody>
                   </table>
                   {cur.locations.length === 0 && <div className="empty" style={{ flex: "none" }}><p>No location blocks.</p></div>}
-                </div>
+                </div>)}
               </>
             )}
           </aside>
@@ -185,6 +188,11 @@ export function NginxView({ s }: { s: SessionState }) {
       {removing && cfg && <RemoveSiteDialog s={s} site={removing} cfg={cfg} onClose={() => setRemoving(null)} onDone={() => { setRemoving(null); setSel(null); void load(); }} />}
     </div>
   );
+}
+
+/** Routes can be changed in a site's own file, never in nginx's stock files. */
+function routesEditable(file: string): boolean {
+  return /^\/etc\/nginx\//.test(file) && !/\/(default|default\.conf|nginx\.conf)$/.test(file);
 }
 
 /** A name to test the site with: its first real domain (not a wildcard or regex). */

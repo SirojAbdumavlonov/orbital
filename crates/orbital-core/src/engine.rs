@@ -1323,6 +1323,81 @@ impl Engine {
         Ok(backup)
     }
 
+    /// The real file behind a site path (sites-enabled links resolved), checked for route edits.
+    async fn route_file(&self, s: &SshSession, file: &str) -> Result<String> {
+        crate::shell::validate_path(file)?;
+        let (o, _) = s.exec_inspect(&format!("readlink -f -- {}", crate::shell::quote(file))).await?;
+        let real = o.stdout.trim().to_string();
+        let real = if real.is_empty() { file.to_string() } else { real };
+        crate::routes::check_site_file(file, &real)?;
+        Ok(real)
+    }
+
+    /// The routes (`location` blocks) of the server block on `line` of `file`.
+    pub async fn nginx_routes(&self, sid: &str, file: &str, line: usize) -> Result<crate::routes::RoutesView> {
+        let s = self.session(sid).await?;
+        let real = self.route_file(&s, file).await?;
+        let content = s.read_text(&real).await?;
+        Ok(crate::routes::RoutesView {
+            routes: crate::routes::list(&content.content, line)?,
+            file: real,
+            line,
+        })
+    }
+
+    /// Preview (`apply` false) or make a route change in a site's own file:
+    /// safe save with `nginx -t` (rolled back when it fails), then reload.
+    pub async fn nginx_route_change(
+        &self,
+        sid: &str,
+        file: &str,
+        line: usize,
+        change: &crate::routes::RouteChange,
+        apply: bool,
+    ) -> Result<crate::routes::RouteChangeReport> {
+        use crate::routes::RouteChange as C;
+        let s = self.session(sid).await?;
+        let real = self.route_file(&s, file).await?;
+        let content = s.read_text(&real).await?;
+        let after = crate::routes::apply(&content.content, line, change)?;
+        let mut report = crate::routes::RouteChangeReport {
+            file: real.clone(),
+            before: content.content.clone(),
+            after: after.clone(),
+            applied: false,
+            backup_path: None,
+            reloaded: false,
+            reload_output: String::new(),
+        };
+        if !apply {
+            return Ok(report);
+        }
+        let what = match change {
+            C::Add { route } => format!("add {}", route.path),
+            C::Replace { spec, route } => format!("change {spec} → {}", route.path),
+            C::Remove { spec } => format!("remove {spec}"),
+        };
+        progress::step(format!("Writing {real} and testing it with nginx -t …"));
+        let target = format!("{real}: {what}");
+        let rep = self
+            .audited(
+                &s,
+                Category::Config,
+                "nginx.route",
+                Some(&target),
+                None,
+                s.safe_write(&real, &after, Some(crate::website::nginx_test()), true, content.mtime),
+            )
+            .await?;
+        progress::step("Reloading nginx …");
+        let (reloaded, out) = s.reload_nginx().await?;
+        report.applied = true;
+        report.backup_path = rep.backup_path;
+        report.reloaded = reloaded;
+        report.reload_output = out;
+        Ok(report)
+    }
+
     /// Turn nginx's stock default site off by removing its sites-enabled link;
     /// the file itself is never changed. Put back (and refused) if nginx still
     /// fails without it. Returns the file the link pointed at.
@@ -2455,6 +2530,11 @@ impl Engine {
     }
 
     // ---------- services ----------
+
+    /// Failed services, polled for the health dot and overview (read-only, not audited).
+    pub async fn failed_units(&self, sid: &str) -> Result<Vec<String>> {
+        self.session(sid).await?.failed_units().await
+    }
 
     pub async fn list_services(&self, sid: &str) -> Result<Vec<Service>> {
         self.session(sid).await?.list_services().await

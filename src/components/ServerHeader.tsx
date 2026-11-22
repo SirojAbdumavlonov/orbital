@@ -7,6 +7,7 @@ import { withSafetyOverride } from "../lib/remote";
 import { bytes, duration } from "../lib/format";
 import { useSettings } from "../lib/settings";
 import { usePanes } from "../lib/panes";
+import { FavouriteAdd, FavouriteBar } from "./Favourites";
 import { KEYS } from "../lib/platform";
 import { ALWAYS_TOOLS, DEDICATED_TOOLS, isSsh, SessionState, Tab, useStore } from "../store";
 import { PROTOCOL_NAMES } from "./ProfileDialog";
@@ -260,6 +261,7 @@ export function ServerHeader({ s, hasPane }: { s: SessionState; hasPane?: boolea
           <button className="btn primary" onClick={() => reconnect(s.info.id)}>Reconnect</button>
         </div>
       )}
+      <FavouriteBar s={s} />
       <nav className="tabs" role="tablist">
         <div className="tab-scroll" ref={strip}>
         {TABS.filter((t) => (!isSsh(s) ? t.id === "files" || t.id === "activity" : t.id === "services" ? s.info.hasSystemd : true)).map((t) => (
@@ -286,7 +288,10 @@ export function ServerHeader({ s, hasPane }: { s: SessionState; hasPane?: boolea
         })}
         </div>
         {isSsh(s) && <AddToolMenu s={s} />}
-        {hasPane && <PaneToggle tab={s.tab} />}
+        <span className="tabs-end">
+          <FavouriteAdd s={s} />
+          {hasPane && <PaneToggle tab={s.tab} />}
+        </span>
       </nav>
     </header>
   );
