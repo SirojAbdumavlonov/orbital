@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.4.7 (2026-11-22)
+
 ### Added
 - **Containers count too**: the health dot and alerts include containers stuck restarting or reported unhealthy by their health check, and favourite actions can restart a Docker container.
 
