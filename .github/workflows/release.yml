@@ -25,8 +25,8 @@ name: Release
 # the private key and installed copies can't be updated any more: back it up.
 #
 # Anonymous usage statistics (optional, asked before anything is sent): the
-# variable ORBITAL_STATS_URL (Settings → Variables), the https:// address of
-# your own stats-server/ install. Unset, the builds send nothing and never ask.
+# variable or secret ORBITAL_STATS_URL (Settings → Secrets and variables →
+# Actions), the https:// address of your own stats-server/ install. Unset, the builds send nothing and never ask.
 #
 # Where releases go: this repository, unless the variable RELEASES_REPO
 # (Settings → Variables) names another, e.g. "you/orbital-releases" for
@@ -150,7 +150,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Anonymous usage statistics (opt-in, see crates/orbital-core/src/stats.rs); unset = none sent.
-          ORBITAL_STATS_URL: ${{ vars.ORBITAL_STATS_URL }}
+          ORBITAL_STATS_URL: ${{ vars.ORBITAL_STATS_URL || secrets.ORBITAL_STATS_URL }}
           # APPLE_* come from the "Signing certificate" step, only when usable.
         with:
           tagName: ${{ github.ref_name }}
@@ -199,7 +199,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Anonymous usage statistics (opt-in, see crates/orbital-core/src/stats.rs); unset = none sent.
-          ORBITAL_STATS_URL: ${{ vars.ORBITAL_STATS_URL }}
+          ORBITAL_STATS_URL: ${{ vars.ORBITAL_STATS_URL || secrets.ORBITAL_STATS_URL }}
         with:
           releaseId: ${{ needs.macos.outputs.release_id }}
           owner: ${{ steps.prep.outputs.owner }}
@@ -247,7 +247,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Anonymous usage statistics (opt-in, see crates/orbital-core/src/stats.rs); unset = none sent.
-          ORBITAL_STATS_URL: ${{ vars.ORBITAL_STATS_URL }}
+          ORBITAL_STATS_URL: ${{ vars.ORBITAL_STATS_URL || secrets.ORBITAL_STATS_URL }}
           APPIMAGE_EXTRACT_AND_RUN: 1
         with:
           releaseId: ${{ needs.macos.outputs.release_id }}

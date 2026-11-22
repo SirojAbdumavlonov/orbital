@@ -822,6 +822,9 @@ export interface WebsitePlan {
   content: string;
   /** Why it can't be created as it stands. Empty: good to go. */
   blockers: string[];
+  /** nginx is broken by its default site pointing at deleted certificates; turning it off repairs it. */
+  defaultOffFixes: boolean;
+  defaultMissing: string[];
 }
 export interface WebsiteReport { plan: WebsitePlan; write: SafeWriteReport; rootCreated: boolean; reloaded: boolean; reloadOutput: string }
 
@@ -1136,6 +1139,8 @@ export const api = {
     invoke<number>("upload", { sessionId, localPath, remotePath, progress: progressChannel(onProgress) }),
   download: (sessionId: string, remotePath: string, localPath: string) => invoke<number>("download", { sessionId, remotePath, localPath }),
 
+  /** Turn nginx's default site off by its sites-enabled link (the file isn't touched); put back if nginx still fails. */
+  disableDefaultSite: (sessionId: string, onProgress?: OnProgress) => invoke<string>("disable_default_site", { sessionId, progress: progressChannel(onProgress) }),
   /** Paste on the same server: copy a file or folder to another place there (cp, sudo when refused). */
   copyWithin: (sessionId: string, from: string, to: string, onProgress?: OnProgress) =>
     invoke<void>("copy_within", { sessionId, from, to, progress: progressChannel(onProgress) }),

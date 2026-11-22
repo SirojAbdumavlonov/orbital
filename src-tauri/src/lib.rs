@@ -332,6 +332,7 @@ pub fn run() {
             commands::stats_ping,
             commands::send_feedback,
             commands::copy_within,
+            commands::disable_default_site,
             commands::clipboard_read,
             commands::feedback_available,
             commands::container_action,

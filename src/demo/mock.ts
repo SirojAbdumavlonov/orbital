@@ -237,6 +237,7 @@ const audit = [
 let statsState: { available: boolean; enabled: boolean | null } = { available: true, enabled: null };
 
 const demoInstalled = new Set<string>();
+let defaultSiteOff = false;
 
 const tools = ([
   { id: "nginx", name: "nginx", category: "Web server", running: true, binary: "/usr/sbin/nginx", unit: "nginx.service", unitState: "active", paths: [{ path: "/etc/nginx", isDir: true }, { path: "/var/log/nginx", isDir: true }] },
@@ -810,7 +811,23 @@ export function install() {
       case "metrics": return metric();
       case "detect_tools": return [...(profiles.find((x) => String(args.sessionId).startsWith("s-" + x.id))?.name === "staging" ? tools.filter((t) => ["sshd", "cron"].includes(t.id)) : tools), ...[...demoInstalled].filter((id) => !tools.some((t) => t.id === id)).map((id) => ({ id, name: id === "certbot" ? "HTTPS certificates" : id[0].toUpperCase() + id.slice(1), category: "Installed", running: true, binary: `/usr/bin/${id}`, unit: `${id}.service`, unitState: "active", paths: [], onHost: true, containers: [] }))];
       case "nginx_config": return structuredClone(nginxConfig);
-      case "website_plan": await new Promise((r) => setTimeout(r, 250)); return websitePlan(structuredClone(args.input));
+      case "website_plan": {
+        await new Promise((r) => setTimeout(r, 250));
+        const plan: any = websitePlan(structuredClone(args.input));
+        // Try the default-site repair: a domain starting with "broken." finds nginx broken by its default site.
+        const broken = String(args.input.domain).startsWith("broken.") && !defaultSiteOff;
+        const missing = "/etc/letsencrypt/live/old.example.com/fullchain.pem";
+        return {
+          ...plan,
+          blockers: broken ? [`nginx's configuration already has errors; fix them first:\n[emerg] cannot load certificate "${missing}": BIO_new_file() failed (No such file or directory)\nnginx: configuration file /etc/nginx/nginx.conf test failed`, ...(plan.blockers ?? [])] : plan.blockers ?? [],
+          defaultOffFixes: broken,
+          defaultMissing: broken ? [missing] : [],
+        };
+      }
+      case "disable_default_site":
+        await progress(args.progress, [[0, "step", "Turning nginx's default site off (its link only) and testing nginx …"], [700, "line", "nginx: configuration file /etc/nginx/nginx.conf test is successful"], [500, "step", "Reloading nginx …"]]);
+        defaultSiteOff = true;
+        return "/etc/nginx/sites-available/default";
       case "create_website":
         await progress(args.progress, [
           [0, "step", `Checking nginx's sites for ${args.input.domain} …`],

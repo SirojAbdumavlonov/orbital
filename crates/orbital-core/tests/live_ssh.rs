@@ -1624,6 +1624,14 @@ async fn new_website_server_block_is_written_validated_and_rolled_back() {
         .find(|x| x.server_names.contains(&domain))
         .expect("new site in nginx -T");
     assert_eq!(site.root.as_deref(), Some(root.as_str()));
+    // A certificate for this name may only change the site's own file (never nginx's default);
+    // a name no site serves gets the certificate alone.
+    let own = orbital_core::certbot::nginx_install_targets(&cfg, std::slice::from_ref(&domain)).unwrap();
+    assert!(
+        own.len() == 1 && own[0].ends_with(&domain) && !orbital_core::certbot::is_nginx_default_file(&own[0]),
+        "{own:?}"
+    );
+    assert!(orbital_core::certbot::nginx_install_targets(&cfg, &["nobody-serves-this.test".to_string()]).is_err());
     // nginx applies a reload in the background: give it a few seconds to serve the new site.
     let page = engine
         .run_command(
@@ -2276,4 +2284,49 @@ async fn paste_copies_within_the_server() {
         .unwrap();
     assert!(log.iter().any(|ev| ev.action == "file.copy" && ev.outcome == Outcome::Success));
     engine.run_command(&a.id, &format!("rm -rf '{dir}'"), false).await.unwrap();
+}
+
+/// nginx's stock default site: never removed as a website, and turned off only
+/// by its sites-enabled link, with the file left byte for byte as it was.
+/// Needs nginx with the Debian layout; opt in with ORBITAL_IT_NGINX=1 (CI does).
+#[tokio::test]
+async fn nginx_default_site_is_never_changed() {
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_NGINX").is_err() || std::env::var("ORBITAL_IT_NO_PASSWORD").is_ok() {
+        eprintln!("skipped: set ORBITAL_IT_NGINX=1 on a disposable machine with nginx");
+        return;
+    }
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    let root = |c: &str| {
+        let (engine, id, c) = (&engine, s.id.clone(), c.to_string());
+        async move { engine.run_command(&id, &c, true).await.unwrap() }
+    };
+    if !root("test -L /etc/nginx/sites-enabled/default && echo yes || true")
+        .await
+        .stdout
+        .contains("yes")
+    {
+        eprintln!("skipped: no sites-enabled/default link here");
+        return;
+    }
+    let sum = "sha256sum /etc/nginx/sites-available/default";
+    let before = root(sum).await.stdout;
+
+    assert!(matches!(
+        engine.remove_website(&s.id, "/etc/nginx/sites-available/default", None, None).await,
+        Err(Error::InvalidInput(_))
+    ));
+    let target = engine.disable_default_site(&s.id).await.unwrap();
+    assert!(target.ends_with("sites-available/default"), "{target}");
+    let after = root("test -e /etc/nginx/sites-enabled/default && echo still || echo gone; nginx -t 2>&1 | tail -1")
+        .await
+        .stdout;
+    assert!(after.contains("gone") && after.contains("successful"), "{after}");
+    assert_eq!(root(sum).await.stdout, before, "the default file itself is untouched");
+    // Already off: nothing to do.
+    assert_eq!(engine.disable_default_site(&s.id).await.unwrap(), "");
+
+    root("ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default && systemctl reload nginx").await;
+    engine.disconnect(&s.id).await.unwrap();
 }

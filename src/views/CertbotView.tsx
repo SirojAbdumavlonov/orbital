@@ -114,9 +114,9 @@ function IssueDialog({ s, status, initialDomains, onClose, onDone }: { s: Sessio
         key: `certbot:${sid}`,
         title: `Certificate for ${list[0]}`,
         sid,
-        done: (o) => (o.exitCode === 0 ? "Certificate issued" : { failed: "Let's Encrypt didn't issue it; open the certificates tab for its output" }),
+        done: (o) => (o.exitCode === 0 ? certOnlyNote(o.stdout) ?? "Certificate issued" : { failed: "Let's Encrypt didn't issue it; open the certificates tab for its output" }),
       });
-      onDone(out, out.exitCode === 0 ? `Certificate issued for ${list[0]}` : "Let's Encrypt didn't issue the certificate");
+      onDone(out, out.exitCode === 0 ? certOnlyNote(out.stdout) ?? `Certificate issued for ${list[0]}` : "Let's Encrypt didn't issue the certificate");
       if (out.exitCode === 0) onClose();
     } catch (e) {
       // The job reports the error.
@@ -316,4 +316,10 @@ export function CertbotView({ s }: { s: SessionState }) {
       )}
     </div>
   );
+}
+
+/** The engine's note when it got the certificate without letting certbot change nginx (no site of its own serves the name). */
+export function certOnlyNote(stdout: string): string | null {
+  const line = stdout.split("\n").find((l) => l.startsWith("Orbital got the certificate only"));
+  return line ? line.trim() : null;
 }

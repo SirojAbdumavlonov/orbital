@@ -1165,6 +1165,11 @@ pub async fn website_test(engine: Eng<'_>, session_id: String, domain: String, h
 }
 
 #[tauri::command]
+pub async fn disable_default_site(engine: Eng<'_>, session_id: String, progress: Channel<ProgressEvent>) -> R<String> {
+    progress::run_job(progress.id(), sink(progress), engine.disable_default_site(&session_id)).await
+}
+
+#[tauri::command]
 pub async fn remove_website(
     engine: Eng<'_>,
     session_id: String,

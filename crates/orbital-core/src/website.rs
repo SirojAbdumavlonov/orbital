@@ -70,6 +70,10 @@ pub struct WebsitePlan {
     /// Why it can't be created as it stands (file exists, name already served,
     /// nginx's configuration already broken). Empty: good to go.
     pub blockers: Vec<String>,
+    /// nginx is broken by its stock default site pointing at certificates
+    /// that are gone: turning that site off (its link only) repairs it.
+    pub default_off_fixes: bool,
+    pub default_missing: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -226,15 +230,49 @@ pub fn probe_script(domain: &str, root: Option<&str>) -> String {
     if let Some(r) = root {
         s.push_str(&format!("if [ -d {} ]; then echo ROOT=yes; fi; ", quote(r)));
     }
+    // Is nginx's stock default site enabled (as a link), and does it point at
+    // certificates that are gone? Then turning it off (the link only) repairs nginx.
+    s.push_str(&format!(
+        "if [ -L {l} ]; then echo DEFAULT=link; for c in $(grep -hoE '/etc/letsencrypt/live/[^;[:space:]]+' {l} 2>/dev/null); do [ -e \"$c\" ] || echo DEFAULT_MISSING=$c; done; fi; ",
+        l = quote(DEFAULT_LINK)
+    ));
     s.push_str("true");
     s
 }
+
+/// The link that enables nginx's stock default site (Debian layout). Orbital
+/// never edits or deletes the file it points at; it can only remove this link.
+pub const DEFAULT_LINK: &str = "/etc/nginx/sites-enabled/default";
+
+/// Turn nginx's default site off by removing its sites-enabled link (the file
+/// in sites-available stays exactly as it is), then nginx -t; if nginx still
+/// fails, the link is put back and the script fails with nginx's message.
+pub const DEFAULT_OFF_SCRIPT: &str = r#"set -u
+L=/etc/nginx/sites-enabled/default
+if [ ! -L "$L" ]; then
+  if [ -e "$L" ]; then echo "$L is a file, not a link; Orbital leaves nginx's default site alone" >&2; exit 3; fi
+  echo "nginx's default site is already off"; exit 0
+fi
+T=$(readlink -- "$L")
+rm -f -- "$L"
+if out=$(nginx -t 2>&1); then
+  echo "$out"; echo "@@default_off $T"
+else
+  ln -s -- "$T" "$L"
+  echo "$out" >&2
+  echo "nginx -t still fails without the default site, so it was turned back on; the problem is elsewhere" >&2
+  exit 4
+fi"#;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Probe {
     pub layout: Option<Layout>,
     pub existing: Vec<String>,
     pub root_exists: bool,
+    /// nginx's default site is enabled through a sites-enabled link.
+    pub default_link: bool,
+    /// Certificates the enabled default site points at that don't exist.
+    pub default_missing: Vec<String>,
 }
 
 pub fn parse_probe(out: &str) -> Probe {
@@ -250,6 +288,12 @@ pub fn parse_probe(out: &str) -> Probe {
             p.existing.push(path.to_string());
         } else if line == "ROOT=yes" {
             p.root_exists = true;
+        } else if line == "DEFAULT=link" {
+            p.default_link = true;
+        } else if let Some(c) = line.strip_prefix("DEFAULT_MISSING=") {
+            if !p.default_missing.iter().any(|x| x == c) {
+                p.default_missing.push(c.to_string());
+            }
         }
     }
     p
@@ -303,6 +347,8 @@ pub fn plan(input: &WebsiteInput, probe: &Probe, cfg: &NginxConfig) -> Result<We
         root_exists: root.is_some() && probe.root_exists,
         root,
         content: render(input),
+        default_off_fixes: !cfg.test_ok && probe.default_link && !probe.default_missing.is_empty(),
+        default_missing: probe.default_missing.clone(),
         blockers,
     })
 }
@@ -446,6 +492,11 @@ pub fn parse_local_test(domain: &str, https: bool, out: &str) -> SiteProbe {
 
 /// Only nginx's own site files can be removed.
 pub fn validate_site_file(file: &str) -> Result<&str> {
+    if crate::certbot::is_nginx_default_file(file) {
+        return Err(Error::InvalidInput(format!(
+            "{file} is one of nginx's own files; Orbital doesn't delete or change it"
+        )));
+    }
     let ok = ["/etc/nginx/sites-available/", "/etc/nginx/sites-enabled/", "/etc/nginx/conf.d/"]
         .iter()
         .any(|dir| file.starts_with(dir) && file.len() > dir.len())
@@ -668,12 +719,38 @@ mod tests {
     }
 
     #[test]
+    fn nginx_stock_files_are_never_removed_and_default_goes_off_by_its_link() {
+        for f in [
+            "/etc/nginx/sites-available/default",
+            "/etc/nginx/sites-enabled/default",
+            "/etc/nginx/conf.d/default.conf",
+        ] {
+            assert!(validate_site_file(f).is_err(), "{f}");
+            assert!(remove_script(f).is_err(), "{f}");
+        }
+        assert!(validate_site_file("/etc/nginx/sites-available/default.example.com").is_ok());
+        // The turn-off script only removes the link, never the file it points at, and puts it back when nginx still fails.
+        assert!(!DEFAULT_OFF_SCRIPT.contains("sites-available"));
+        assert!(DEFAULT_OFF_SCRIPT.contains("rm -f -- \"$L\"") && DEFAULT_OFF_SCRIPT.contains("ln -s -- \"$T\" \"$L\""));
+        let o = std::process::Command::new("sh")
+            .arg("-n")
+            .arg("-c")
+            .arg(DEFAULT_OFF_SCRIPT)
+            .output()
+            .unwrap();
+        assert!(o.status.success());
+    }
+
+    #[test]
     fn probes_and_plans() {
         let s = probe_script("example.com", Some("/var/www/example.com"));
         assert!(s.contains("/etc/nginx/sites-available/example.com"));
         assert!(s.contains("/etc/nginx/conf.d/example.com.conf"));
         assert!(s.contains("[ -d /var/www/example.com ]"));
 
+        let d = parse_probe("LAYOUT=sites\nDEFAULT=link\nDEFAULT_MISSING=/etc/letsencrypt/live/old.example.com/fullchain.pem\nDEFAULT_MISSING=/etc/letsencrypt/live/old.example.com/fullchain.pem\n");
+        assert!(d.default_link && d.default_missing == ["/etc/letsencrypt/live/old.example.com/fullchain.pem"]);
+        assert!(probe_script("example.com", None).contains("DEFAULT=link"));
         let p = parse_probe("LAYOUT=sites\nEXISTS=/etc/nginx/conf.d/example.com.conf\nROOT=yes\n");
         assert_eq!(p.layout, Some(Layout::SitesAvailable));
         assert!(p.root_exists);

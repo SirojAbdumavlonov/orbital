@@ -1006,3 +1006,5 @@ kbd { font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border: 1px
 .progress-ring-track { stroke: var(--slate-4); }
 .progress-ring-fill { stroke: var(--amber); stroke-linecap: round; transition: stroke-dashoffset .4s ease; }
 .picker-card.try .badge { font-variant-numeric: tabular-nums; }
+.default-off { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--danger-line); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.default-off p { margin: 0; }

@@ -144,7 +144,7 @@ export function NginxView({ s }: { s: SessionState }) {
                     </button>
                   )}
                   {testName(cur) && <button className="btn" title="nginx -t, a request on the server and one from this computer" onClick={() => setTesting(testing === siteKey(cur) ? null : siteKey(cur))}><FlaskConical size={13} /> Test</button>}
-                  {/^\/etc\/nginx\/(sites-available|sites-enabled|conf\.d)\//.test(cur.file) && (
+                  {/^\/etc\/nginx\/(sites-available|sites-enabled|conf\.d)\//.test(cur.file) && !/\/(default|default\.conf)$/.test(cur.file) && (
                     <button className="btn danger" title="Remove this site from nginx (a backup is kept)" onClick={() => setRemoving(cur)}><Trash2 size={13} /> Delete website…</button>
                   )}
                 </div>

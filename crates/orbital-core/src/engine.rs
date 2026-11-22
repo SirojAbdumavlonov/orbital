@@ -1323,6 +1323,42 @@ impl Engine {
         Ok(backup)
     }
 
+    /// Turn nginx's stock default site off by removing its sites-enabled link;
+    /// the file itself is never changed. Put back (and refused) if nginx still
+    /// fails without it. Returns the file the link pointed at.
+    pub async fn disable_default_site(&self, sid: &str) -> Result<String> {
+        let s = self.session(sid).await?;
+        const ACTION: &str = "nginx.default_off";
+        let script = crate::website::DEFAULT_OFF_SCRIPT;
+        progress::step("Turning nginx's default site off (its link only) and testing nginx …");
+        let sent = s.privileged_command(script);
+        let o = match s.exec_privileged(script).await {
+            Ok(o) => o,
+            Err(e) => {
+                self.record_error(&s, Category::Config, ACTION, crate::website::DEFAULT_LINK, Some(sent), &e);
+                return Err(e);
+            }
+        };
+        self.record_exec(&s, Category::Config, ACTION, crate::website::DEFAULT_LINK, &sent, &o);
+        if !o.ok() {
+            return Err(Error::ValidationFailed {
+                validator: "nginx -t".into(),
+                output: o.combined().trim().to_string(),
+            });
+        }
+        let target = o
+            .stdout
+            .lines()
+            .find_map(|l| l.strip_prefix("@@default_off "))
+            .unwrap_or("")
+            .to_string();
+        if !target.is_empty() {
+            progress::step("Reloading nginx …");
+            s.reload_nginx().await?;
+        }
+        Ok(target)
+    }
+
     pub async fn create_website(&self, sid: &str, input: &WebsiteInput) -> Result<WebsiteReport> {
         let s = self.session(sid).await?;
         const ACTION: &str = "website.create";
@@ -1622,9 +1658,29 @@ impl Engine {
         let s = self.session(sid).await?;
         const ACTION: &str = "certificate.issue";
         let target = req.domains.join(", ");
-        let cmd = certbot::issue_command(&req).map_err(|e| self.refused(&s, ACTION, &target, e))?;
+        certbot::issue_command(&req).map_err(|e| self.refused(&s, ACTION, &target, e))?;
+        // certbot's nginx installer writes into whichever server block it picks,
+        // and into the default site when no block serves the name. Let it change
+        // only the name's own site file; otherwise get the certificate alone.
+        let mut not_installed = None;
+        if req.method == certbot::CertMethod::Nginx {
+            progress::step("Checking which nginx site serves these names …");
+            let cfg = s.nginx_config().await?;
+            match certbot::nginx_install_targets(&cfg, &req.domains) {
+                Ok(files) => progress::step(format!("HTTPS goes into {} …", files.join(", "))),
+                Err(why) => not_installed = Some(why),
+            }
+        }
+        let cmd = certbot::issue_command_with(&req, not_installed.is_none()).map_err(|e| self.refused(&s, ACTION, &target, e))?;
         progress::step(format!("Asking Let's Encrypt for a certificate for {target} …"));
-        self.security_exec(&s, ACTION, &target, &cmd).await
+        let mut out = self.security_exec(&s, ACTION, &target, &cmd).await?;
+        if let (Some(why), true) = (not_installed, out.ok()) {
+            out.stdout.push_str(&format!(
+                "\nOrbital got the certificate only and changed no nginx file: {why}. It's in /etc/letsencrypt/live/{}/; use Get certificate again once the site exists to turn HTTPS on.\n",
+                req.domains.first().map(|d| d.trim().to_ascii_lowercase()).unwrap_or_default()
+            ));
+        }
+        Ok(out)
     }
 
     pub async fn certbot_renew(&self, sid: &str, name: Option<&str>, mode: RenewMode) -> Result<ExecOutput> {

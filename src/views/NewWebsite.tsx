@@ -151,6 +151,7 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
   const [root, setRoot] = useState("");
   const [port, setPort] = useState("3000");
   const [plan, setPlan] = useState<WebsitePlan | null>(null);
+  const [planRev, setPlanRev] = useState(0);
   const [planError, setPlanError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [report, setReport] = useState<WebsiteReport | null>(null);
@@ -165,7 +166,22 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
       api.websitePlan(sid, input).then((p) => { if (alive) { setPlan(p); setPlanError(null); } }, (e) => { if (alive) { setPlan(null); setPlanError(asApiError(e).message); } });
     }, 400);
     return () => { alive = false; clearTimeout(t); };
-  }, [step, inputKey, report, sid]);
+  }, [step, inputKey, report, sid, planRev]);
+
+  // nginx broken by its stock default site (pointing at a deleted certificate): turn that site
+  // off by its sites-enabled link only. The default file itself is never changed.
+  const [fixing, setFixing] = useState(false);
+  async function defaultOff() {
+    setFixing(true);
+    try {
+      await runJob((p) => api.disableDefaultSite(sid, p), { key: `website:${sid}`, title: "Turning nginx's default site off", sid, quietHere: true, done: () => "nginx's default site is off; nginx works again" });
+      setPlanRev((n) => n + 1);
+    } catch {
+      // The job reports the error.
+    } finally {
+      setFixing(false);
+    }
+  }
 
   const job = useRunningJob(`website:${sid}`);
   async function createSite() {
@@ -367,7 +383,19 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
               </label>}
           {planError && <div className="alert" style={{ whiteSpace: "pre-wrap" }}>{planError}</div>}
           {plan && plan.blockers.length > 0 && (
-            <div className="alert"><b>Can't create this site yet:</b><ul className="steps" style={{ marginTop: 6 }}>{plan.blockers.map((b) => <li key={b} style={{ whiteSpace: "pre-wrap" }}>{b}</li>)}</ul></div>
+            <div className="alert"><b>Can't create this site yet:</b><ul className="steps" style={{ marginTop: 6 }}>{plan.blockers.map((b) => <li key={b} style={{ whiteSpace: "pre-wrap" }}>{b}</li>)}</ul>
+              {plan.defaultOffFixes && (
+                <div className="default-off">
+                  <p>
+                    The cause is nginx's own default site: it still points at a certificate that was deleted
+                    (<span className="mono">{plan.defaultMissing.join(", ")}</span>). Orbital can turn that site off by removing
+                    its link in <span className="mono">sites-enabled/</span>. The file <span className="mono">sites-available/default</span> stays
+                    exactly as it is, and if nginx still fails, the link is put back.
+                  </p>
+                  <button className="btn primary" disabled={fixing} onClick={defaultOff}>{fixing ? "Turning it off…" : "Turn off nginx's default site"}</button>
+                </div>
+              )}
+            </div>
           )}
           {plan && (
             <div className="field"><span>

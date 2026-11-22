@@ -248,6 +248,53 @@ pub fn validate_cert_name(n: &str) -> Result<&str> {
 
 /// The certbot command for a new certificate.
 pub fn issue_command(r: &IssueRequest) -> Result<String> {
+    issue_command_with(r, true)
+}
+
+/// nginx's own files Orbital never lets certbot change: the stock `default`
+/// site and the main nginx.conf. HTTPS for a name goes only into that name's
+/// own site file.
+pub fn is_nginx_default_file(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    matches!(name, "default" | "default.conf" | "nginx.conf")
+}
+
+/// Whether certbot's nginx installer may turn HTTPS on for `domains`: each
+/// name must be served (an exact `server_name`) by a site in its own file,
+/// and no stock file (`default`, nginx.conf) may name it, because certbot
+/// writes into whichever block it picks and, when none matches, into the
+/// default server. Ok: the files it will change. Err: why it may not.
+pub fn nginx_install_targets(cfg: &crate::nginx::NginxConfig, domains: &[String]) -> std::result::Result<Vec<String>, String> {
+    let mut files: Vec<String> = Vec::new();
+    for d in domains {
+        let d = d.trim().to_ascii_lowercase();
+        let serving: Vec<&crate::nginx::NginxSite> = cfg
+            .sites
+            .iter()
+            .filter(|site| site.server_names.iter().any(|n| n.eq_ignore_ascii_case(&d)))
+            .collect();
+        if let Some(stock) = serving.iter().find(|site| is_nginx_default_file(&site.file)) {
+            return Err(format!(
+                "{d} is named in {}, one of nginx's own files, which Orbital doesn't let certbot change",
+                stock.file
+            ));
+        }
+        let Some(site) = serving.first() else {
+            return Err(format!(
+                "no nginx site serves {d} yet, so certbot would put HTTPS into nginx's default site; create the site first (Nginx tab → New website)"
+            ));
+        };
+        if !files.contains(&site.file) {
+            files.push(site.file.clone());
+        }
+    }
+    Ok(files)
+}
+
+/// `install`: false gets the certificate only (`certonly`), with nginx or
+/// Apache answering Let's Encrypt's check through a temporary config, and
+/// changes no web-server file.
+pub fn issue_command_with(r: &IssueRequest, install: bool) -> Result<String> {
     if !r.agree_tos {
         return Err(Error::InvalidInput(
             "accept the Let's Encrypt Subscriber Agreement to request a certificate".into(),
@@ -265,6 +312,8 @@ pub fn issue_command(r: &IssueRequest) -> Result<String> {
     }
     let mut cmd = String::from("certbot");
     match r.method {
+        CertMethod::Nginx if !install => cmd.push_str(" certonly --nginx"),
+        CertMethod::Apache if !install => cmd.push_str(" certonly --apache"),
         CertMethod::Nginx => cmd.push_str(" --nginx"),
         CertMethod::Apache => cmd.push_str(" --apache"),
         CertMethod::Webroot => {
@@ -288,7 +337,7 @@ pub fn issue_command(r: &IssueRequest) -> Result<String> {
         Some(e) => return Err(Error::InvalidInput(format!("{e:?} is not an e-mail address"))),
         None => cmd.push_str(" --register-unsafely-without-email"),
     }
-    if matches!(r.method, CertMethod::Nginx | CertMethod::Apache) {
+    if install && matches!(r.method, CertMethod::Nginx | CertMethod::Apache) {
         cmd.push_str(if r.redirect { " --redirect" } else { " --no-redirect" });
     }
     if r.staging {
@@ -522,6 +571,66 @@ timer=certbot.timer|ActiveState=active|LoadState=loaded|NextElapseUSecRealtime=S
         assert!(usage_check_command("shop.example.com")
             .unwrap()
             .contains("grep -RlF -- /etc/letsencrypt/live/shop.example.com/ /etc/nginx"));
+    }
+
+    fn site(file: &str, names: &[&str]) -> crate::nginx::NginxSite {
+        crate::nginx::NginxSite {
+            file: file.into(),
+            line: 1,
+            server_names: names.iter().map(|n| n.to_string()).collect(),
+            listens: vec!["80".into()],
+            ssl: false,
+            ssl_certificate: None,
+            root: None,
+            redirect: None,
+            locations: vec![],
+        }
+    }
+
+    #[test]
+    fn certbot_may_only_change_the_names_own_site_file() {
+        let cfg = |sites: Vec<crate::nginx::NginxSite>| crate::nginx::NginxConfig {
+            test_ok: true,
+            test_output: String::new(),
+            files: vec![],
+            sites,
+            upstreams: vec![],
+        };
+        let d = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let ok = cfg(vec![
+            site("/etc/nginx/sites-enabled/default", &["_"]),
+            site(
+                "/etc/nginx/sites-enabled/stats.example.com",
+                &["stats.example.com", "www.stats.example.com"],
+            ),
+        ]);
+        assert_eq!(
+            nginx_install_targets(&ok, &d(&["Stats.example.com", "www.stats.example.com"])).unwrap(),
+            ["/etc/nginx/sites-enabled/stats.example.com"]
+        );
+        // Not served by any site: certbot would pick the default server.
+        let e = nginx_install_targets(&ok, &d(&["new.example.com"])).unwrap_err();
+        assert!(e.contains("no nginx site serves new.example.com"), "{e}");
+        // Named in the stock default file: never edited.
+        let in_default = cfg(vec![site("/etc/nginx/sites-enabled/default", &["_", "shop.example.com"])]);
+        assert!(nginx_install_targets(&in_default, &d(&["shop.example.com"]))
+            .unwrap_err()
+            .contains("nginx's own files"));
+        let conf_d = cfg(vec![site("/etc/nginx/conf.d/default.conf", &["a.example.com"])]);
+        assert!(nginx_install_targets(&conf_d, &d(&["a.example.com"])).is_err());
+        assert!(
+            is_nginx_default_file("/etc/nginx/nginx.conf") && !is_nginx_default_file("/etc/nginx/sites-available/defaults.example.com")
+        );
+    }
+
+    #[test]
+    fn certificate_only_changes_no_web_server_file() {
+        let mut r = req(&["stats.example.com"], CertMethod::Nginx);
+        r.redirect = true;
+        let only = issue_command_with(&r, false).unwrap();
+        assert!(only.starts_with("certbot certonly --nginx -d stats.example.com"), "{only}");
+        assert!(!only.contains("redirect"), "{only}");
+        assert!(issue_command(&r).unwrap().starts_with("certbot --nginx") && issue_command(&r).unwrap().contains("--redirect"));
     }
 
     /// The in-use check finds a site nginx loads from outside /etc/nginx (here a

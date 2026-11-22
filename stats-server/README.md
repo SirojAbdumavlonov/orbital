@@ -20,7 +20,7 @@ The same server receives what people write on Orbital's **Feedback** page (`POST
 
 2. Give it a domain with HTTPS. In Orbital: the server's **Nginx** tab → **New website** → domain (for example `stats.example.com`) → **Reverse proxy** to port **8787** → **Get certificate**. To keep visitors' IP addresses out of nginx's log too, add `access_log off;` inside that site's `server { … }` block.
 
-3. In GitHub: **Settings → Secrets and variables → Actions → Variables** → add `ORBITAL_STATS_URL` = `https://stats.example.com`. Releases built after that ask users and send here.
+3. In GitHub: **Settings → Secrets and variables → Actions → Variables** → add `ORBITAL_STATS_URL` = `https://stats.example.com` (a variable or a secret both work). Releases built after that ask users and send here.
 
 ## The dashboard
 
