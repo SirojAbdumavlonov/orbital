@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.4.5 (2026-11-22)
+
 ### Added
 - **nginx routes** (Nginx tab → a site → **Routes**): send a path to an app on a port (`/api` → `127.0.0.1:3000`, with WebSockets), serve a folder (`/static` → `/var/www/…`), or redirect (`/old` → `https://…`, 301/302/307/308). Add, change or remove routes; each change is previewed as the lines that change, written to the site's own file (the real file behind its sites-enabled link) through safe save: a backup, `nginx -t`, and rolled back if nginx rejects it, then nginx reloads. The rest of the file stays exactly as it was. Routes written by hand are listed (and can be removed); nginx's own files (`default`, nginx.conf) are never changed.
 - **All your servers on Home**: a card for every saved server, connected ones first, with CPU, memory, the fullest disk and uptime, and what needs attention (a disk nearly full, memory or load high, a failed service). Click a card to open or connect.
