@@ -29,7 +29,7 @@ tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 # Files: paste files, text or an image copied on this computer (macOS, Windows, Linux X11 and Wayland).
 arboard = { version = "3.7", features = ["wayland-data-control"] }
-png = "0.17"
+png = "0.18"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
