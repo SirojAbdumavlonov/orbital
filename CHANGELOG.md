@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.4.4 (2026-11-22)
+
 ### Fixed
 - **Getting an HTTPS certificate could change nginx's `default` site.** certbot writes HTTPS into the server block that serves the name, and into the default site when no block does; deleting that certificate later broke nginx for every change ("cannot load certificate … No such file or directory"). Orbital now lets certbot change only the name's own site file. When no site of its own serves the name (or it's named in `default` or nginx.conf), it gets the certificate alone (`certbot certonly`) and changes no nginx file, and says so.
 - **nginx broken by its default site** (it still points at a deleted certificate, so nothing else can change): New website now says so and offers **Turn off nginx's default site**. That removes only its link in `sites-enabled/`; the file itself stays exactly as it is, and if nginx still fails the link is put back. Orbital never edits or deletes nginx's own files (`default`, `default.conf`, `nginx.conf`); "Delete website…" refuses them.
