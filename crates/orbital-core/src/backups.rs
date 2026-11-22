@@ -633,6 +633,8 @@ mod tests {
         assert_eq!(back, validate(&pg).unwrap());
     }
 
+    // Runs the check under /bin/sh with an empty PATH; Windows has no /bin/sh (the app runs these on Linux servers).
+    #[cfg(unix)]
     #[test]
     fn database_jobs_check_their_dump_tool() {
         assert!(tool_check(&BackupSource::Folder { path: "/srv".into() }).is_none());
