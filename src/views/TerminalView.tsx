@@ -1,13 +1,14 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
-import { CornerDownLeft, Layers, Plus, ShieldAlert, Sparkles, SquareTerminal, User, X } from "lucide-react";
+import { Columns2, CornerDownLeft, Layers, Plus, Radio, Rows2, ShieldAlert, Sparkles, Square, SquareTerminal, User, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, asApiError, TmuxSession } from "../lib/api";
 import { relativeTime } from "../lib/format";
 import { useAccentColor, useResolvedTheme, useSettings } from "../lib/settings";
 import { SessionState, TermTab, useStore } from "../store";
 import { LineTracker, suggest } from "../lib/suggest";
+import { broadcastFrom, registerTerminal, unregisterTerminal, useBroadcast, useLiveTerminals } from "../lib/broadcast";
 
 export function TerminalView({ s }: { s: SessionState }) {
   const { openTerminal, closeTerminal, patch, renameTerminal } = useStore();
@@ -16,6 +17,18 @@ export function TerminalView({ s }: { s: SessionState }) {
   const asRoot = useSettings((x) => x.terminalAsRoot);
   const canRoot = s.info.elevation;
   const user = s.profile.username;
+  // The second terminal on screen, while split (it must exist and differ from the active one).
+  const split = s.termSplit && s.termSplit.key !== s.activeTerminal && s.terminals.some((t) => t.key === s.termSplit!.key) ? s.termSplit : null;
+  const splitWith = (dir: "row" | "column") => {
+    const other = s.terminals.find((t) => t.key !== s.activeTerminal);
+    if (other) return patch(sid, { termSplit: { key: other.key, dir } });
+    // Only one terminal: open another beside it.
+    const before = s.activeTerminal;
+    openTerminal(sid, null);
+    const now = useStore.getState().sessions[sid];
+    const added = now?.terminals[now.terminals.length - 1];
+    if (added && before) patch(sid, { activeTerminal: before, termSplit: { key: added.key, dir } });
+  };
   if (s.terminals.length === 0) {
     return (
       <div className="empty">
@@ -43,7 +56,7 @@ export function TerminalView({ s }: { s: SessionState }) {
     <div className="term-wrap">
       <div className="term-tabs" role="tablist">
         {s.terminals.map((t) => (
-          <div key={t.key} role="tab" aria-selected={t.key === s.activeTerminal} className={`term-tab ${t.key === s.activeTerminal ? "on" : ""}`} onClick={() => patch(sid, { activeTerminal: t.key })} onDoubleClick={() => setRenaming(t.key)} title={`${t.cwd ?? "home"} · double-click to rename`}>
+          <div key={t.key} role="tab" aria-selected={t.key === s.activeTerminal} className={`term-tab ${t.key === s.activeTerminal ? "on" : split && t.key === split.key ? "on second" : ""}`} onClick={() => patch(sid, split && t.key === split.key && s.activeTerminal ? { activeTerminal: t.key, termSplit: { key: s.activeTerminal, dir: split.dir } } : { activeTerminal: t.key })} onDoubleClick={() => setRenaming(t.key)} title={`${t.cwd ?? "home"} · double-click to rename`}>
             {t.root ? <span className="root-mark" title="Runs as root">#</span> : <SquareTerminal size={13} />}
             {renaming === t.key ? (
               <input
@@ -70,11 +83,34 @@ export function TerminalView({ s }: { s: SessionState }) {
           </button>
         )}
         <TmuxMenu s={s} />
+        <span className="term-tabs-end">
+          {split ? (
+            <button className="icon-btn" aria-label="Show one terminal" title="Show one terminal" onClick={() => patch(sid, { termSplit: null })}><Square size={14} /></button>
+          ) : (
+            <>
+              <button className="icon-btn" aria-label="Split side by side" title="Show two terminals side by side" onClick={() => splitWith("row")}><Columns2 size={14} /></button>
+              <button className="icon-btn" aria-label="Split one above the other" title="Show two terminals, one above the other" onClick={() => splitWith("column")}><Rows2 size={14} /></button>
+            </>
+          )}
+          <BroadcastMenu />
+        </span>
       </div>
       <div className="term-host">
-        {s.terminals.map((t) => (
-          <TerminalPane key={t.key} sid={sid} tab={t} visible={s.tab === "terminal" && t.key === s.activeTerminal} />
-        ))}
+        {s.terminals.map((t, i) => {
+          const second = split && t.key === split.key;
+          const same = s.terminals.filter((x) => x.title === t.title).length > 1;
+          const first = t.key === s.activeTerminal;
+          return (
+            <TerminalPane
+              key={t.key}
+              sid={sid}
+              tab={t}
+              label={`${s.profile.name} · ${t.title}${same ? ` ${i + 1}` : ""}`}
+              visible={s.tab === "terminal" && (first || !!second)}
+              area={!split ? undefined : first ? (split.dir === "row" ? "left" : "top") : second ? (split.dir === "row" ? "right" : "bottom") : undefined}
+            />
+          );
+        })}
       </div>
     </div>
   );
@@ -191,7 +227,10 @@ function cursorText(term: Terminal): { before: string; after: string } {
 /** The line ends like a shell prompt ($, #, %, >, ❯), so a command can be typed. */
 const atPrompt = (before: string) => /[$#%>❯]\s*$/.test(before);
 
-function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visible: boolean }) {
+function TerminalPane({ sid, tab, visible, label, area }: { sid: string; tab: TermTab; visible: boolean; label: string; area?: "left" | "right" | "top" | "bottom" }) {
+  const paneId = `${sid}:${tab.key}`;
+  const broadcasting = useBroadcast((b) => b.on && b.targets.includes(paneId));
+  const others = useBroadcast((b) => b.targets.length - 1);
   const host = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon>();
   const termRef = useRef<Terminal>();
@@ -281,6 +320,7 @@ function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visibl
       .then((tid) => {
         if (disposed) return api.terminalClose(tid);
         tidRef.current = tid;
+        registerTerminal({ id: paneId, tid, label });
         term.focus();
       })
       .catch((e) => {
@@ -304,6 +344,7 @@ function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visibl
       const done = t.feed(d);
       if (done && shown) typed.current = [...typed.current.filter((c) => c !== done), done].slice(-200);
       api.terminalWrite(tidRef.current, d);
+      broadcastFrom(paneId, d);
       later();
     });
     const parsed = term.onWriteParsed(later);
@@ -328,6 +369,7 @@ function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visibl
       parsed.dispose();
       cancelAnimationFrame(frame);
       resize.dispose();
+      unregisterTerminal(paneId);
       if (tidRef.current) api.terminalClose(tidRef.current);
       term.dispose();
     };
@@ -345,7 +387,13 @@ function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visibl
   useEffect(() => refresh.current(), [suggestOn]);
 
   return (
-    <div className="term-pane" style={{ visibility: visible ? "visible" : "hidden" }}>
+    <div className={`term-pane ${area ? `area-${area}` : ""} ${broadcasting ? "broadcasting" : ""}`} style={{ visibility: visible ? "visible" : "hidden" }}>
+      {(area || broadcasting) && (
+        <div className="term-pane-head">
+          <span className="mono">{label}</span>
+          {broadcasting && <span className="term-broadcast-tag"><Radio size={11} /> typing also goes to {others} other terminal{others === 1 ? "" : "s"}</span>}
+        </div>
+      )}
       <div className="term-xterm" ref={host} />
       {suggestOn && (
         <div className="term-suggest" aria-label="Suggested commands">
@@ -362,6 +410,42 @@ function TerminalPane({ sid, tab, visible }: { sid: string; tab: TermTab; visibl
           ) : (
             <span className="faint">Suggestions from this server's history and common next steps appear here as you type.</span>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "Type in several": choose terminals (any server) that get the same keys; clearly marked while on. */
+function BroadcastMenu() {
+  const [open, setOpen] = useState(false);
+  const live = useLiveTerminals((x) => x.list);
+  const b = useBroadcast();
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    window.addEventListener("mousedown", away);
+    return () => window.removeEventListener("mousedown", away);
+  }, [open]);
+  return (
+    <div className="menu-anchor" ref={ref}>
+      <button className={`icon-btn ${b.on ? "on broadcast-on" : ""}`} aria-label="Type in several terminals" title={b.on ? `Typing goes to ${b.targets.length} terminals` : "Type in several terminals at once"} onClick={() => setOpen(!open)}>
+        <Radio size={14} />{b.on && <span className="count">{b.targets.length}</span>}
+      </button>
+      {open && (
+        <div className="menu broadcast-menu" role="dialog" aria-label="Type in several terminals">
+          <div className="broadcast-head">
+            <b>Type in several terminals</b>
+            <label className="check"><input type="checkbox" className="switch" checked={b.on} disabled={b.targets.length < 2} onChange={(e) => b.setOn(e.target.checked)} /> On</label>
+          </div>
+          <p className="faint">What you type in one checked terminal also goes to the others. Check two or more; each shows a stripe while it's on.</p>
+          {live.length === 0 && <p className="faint">No terminals open.</p>}
+          {live.map((t) => (
+            <label key={t.id} className="check broadcast-item">
+              <input type="checkbox" checked={b.targets.includes(t.id)} onChange={() => b.toggle(t.id)} /> <span className="mono">{t.label}</span>
+            </label>
+          ))}
         </div>
       )}
     </div>

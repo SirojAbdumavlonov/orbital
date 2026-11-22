@@ -4,6 +4,12 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Scheduled backups** (Backups tab, on every server): back up a folder (as .tar.gz) or a PostgreSQL, MySQL/MariaDB or MongoDB database every day or every week at a time you choose, and keep the last few. Backups run on the server from cron, so they happen when Orbital is closed too; they're kept in /var/backups/orbital (root only). Run one now, see each job's last run (and why it failed), download a backup, or restore it: a folder into a new copy beside the original (or over it, after typing its name), a database after typing its name.
+- **Health alerts**: a notification when a connected server needs attention for a minute or more (a disk nearly full, memory or load high) or a service fails, and when it's back to normal. Mute one server with the bell on its card on Home; turn them all off in Settings → Monitoring.
+- **Search everywhere** (⌘K): type two letters to find services, containers, nginx sites, bookmarked folders and open files on every connected server; choosing one opens it with that item selected.
+- **Split terminals**: show two of a server's terminals side by side or one above the other (buttons at the right of the terminal tabs). **Type in several terminals**: choose terminals on any servers that get the same keys as you type; each shows a stripe while it's on.
+
 ## 1.4.5 (2026-11-22)
 
 ### Added

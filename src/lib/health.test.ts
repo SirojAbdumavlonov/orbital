@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 vi.mock("../store", () => ({ isSsh: () => true, useStore: { getState: () => ({ sessions: {} }), subscribe: () => () => {} } }));
-const { assess } = await import("./health");
+vi.mock("./settings", () => ({ useSettings: { getState: () => ({ healthAlerts: true }) } }));
+const { assess, alertStep, NO_ALERTS } = await import("./health");
 
 const GB = 1024 ** 3;
 const metrics = (over: any = {}) => ({
@@ -30,5 +31,37 @@ describe("assess", () => {
   it("names failed services", () => {
     expect(assess(metrics(), ["nginx.service"])).toEqual({ level: "warn", reasons: ["nginx failed"] });
     expect(assess(metrics(), ["a.service", "b.service", "c.service", "d.service"]).reasons[0]).toBe("4 services failed (a, b, c, …)");
+  });
+});
+
+describe("alertStep", () => {
+  const red = { level: "bad" as const, reasons: ["Disk / 97%"] };
+  const green = { level: "ok" as const, reasons: [] };
+  it("alerts after two red checks in a row, once, and when it's back", () => {
+    let st = NO_ALERTS;
+    let r = alertStep(st, "web", red, []);
+    expect(r.messages).toEqual([]);
+    r = alertStep(r.next, "web", red, []);
+    expect(r.messages).toEqual([{ kind: "bad", title: "web needs attention", body: "Disk / 97%" }]);
+    r = alertStep(r.next, "web", red, []);
+    expect(r.messages).toEqual([]);
+    r = alertStep(r.next, "web", green, []);
+    expect(r.messages[0]).toMatchObject({ kind: "ok", title: "web is back to normal" });
+    st = r.next;
+    expect(alertStep(st, "web", green, []).messages).toEqual([]);
+  });
+  it("a single red check (a load spike) doesn't alert", () => {
+    const a = alertStep(NO_ALERTS, "web", red, []);
+    expect(alertStep(a.next, "web", green, []).messages).toEqual([]);
+  });
+  it("tells about a failed service at once, and only once", () => {
+    const warn = { level: "warn" as const, reasons: ["nginx failed"] };
+    const a = alertStep(NO_ALERTS, "web", warn, ["nginx.service"]);
+    expect(a.messages).toEqual([{ kind: "bad", title: "web: nginx failed", body: "nginx" }]);
+    expect(alertStep(a.next, "web", warn, ["nginx.service"]).messages).toEqual([]);
+    expect(alertStep(a.next, "web", green, []).messages[0].kind).toBe("ok");
+  });
+  it("ignores checks without numbers", () => {
+    expect(alertStep(NO_ALERTS, "web", { level: "unknown", reasons: [] }, [])).toEqual({ next: NO_ALERTS, messages: [] });
   });
 });

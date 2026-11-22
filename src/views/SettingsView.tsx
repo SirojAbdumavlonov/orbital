@@ -154,6 +154,9 @@ export function SettingsView() {
           </Row>
 
           <h3 className="settings-title">Monitoring</h3>
+          <Row title="Health alerts" hint="A notification when a connected server needs attention for a minute or more (a disk nearly full, memory or load high) or a service fails, and when it's back to normal. Mute one server from its card on Home.">
+            <input type="checkbox" className="switch" checked={st.healthAlerts} onChange={(e) => st.set({ healthAlerts: e.target.checked })} />
+          </Row>
           <Row title="Refresh every" hint="How often CPU, memory and network are sampled for the server in view. Servers in the background refresh every 10 seconds.">
             <div className="segmented">
               {[1, 2, 5, 10].map((n) => <button key={n} className={st.refreshSecs === n ? "on" : ""} onClick={() => st.set({ refreshSecs: n })}>{n} s</button>)}

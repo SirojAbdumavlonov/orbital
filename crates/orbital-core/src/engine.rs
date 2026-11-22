@@ -2868,6 +2868,112 @@ impl Engine {
         }
     }
 
+    // ---------- scheduled backups ----------
+
+    /// Backup jobs on this server, with their backups and last run (read-only).
+    pub async fn backup_jobs(&self, sid: &str) -> Result<Vec<crate::backups::BackupStatus>> {
+        let s = self.session(sid).await?;
+        let (o, _) = s.exec_inspect(crate::backups::LIST_SCRIPT).await?;
+        Ok(crate::backups::parse_list(&o.stdout))
+    }
+
+    /// Create or change a job: its script and cron line, written as root (contents on stdin).
+    pub async fn save_backup_job(&self, sid: &str, job: &crate::backups::BackupJob) -> Result<crate::backups::BackupJob> {
+        use crate::backups as b;
+        let s = self.session(sid).await?;
+        let job = b::validate(job).map_err(|e| self.refused_as(&s, Category::Command, "backup.save", &job.id, e))?;
+        let (script, cron, _) = b::paths(&job.id)?;
+        progress::step(format!("Writing the backup job {} …", job.name));
+        let t = std::time::Duration::from_secs(60);
+        self.system_exec_with(
+            &s,
+            "backup.save",
+            &job.id,
+            &b::write_command(&script, "755"),
+            Some(b::script(&job)?.as_bytes()),
+            t,
+        )
+        .await?
+        .check()?;
+        self.system_exec_with(
+            &s,
+            "backup.save",
+            &job.id,
+            &b::write_command(&cron, "644"),
+            Some(b::cron_file(&job)?.as_bytes()),
+            t,
+        )
+        .await?
+        .check()?;
+        Ok(job)
+    }
+
+    /// Remove a job (its schedule and script); with `files`, its backups too.
+    pub async fn delete_backup_job(&self, sid: &str, id: &str, files: bool) -> Result<()> {
+        let s = self.session(sid).await?;
+        let cmd = crate::backups::delete_command(id, files)?;
+        self.system_exec(
+            &s,
+            if files { "backup.delete_all" } else { "backup.delete" },
+            id,
+            &cmd,
+            std::time::Duration::from_secs(120),
+        )
+        .await?
+        .check()?;
+        Ok(())
+    }
+
+    /// Run a job now (as cron would). Returns the new backup's path.
+    pub async fn run_backup(&self, sid: &str, id: &str) -> Result<String> {
+        use crate::backups as b;
+        let s = self.session(sid).await?;
+        let (script, _, _) = b::paths(id)?;
+        progress::step("Backing up …");
+        let o = self
+            .system_exec(
+                &s,
+                "backup.run",
+                id,
+                &crate::shell::quote(&script),
+                std::time::Duration::from_secs(3 * 3600),
+            )
+            .await?
+            .check()?;
+        Ok(o.stdout.lines().find_map(|l| l.strip_prefix("@@file ")).unwrap_or("").to_string())
+    }
+
+    /// Restore one of a job's backups. A folder goes to a new copy beside the
+    /// original unless `to` is Original; a database's contents are replaced.
+    pub async fn restore_scheduled_backup(&self, sid: &str, id: &str, file: &str, to: crate::backups::RestoreTo) -> Result<String> {
+        use crate::backups as b;
+        let job = self
+            .backup_jobs(sid)
+            .await?
+            .into_iter()
+            .find(|x| x.job.id == id)
+            .ok_or_else(|| Error::NotFound(format!("no backup job {id} on this server")))?
+            .job;
+        let s = self.session(sid).await?;
+        let cmd = b::restore_command(&job, file, to)?;
+        progress::step(format!("Restoring {} …", file.rsplit('/').next().unwrap_or(file)));
+        let o = self
+            .system_exec(
+                &s,
+                "backup.restore",
+                &format!("{id}: {file}"),
+                &cmd,
+                std::time::Duration::from_secs(3 * 3600),
+            )
+            .await?
+            .check()?;
+        Ok(o.stdout
+            .lines()
+            .find_map(|l| l.strip_prefix("@@restored "))
+            .unwrap_or("")
+            .to_string())
+    }
+
     // ---------- system updates ----------
 
     /// Upgradable packages (security first) and whether a reboot is needed. Read-only.

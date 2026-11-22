@@ -1,7 +1,7 @@
-import { FileInput, Loader2, Plus } from "lucide-react";
+import { Bell, BellOff, FileInput, Loader2, Plus } from "lucide-react";
 import { isSsh, SessionState, useStore } from "../store";
 import { Profile } from "../lib/api";
-import { useSessionHealth } from "../lib/health";
+import { useHealthMute, useSessionHealth } from "../lib/health";
 import { duration, relativeTime } from "../lib/format";
 // Bundled with the code (not fetched from /logo.svg), so it shows however the page is served.
 import logo from "../assets/logo.svg";
@@ -48,6 +48,7 @@ function Overview() {
 function ServerCard({ p, s }: { p: Profile; s?: SessionState }) {
   const { connect, connecting } = useStore();
   const h = useSessionHealth(s?.info.id);
+  const muted = useHealthMute((x) => x.muted.includes(p.id));
   const m = s?.metrics[s.metrics.length - 1];
   const disk = m?.disks.filter((d) => d.totalBytes > 64 * 1024 * 1024 && !/^(tmpfs|devtmpfs|overlay|squashfs)$/.test(d.fsType)).sort((a, b) => b.usedPercent - a.usedPercent)[0];
   const mem = m && m.memTotal ? Math.round(((m.memTotal - m.memAvailable) / m.memTotal) * 100) : null;
@@ -58,6 +59,17 @@ function ServerCard({ p, s }: { p: Profile; s?: SessionState }) {
         <span className={`dot ${s ? `live health-${h.level}` : ""}`} />
         <b>{p.name}</b>
         {connecting[p.id] && <Loader2 size={13} className="spin faint" />}
+        <span
+          role="button"
+          tabIndex={0}
+          className={`card-mute ${muted ? "on" : ""}`}
+          aria-label={muted ? `Turn ${p.name}'s health alerts back on` : `Mute ${p.name}'s health alerts`}
+          title={muted ? "Health alerts are muted for this server; click to turn them back on" : "Mute health alerts for this server"}
+          onClick={(e) => { e.stopPropagation(); useHealthMute.getState().toggle(p.id); }}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); useHealthMute.getState().toggle(p.id); } }}
+        >
+          {muted ? <BellOff size={13} /> : <Bell size={13} />}
+        </span>
       </div>
       <span className="mono faint server-card-addr">{p.protocol === "s3" ? p.host : `${p.username}@${p.host}`}</span>
       {s && isSsh(s) && m ? (

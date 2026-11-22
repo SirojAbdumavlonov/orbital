@@ -263,6 +263,48 @@ pub async fn nginx_route_change(
 }
 
 #[tauri::command]
+pub async fn backup_jobs(engine: Eng<'_>, session_id: String) -> R<Vec<orbital_core::backups::BackupStatus>> {
+    engine.backup_jobs(&session_id).await
+}
+
+#[tauri::command]
+pub async fn save_backup_job(
+    engine: Eng<'_>,
+    session_id: String,
+    job: orbital_core::backups::BackupJob,
+    progress: Channel<ProgressEvent>,
+) -> R<orbital_core::backups::BackupJob> {
+    progress::run_job(progress.id(), sink(progress), engine.save_backup_job(&session_id, &job)).await
+}
+
+#[tauri::command]
+pub async fn delete_backup_job(engine: Eng<'_>, session_id: String, id: String, files: bool) -> R<()> {
+    engine.delete_backup_job(&session_id, &id, files).await
+}
+
+#[tauri::command]
+pub async fn run_backup(engine: Eng<'_>, session_id: String, id: String, progress: Channel<ProgressEvent>) -> R<String> {
+    progress::run_job(progress.id(), sink(progress), engine.run_backup(&session_id, &id)).await
+}
+
+#[tauri::command]
+pub async fn restore_scheduled_backup(
+    engine: Eng<'_>,
+    session_id: String,
+    id: String,
+    file: String,
+    to: orbital_core::backups::RestoreTo,
+    progress: Channel<ProgressEvent>,
+) -> R<String> {
+    progress::run_job(
+        progress.id(),
+        sink(progress),
+        engine.restore_scheduled_backup(&session_id, &id, &file, to),
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn failed_units(engine: Eng<'_>, session_id: String) -> R<Vec<String>> {
     engine.failed_units(&session_id).await
 }

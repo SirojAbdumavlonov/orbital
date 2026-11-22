@@ -1,11 +1,12 @@
 import { Command } from "cmdk";
-import { Activity, ArrowRightLeft, Cable, HeartPulse, SquareCode, ArrowLeft, ArrowRight, Download, FileInput, FolderTree, Globe, Gauge, Home, KeyRound, LifeBuoy, ListChecks, MessageSquare, Moon, Plug, Plus, RefreshCw, Server, Settings, Sparkles, SquareTerminal, Sun, Unplug } from "lucide-react";
+import { Boxes, FileText, Activity, ArrowRightLeft, Cable, HeartPulse, SquareCode, ArrowLeft, ArrowRight, Download, FileInput, FolderTree, Globe, Gauge, Home, KeyRound, LifeBuoy, ListChecks, MessageSquare, Moon, Plug, Plus, RefreshCw, Server, Settings, Sparkles, SquareTerminal, Sun, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useUpdates } from "../lib/updates";
 import { KEYS, mod } from "../lib/platform";
 import { goTo, Tab, useStore } from "../store";
 import { toolIcon } from "./ServerHeader";
+import { openItem, refreshIndex, SearchKind, useSearchIndex } from "../lib/searchIndex";
 
 const BASE_TABS: [Tab, string, typeof Gauge][] = [
   ["files", "Files", FolderTree],
@@ -29,10 +30,18 @@ function wordFilter(value: string, search: string, keywords?: string[]): number 
   return score;
 }
 
+const SEARCH_ICONS: Record<SearchKind, typeof Server> = { service: ListChecks, container: Boxes, site: Globe, folder: FolderTree, file: FileText };
+
 /** ⌘K: jump to any server, tab or page, or run a common action, by typing. */
 export function CommandMenu() {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const st = useStore();
+  const index = useSearchIndex();
+  useEffect(() => {
+    if (open) void refreshIndex();
+    else setQuery("");
+  }, [open]);
   const theme = useResolvedTheme();
   const setPref = useSettings((x) => x.set);
   // The server in view, even while a page such as Settings covers it.
@@ -61,9 +70,22 @@ export function CommandMenu() {
 
   return (
     <Command.Dialog filter={wordFilter} open={open} onOpenChange={setOpen} label="Command menu" overlayClassName="scrim cmdk-scrim" contentClassName="cmdk">
-      <Command.Input placeholder="Go to a server, tab or page, or run an action…" />
+      <Command.Input value={query} onValueChange={setQuery} placeholder="Go to a server, tab or page, run an action, or find a service, container, site or file…" />
       <Command.List>
-        <Command.Empty>Nothing matches.</Command.Empty>
+        <Command.Empty>{index.loading ? "Looking on your servers…" : "Nothing matches."}</Command.Empty>
+        {query.trim().length >= 2 && index.items.length > 0 && (
+          <Command.Group heading={`On your servers${index.loading ? " · updating…" : ""}`}>
+            {index.items.map((it) => {
+              const Icon = SEARCH_ICONS[it.kind];
+              return (
+                <Command.Item key={it.key} value={`${it.words} ${it.key}`} onSelect={run(() => openItem(it))}>
+                  <Icon size={14} /> <span className="cmdk-label">{it.label}</span>
+                  <span className="cmdk-hint">{it.server} · {it.detail}</span>
+                </Command.Item>
+              );
+            })}
+          </Command.Group>
+        )}
         {s && (
           <Command.Group heading={s.profile.name}>
             {BASE_TABS.filter(([id]) => (s.info.protocol !== "sftp" ? id === "files" || id === "activity" : id !== "services" || s.info.hasSystemd)).map(([id, label, Icon]) => (

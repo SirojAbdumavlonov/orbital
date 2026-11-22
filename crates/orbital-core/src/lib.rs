@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod audit;
+pub mod backups;
 pub mod certbot;
 pub mod cleanup;
 pub mod config_edit;

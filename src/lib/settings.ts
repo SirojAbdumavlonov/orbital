@@ -37,6 +37,8 @@ export interface Settings {
   terminalTmux: boolean;
   /** At launch, reopen the servers that were open, on the same tab and folder. */
   restoreSession: boolean;
+  /** Notify when a connected server needs attention (and when it's fine again). */
+  healthAlerts: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -54,6 +56,7 @@ const DEFAULTS: Settings = {
   terminalSuggestions: true,
   terminalTmux: false,
   restoreSession: true,
+  healthAlerts: true,
 };
 
 const KEY = "orbital.settings";

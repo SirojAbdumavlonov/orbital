@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 /**
  * Where you were in a view (the selected container or service, search,
@@ -16,8 +16,24 @@ export function keepValue<T>(key: string, value: T) {
   memory.set(key, value);
 }
 
+/** Views showing a key now, told when something else sets it (search everywhere opening an item). */
+const listeners = new Map<string, Set<(v: unknown) => void>>();
+
+/** Set a kept value from outside its view; a view showing it now follows. */
+export function moveTo<T>(key: string, value: T) {
+  memory.set(key, value);
+  for (const f of listeners.get(key) ?? []) f(value);
+}
+
 export function useKept<T>(key: string, initial: T): [T, (v: T | ((prev: T) => T)) => void] {
   const [value, setValue] = useState<T>(() => keptValue(key, initial));
+  useEffect(() => {
+    const f = (v: unknown) => setValue(v as T);
+    const set = listeners.get(key) ?? new Set();
+    set.add(f);
+    listeners.set(key, set);
+    return () => { set.delete(f); };
+  }, [key]);
   const set = useCallback(
     (v: T | ((prev: T) => T)) =>
       setValue((prev) => {

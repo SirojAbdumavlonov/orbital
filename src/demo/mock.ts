@@ -238,6 +238,12 @@ let statsState: { available: boolean; enabled: boolean | null } = { available: t
 
 const demoInstalled = new Set<string>();
 let defaultSiteOff = false;
+/** Demo scheduled backups. */
+let backupJobs: any[] = [
+  { job: { id: "shop-uploads", name: "Shop uploads", source: { kind: "folder", path: "/srv/shop/uploads" }, schedule: { every: "day", weekday: 0, hour: 3, minute: 30 }, keep: 7 }, scheduled: true, lastRun: Math.floor(Date.now() / 1000) - 6 * 3600, lastError: null,
+    files: [0, 1, 2].map((i) => ({ path: `/var/backups/orbital/shop-uploads/shop-uploads-2026112${2 - i}-033000.tar.gz`, bytes: 812_000_000 - i * 4_000_000, at: Math.floor(Date.now() / 1000) - 6 * 3600 - i * 86400 })) },
+  { job: { id: "shop-db", name: "Shop database", source: { kind: "database", engine: "postgres", name: "shop" }, schedule: { every: "week", weekday: 0, hour: 2, minute: 0 }, keep: 4 }, scheduled: true, lastRun: Math.floor(Date.now() / 1000) - 2 * 86400, lastError: "pg_dump: error: connection to server failed: FATAL: database \"shop\" does not exist", files: [] },
+];
 /** Demo nginx routes per server block, from the fake nginx config. */
 const routeStore = new Map<string, any[]>();
 function demoRoutes(file: string, line: number): any[] {
@@ -849,6 +855,29 @@ export function install() {
           defaultMissing: broken ? [missing] : [],
         };
       }
+      case "backup_jobs": return backupJobs.map((b) => ({ ...b, files: [...b.files] }));
+      case "save_backup_job": {
+        await progress(args.progress, [[0, "step", `Writing the backup job ${args.job.name} …`], [600, "line", ""]]);
+        if (args.job.source.kind === "folder" && !String(args.job.source.path).startsWith("/")) throw { kind: "InvalidInput", message: `Invalid input: "${args.job.source.path}" isn't a folder's full path` };
+        const i = backupJobs.findIndex((b) => b.job.id === args.job.id);
+        const st = { job: args.job, files: i >= 0 ? backupJobs[i].files : [], lastRun: i >= 0 ? backupJobs[i].lastRun : null, lastError: null, scheduled: true };
+        if (i >= 0) backupJobs[i] = st; else backupJobs.push(st);
+        return args.job;
+      }
+      case "delete_backup_job": backupJobs = backupJobs.filter((b) => b.job.id !== args.id); return null;
+      case "run_backup": {
+        await progress(args.progress, [[0, "step", "Backing up …"], [1500, "line", ""]]);
+        const b = backupJobs.find((x) => x.job.id === args.id)!;
+        const ext = b.job.source.kind === "folder" ? "tar.gz" : { postgres: "dump", mysql: "sql.gz", mongo: "archive.gz" }[b.job.source.engine as string];
+        const d = new Date(); const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}-${String(d.getHours()).padStart(2, "0")}${String(d.getMinutes()).padStart(2, "0")}${String(d.getSeconds()).padStart(2, "0")}`;
+        const path = `/var/backups/orbital/${b.job.id}/${b.job.id}-${stamp}.${ext}`;
+        b.files = [{ path, bytes: 48_000_000 + Math.round(Math.random() * 1e6), at: now() }, ...b.files].slice(0, b.job.keep);
+        b.lastRun = now(); b.lastError = null;
+        return path;
+      }
+      case "restore_scheduled_backup":
+        await progress(args.progress, [[0, "step", "Restoring …"], [1500, "line", ""]]);
+        return args.to === "copy" ? `${backupJobs.find((x) => x.job.id === args.id)!.job.source.path}.restored-20261122-031500` : "shop";
       case "nginx_routes": return { file: args.file.replace("/sites-enabled/", "/sites-available/"), line: args.line, routes: demoRoutes(args.file, args.line) };
       case "nginx_route_change": {
         const list = demoRoutes(args.file, args.line);

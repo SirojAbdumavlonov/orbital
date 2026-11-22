@@ -30,6 +30,7 @@ import { useUpdateChecks } from "./lib/updates";
 import { useStatsPings } from "./lib/stats";
 import { StatsPrompt } from "./components/StatsPrompt";
 import { HelpView } from "./views/HelpView";
+import { BackupsView } from "./views/BackupsView";
 import { FeedbackView } from "./views/FeedbackView";
 import { ChangesView, useWhatsNewAnnounce, WhatsNewDialog } from "./components/WhatsNew";
 import { isMac, isSidebarKey, mod } from "./lib/platform";
@@ -97,6 +98,7 @@ const TOOL_VIEWS: Record<string, (p: { s: SessionState }) => JSX.Element> = {
   logs: LogsView,
   tunnels: TunnelsView,
   network: NetworkView,
+  backups: BackupsView,
 };
 
 function ToolTab({ s, id }: { s: SessionState; id: string }) {

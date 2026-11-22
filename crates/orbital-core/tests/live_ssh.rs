@@ -2397,3 +2397,89 @@ async fn failed_units_are_listed() {
     let failed = engine.failed_units(&a.id).await.unwrap();
     assert!(failed.iter().all(|u| u.ends_with(".service")), "{failed:?}");
 }
+
+/// Scheduled backups: a folder job is written (script + cron line), runs,
+/// shows up with its backup, restores to a copy, and is removed again.
+/// Writes under /usr/local/lib and /etc/cron.d: ORBITAL_IT_USERS=1 (CI).
+#[tokio::test]
+async fn scheduled_folder_backup_runs_and_restores() {
+    use orbital_core::backups::{BackupJob, BackupSource, Every, RestoreTo, Schedule};
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_USERS").is_err() || std::env::var("ORBITAL_IT_NO_PASSWORD").is_ok() {
+        eprintln!("skipped: set ORBITAL_IT_USERS=1 on a disposable machine");
+        return;
+    }
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    let dir = format!("/srv/orbital-it-backup-{}", std::process::id());
+    let id = format!("it-{}", std::process::id());
+    engine
+        .run_command(&s.id, &format!("mkdir -p {dir}/sub && echo kept > {dir}/sub/a.txt"), true)
+        .await
+        .unwrap();
+    let job = BackupJob {
+        id: id.clone(),
+        name: "IT folder".into(),
+        source: BackupSource::Folder { path: dir.clone() },
+        schedule: Schedule {
+            every: Every::Week,
+            weekday: 0,
+            hour: 3,
+            minute: 30,
+        },
+        keep: 2,
+    };
+    engine.save_backup_job(&s.id, &job).await.unwrap();
+    let cron = engine
+        .run_command(&s.id, &format!("cat /etc/cron.d/orbital-backup-{id}"), true)
+        .await
+        .unwrap()
+        .stdout;
+    assert!(
+        cron.contains(&format!("30 3 * * 0 root /usr/local/lib/orbital/backup-{id}.sh")),
+        "{cron}"
+    );
+
+    let file = engine.run_backup(&s.id, &id).await.unwrap();
+    assert!(
+        file.starts_with(&format!("/var/backups/orbital/{id}/{id}-")) && file.ends_with(".tar.gz"),
+        "{file}"
+    );
+    let list = engine.backup_jobs(&s.id).await.unwrap();
+    let st = list.iter().find(|x| x.job.id == id).expect("job listed");
+    assert!(
+        st.scheduled && st.last_error.is_none() && st.files.len() == 1 && st.files[0].bytes > 0,
+        "{st:?}"
+    );
+    assert_eq!(st.job, job);
+
+    let restored = engine.restore_scheduled_backup(&s.id, &id, &file, RestoreTo::Copy).await.unwrap();
+    let got = engine
+        .run_command(
+            &s.id,
+            &format!("cat '{restored}/{}/sub/a.txt'", dir.rsplit('/').next().unwrap()),
+            true,
+        )
+        .await
+        .unwrap()
+        .stdout;
+    assert_eq!(got.trim(), "kept");
+    // Only the job's own backups can be restored.
+    assert!(engine
+        .restore_scheduled_backup(&s.id, &id, "/etc/shadow", RestoreTo::Copy)
+        .await
+        .is_err());
+
+    engine.delete_backup_job(&s.id, &id, true).await.unwrap();
+    assert!(engine.backup_jobs(&s.id).await.unwrap().iter().all(|x| x.job.id != id));
+    let gone = engine
+        .run_command(
+            &s.id,
+            &format!("ls /etc/cron.d/orbital-backup-{id} /var/backups/orbital/{id} 2>&1; rm -rf {dir} {restored}"),
+            true,
+        )
+        .await
+        .unwrap()
+        .stdout;
+    assert!(gone.matches("No such file").count() == 2, "{gone}");
+}

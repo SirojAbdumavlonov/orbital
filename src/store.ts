@@ -13,7 +13,7 @@ export const isSsh = (s: { info: { protocol?: string } }) => (s.info.protocol ??
 export type Tab = "files" | "services" | "monitor" | "terminal" | "activity" | `tool:${string}`;
 
 /** Tabs offered on every server, whatever software it runs. */
-export const ALWAYS_TOOLS = ["checkup", "agent", "updates", "cleanup", "deploy", "logs", "tunnels", "ports", "network", "users", "sshkeys"];
+export const ALWAYS_TOOLS = ["checkup", "agent", "updates", "cleanup", "backups", "deploy", "logs", "tunnels", "ports", "network", "users", "sshkeys"];
 
 export interface OpenFile {
   path: string;
@@ -43,6 +43,8 @@ export interface SessionState {
   activeFile: string | null;
   terminals: TermTab[];
   activeTerminal: string | null;
+  /** A second terminal shown beside (row) or under (column) the active one. */
+  termSplit?: { key: string; dir: "row" | "column" } | null;
   metrics: Metrics[]; // rolling history, newest last
   lost: boolean;
   /** Software found on the server; null until the first detection finishes. */
@@ -64,7 +66,7 @@ export interface SessionState {
 export type Loc = { sid: string; tab: Tab; cwd?: string } | { global: NonNullable<State["globalView"]> } | null;
 
 /** Software with its own tab view (the rest get the generic one). */
-export const DEDICATED_TOOLS = ["checkup", "agent", "updates", "cleanup", "docker", "nginx", "ufw", "fail2ban", "certbot", "sshd", "ports", "postgresql", "mysql", "mongodb", "redis", "apache", "haproxy", "users", "cron", "deploy", "logs", "tunnels", "network", "sshkeys"];
+export const DEDICATED_TOOLS = ["checkup", "agent", "updates", "cleanup", "docker", "nginx", "ufw", "fail2ban", "certbot", "sshd", "ports", "postgresql", "mysql", "mongodb", "redis", "apache", "haproxy", "users", "cron", "deploy", "logs", "tunnels", "network", "sshkeys", "backups"];
 
 /** Profile fields that only take effect on a new connection. */
 const CONNECTION_FIELDS = ["host", "port", "username", "authMethod", "keyPath", "sudoMode", "initialPath", "jumpProfileId"] as const;

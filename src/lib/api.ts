@@ -531,6 +531,14 @@ export interface MovePlan { name: string; image: string; imageId: string; repoDi
 export interface MoveOptions { ports?: PortMap[]; args?: string[]; envSet?: Record<string, string>; envRemove?: string[] }
 export interface MovePreview { plan: MovePlan; clashes: { noDocker: boolean; name: boolean; ports: number[]; paths: string[] }; target: string }
 
+// ---------- scheduled backups ----------
+export type BackupSource = { kind: "folder"; path: string } | { kind: "database"; engine: DbKind; name: string };
+export interface BackupSchedule { every: "day" | "week"; weekday: number; hour: number; minute: number }
+export interface BackupJob { id: string; name: string; source: BackupSource; schedule: BackupSchedule; keep: number }
+export interface BackupFile { path: string; bytes: number; at: number }
+export interface BackupStatus { job: BackupJob; files: BackupFile[]; lastRun: number | null; lastError: string | null; scheduled: boolean }
+export type RestoreTo = "copy" | "original";
+
 // ---------- nginx routes ----------
 export type RouteTarget =
   | { kind: "app"; host: string; port: number; keepPrefix: boolean; websockets: boolean }
@@ -1297,6 +1305,12 @@ export const api = {
   redisAction: (sessionId: string, action: RedisAction, container: string | null = null) => invoke<RedisInfo>("redis_action", { sessionId, action, container }),
   systemInfo: (sessionId: string) => invoke<SystemInfo>("system_info", { sessionId }),
   metrics: (sessionId: string) => invoke<Metrics>("metrics", { sessionId }),
+  backupJobs: (sessionId: string) => invoke<BackupStatus[]>("backup_jobs", { sessionId }),
+  saveBackupJob: (sessionId: string, job: BackupJob, onProgress?: OnProgress) => invoke<BackupJob>("save_backup_job", { sessionId, job, progress: progressChannel(onProgress) }),
+  deleteBackupJob: (sessionId: string, id: string, files: boolean) => invoke<void>("delete_backup_job", { sessionId, id, files }),
+  runBackup: (sessionId: string, id: string, onProgress?: OnProgress) => invoke<string>("run_backup", { sessionId, id, progress: progressChannel(onProgress) }),
+  restoreScheduledBackup: (sessionId: string, id: string, file: string, to: RestoreTo, onProgress?: OnProgress) =>
+    invoke<string>("restore_scheduled_backup", { sessionId, id, file, to, progress: progressChannel(onProgress) }),
   /** A server block's routes (location blocks), from its real file. */
   nginxRoutes: (sessionId: string, file: string, line: number) => invoke<RoutesView>("nginx_routes", { sessionId, file, line }),
   /** Preview (apply false) or make a route change: safe save with nginx -t, then reload. */
