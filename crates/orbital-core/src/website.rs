@@ -500,20 +500,20 @@ mod tests {
     #[test]
     fn site_tests_and_removal_commands() {
         use super::*;
-        let c = local_test_command("stats.devlab.life", false).unwrap();
+        let c = local_test_command("stats.example.com", false).unwrap();
         assert!(
-            c.contains("--resolve stats.devlab.life:80:127.0.0.1 http://stats.devlab.life/"),
+            c.contains("--resolve stats.example.com:80:127.0.0.1 http://stats.example.com/"),
             "{c}"
         );
-        assert!(local_test_command("stats.devlab.life", true)
+        assert!(local_test_command("stats.example.com", true)
             .unwrap()
-            .contains("-k --resolve stats.devlab.life:443:127.0.0.1 https://"));
+            .contains("-k --resolve stats.example.com:443:127.0.0.1 https://"));
         assert!(local_test_command("bad name; id", false).is_err());
         assert_eq!(parse_local_test("a.b", false, "200").status, Some(200));
         assert!(parse_local_test("a.b", false, "000").error.unwrap().contains("nothing answered"));
         assert!(parse_local_test("a.b", false, "nocurl").error.unwrap().contains("curl"));
 
-        assert!(validate_site_file("/etc/nginx/sites-available/stats.devlab.life").is_ok());
+        assert!(validate_site_file("/etc/nginx/sites-available/stats.example.com").is_ok());
         assert!(validate_site_file("/etc/nginx/conf.d/stats.conf").is_ok());
         for bad in [
             "/etc/nginx/nginx.conf",
@@ -524,9 +524,9 @@ mod tests {
         ] {
             assert!(validate_site_file(bad).is_err(), "{bad}");
         }
-        let sh = remove_script("/etc/nginx/sites-available/stats.devlab.life").unwrap();
+        let sh = remove_script("/etc/nginx/sites-available/stats.example.com").unwrap();
         assert!(
-            sh.contains("readlink -f -- /etc/nginx/sites-available/stats.devlab.life")
+            sh.contains("readlink -f -- /etc/nginx/sites-available/stats.example.com")
                 && sh.contains("nginx -t")
                 && sh.contains("@@backup"),
             "{sh}"
@@ -540,7 +540,7 @@ mod tests {
             "{evil}"
         );
         assert!(
-            removable_root("/var/www/stats.devlab.life")
+            removable_root("/var/www/stats.example.com")
                 && !removable_root("/var/www")
                 && !removable_root("/var/www/")
                 && !removable_root("/srv/app")

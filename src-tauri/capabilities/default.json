@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: core APIs, window dragging from the top bars, native open/save dialogs, and checking for, installing and restarting into app updates, and notifications when an uptime check goes down or comes back.",
+  "description": "Main window: core APIs, window dragging from the top bars, native open/save dialogs, and checking for, installing and restarting into app updates, and notifications when an uptime check goes down or comes back, and opening Orbital's own release notes on GitHub in the browser.",
   "windows": [
     "main"
   ],
@@ -15,6 +15,14 @@
     "core:window:allow-internal-toggle-maximize",
     "updater:default",
     "process:allow-restart",
-    "notification:default"
+    "notification:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://github.com/SirojAbdumavlonov/orbital/*"
+        }
+      ]
+    }
   ]
 }

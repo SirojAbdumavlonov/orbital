@@ -847,7 +847,7 @@ mod real {
             }
         }
         let resolvers: Vec<(String, String)> = RESOLVERS.iter().map(|(l, u)| (l.to_string(), u.to_string())).collect();
-        for name in ["example.com", "devlabs.life"] {
+        for name in ["example.com", "example.org"] {
             let c = check(&http, &resolvers, name, RecordType::A, &[], true).await.unwrap();
             println!(
                 "check {name}: verified={} {:?}",

@@ -1,5 +1,8 @@
 import { FileInput, Plus } from "lucide-react";
 import { useStore } from "../store";
+// Bundled with the code (not fetched from /logo.svg), so it shows however the page is served.
+import logo from "../assets/logo.svg";
+import { WhatsNewCard } from "./WhatsNew";
 
 export function Welcome() {
   const { profiles, setEditing, setImportingSsh, connect } = useStore();
@@ -7,7 +10,7 @@ export function Welcome() {
   return (
     <div className="welcome drag" data-tauri-drag-region>
       <div className="welcome-inner" style={{ WebkitAppRegion: "no-drag" } as any}>
-        <img src="/logo.svg" width={56} height={56} alt="" />
+        <img className="welcome-logo" src={logo} width={56} height={56} alt="Orbital" />
         <h1>{profiles.length ? "Pick a server to open" : "Add your first server"}</h1>
         <p>
           Browse and edit files, restart services, manage containers and open a shell — over one SSH connection,
@@ -28,6 +31,7 @@ export function Welcome() {
             ))}
           </div>
         )}
+        <WhatsNewCard />
       </div>
     </div>
   );

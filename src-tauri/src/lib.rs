@@ -190,6 +190,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(commands::UptimeWatch::default())
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -328,6 +329,8 @@ pub fn run() {
             commands::stats_state,
             commands::set_stats,
             commands::stats_ping,
+            commands::send_feedback,
+            commands::feedback_available,
             commands::container_action,
             commands::run_command,
             commands::open_terminal,

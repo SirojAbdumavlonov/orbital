@@ -29,6 +29,9 @@ import { usePanelResizing } from "./lib/resize";
 import { useUpdateChecks } from "./lib/updates";
 import { useStatsPings } from "./lib/stats";
 import { StatsPrompt } from "./components/StatsPrompt";
+import { HelpView } from "./views/HelpView";
+import { FeedbackView } from "./views/FeedbackView";
+import { ChangesView, useWhatsNewAnnounce, WhatsNewDialog } from "./components/WhatsNew";
 import { isSidebarKey, mod } from "./lib/platform";
 import { useUptimeAlerts } from "./lib/uptime";
 import { UptimeView } from "./views/UptimeView";
@@ -60,6 +63,9 @@ const GLOBAL_TITLES = {
   knownHosts: ["Security", "Saved credentials and the host identities you've verified"],
   settings: ["Settings", "Preferences for Orbital on this computer"],
   domains: ["Domains", "DNS records at your provider, and whether the world sees them yet"],
+  changes: ["Changes", "What's new and fixed in each version of Orbital"],
+  help: ["Help", "Getting started, common tasks and what to do when something goes wrong"],
+  feedback: ["Feedback", "Report a problem, suggest an idea or tell us what works"],
 } as const;
 
 /** Software with a screen of its own; everything else gets the generic tool tab. */
@@ -162,6 +168,7 @@ export default function App() {
   usePanelResizing();
   useUpdateChecks();
   useStatsPings();
+  useWhatsNewAnnounce();
   useUptimeAlerts();
 
   useEffect(() => {
@@ -201,7 +208,7 @@ export default function App() {
               <button className="btn" style={{ marginLeft: "auto" }} onClick={() => setGlobalView(null)}>Close</button>
             </div>
           </header>
-          {globalView === "activity" ? <ActivityView /> : globalView === "uptime" ? <UptimeView /> : globalView === "snippets" ? <SnippetsView /> : globalView === "settings" ? <SettingsView /> : globalView === "domains" ? <DomainsView /> : <KnownHostsView />}
+          {globalView === "activity" ? <ActivityView /> : globalView === "uptime" ? <UptimeView /> : globalView === "snippets" ? <SnippetsView /> : globalView === "settings" ? <SettingsView /> : globalView === "domains" ? <DomainsView /> : globalView === "changes" ? <ChangesView /> : globalView === "help" ? <HelpView /> : globalView === "feedback" ? <FeedbackView /> : <KnownHostsView />}
         </div>
       )}
       {order.map((id) => <Workspace key={id} s={sessions[id]} visible={!!showWorkspace && id === active} />)}
@@ -217,6 +224,7 @@ export default function App() {
     <Toasts />
     <CommandMenu />
     <StatsPrompt />
+    <WhatsNewDialog />
     </>
   );
 }

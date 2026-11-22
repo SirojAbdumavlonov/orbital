@@ -97,7 +97,7 @@ interface State {
   editing: Profile | "new" | null;
   /** The "Import from ~/.ssh/config" dialog is open. */
   importingSsh: boolean;
-  globalView: "activity" | "knownHosts" | "settings" | "domains" | "uptime" | "snippets" | null;
+  globalView: "activity" | "knownHosts" | "settings" | "domains" | "uptime" | "snippets" | "changes" | "help" | "feedback" | null;
   /** Back and forward history, like a browser. */
   navBack: Loc[];
   navFwd: Loc[];

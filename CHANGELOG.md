@@ -4,6 +4,18 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **What's new**: after an update, a window in the middle of the screen says what changed since the version you had before (every version in between), and the main page shows the new version's changes, each with a short description, until you remove the card with ×. The new **Changes** page in the sidebar lists every version at any time. Each version links to its full notes on GitHub; the notes come with the app, so they work offline.
+- **Feedback** (sidebar, and ⌘K "Send feedback…"): report a problem, suggest an idea or say what works, about Orbital in general, one part of it, or one change from the Changes page (each has a **Feedback** link). Only what you type, the Orbital version and your system are sent, to Orbital's own server; an optional contact lets us answer. It doesn't depend on the usage statistics setting.
+- **Help** (sidebar): getting started, common tasks, what to do about "Not connected", "Permission denied", cloud firewalls, host key warnings and certificates, keyboard shortcuts, and where your data is kept.
+- **Home** at the top of the sidebar (and in ⌘K) goes back to the main page; open servers stay connected.
+
+### Changed
+- **The usage statistics question is asked once at all**: not again after an update, a restart or closing it without an answer. Settings → Privacy turns statistics on or off any time.
+
+### Fixed
+- **The Orbital logo on the main page could be missing.** In a window shorter than the page, the top of the page (the logo) was cut off instead of the page scrolling; the logo is now also built into the app instead of loaded as a separate file.
+
 ## 1.4.0 (2026-11-22)
 
 ### Added
@@ -14,7 +26,7 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 - **"Not connected (session …)" when the connection dropped** (the Mac slept, the network changed or the server restarted). The message now says so in plain words, any screen that finds the connection gone marks the server as disconnected at once, and **Reconnect** keeps your tab, folder, selections and an open New website dialog with everything filled in (which also has its own Reconnect button now).
 
 ### Fixed
-- **HTTPS certificate: "points at 46.224.26.21, not this server (46.224.26.21, …)".** The check asks two public resolvers and called the name "not this server" unless both confirmed, so one resolver that was slow or hadn't seen a new record yet made a correct record look wrong. Now a name points here when a resolver sees this server's address and none sees a different one (a lagging resolver is mentioned, not held against it); "not this server" appears only for a different address, and names it. New website goes on as soon as the record points here, while the Domains check keeps waiting until every resolver agrees.
+- **HTTPS certificate: "points at <your server's address>, not this server".** The check asks two public resolvers and called the name "not this server" unless both confirmed, so one resolver that was slow or hadn't seen a new record yet made a correct record look wrong. Now a name points here when a resolver sees this server's address and none sees a different one (a lagging resolver is mentioned, not held against it); "not this server" appears only for a different address, and names it. New website goes on as soon as the record points here, while the Domains check keeps waiting until every resolver agrees.
 
 ### Added
 - **Adjust a container for its new server before moving it** (Move to server… → "Adjust for the new server"):

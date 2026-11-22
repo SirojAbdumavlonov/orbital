@@ -7,6 +7,8 @@ import { bytes } from "../lib/format";
 import { useUpdates } from "../lib/updates";
 import { useStore } from "../store";
 import { STATS_WHAT, useStats } from "../lib/stats";
+import { currentRelease } from "../lib/whatsNew";
+import { RELEASES, showWhatsNew } from "../components/WhatsNew";
 
 function Row({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -66,6 +68,7 @@ function UpdateRow({ version }: { version: string }) {
         <div className="setting-text">
           <b>Orbital {version}</b>
           <small>{hint}</small>
+          {currentRelease(RELEASES, version) && <button className="wn-link" style={{ marginTop: 4 }} onClick={() => showWhatsNew(currentRelease(RELEASES, version))}>What's new in this version</button>}
           {u.status === "downloading" && <div className="progress"><span style={{ width: `${pct ?? 30}%` }} className={pct === null ? "indeterminate" : ""} /></div>}
         </div>
         <div className="setting-control">

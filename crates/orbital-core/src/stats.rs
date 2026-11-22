@@ -13,7 +13,7 @@
 //! (development, forks) send nothing and never ask.
 
 use crate::db::Database;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
@@ -116,6 +116,109 @@ pub async fn send(db: &Database, event: StatsEvent, c: Counts) {
         .await;
 }
 
+/// What someone writes on the Feedback page. Sent only when they click Send,
+/// whatever they answered about statistics, to the same server.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Feedback {
+    /// "problem", "idea", "praise" or "other".
+    pub kind: String,
+    /// The part of Orbital it's about ("Docker", "1.4.0: Test a website"), or empty.
+    #[serde(default)]
+    pub about: String,
+    pub message: String,
+    /// How to answer (email, Telegram), only if they want an answer.
+    #[serde(default)]
+    pub contact: String,
+}
+
+pub const FEEDBACK_KINDS: [&str; 4] = ["problem", "idea", "praise", "other"];
+pub const MAX_MESSAGE: usize = 4000;
+pub const MAX_ABOUT: usize = 80;
+pub const MAX_CONTACT: usize = 200;
+
+/// Whether this build has somewhere to send feedback.
+pub fn feedback_available() -> bool {
+    url().is_some()
+}
+
+fn typed(v: &str) -> String {
+    v.chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// The request body for feedback: what they typed (checked, trimmed) plus the
+/// app version and OS. Nothing about their servers, no install id.
+pub fn feedback_payload(f: &Feedback) -> Result<serde_json::Value> {
+    let kind = f.kind.trim();
+    if !FEEDBACK_KINDS.contains(&kind) {
+        return Err(Error::InvalidInput(format!("unknown feedback kind {kind:?}")));
+    }
+    let (about, message, contact) = (typed(&f.about), typed(&f.message), typed(&f.contact));
+    if message.is_empty() {
+        return Err(Error::InvalidInput("write a message first".into()));
+    }
+    for (name, v, max) in [
+        ("message", &message, MAX_MESSAGE),
+        ("topic", &about, MAX_ABOUT),
+        ("contact", &contact, MAX_CONTACT),
+    ] {
+        if v.chars().count() > max {
+            return Err(Error::InvalidInput(format!("the {name} is too long (at most {max} characters)")));
+        }
+    }
+    Ok(serde_json::json!({
+        "kind": kind,
+        "about": about,
+        "message": message,
+        "contact": contact,
+        "version": env!("CARGO_PKG_VERSION"),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+    }))
+}
+
+/// Sends feedback and says plainly when it didn't arrive.
+pub async fn send_feedback(f: &Feedback) -> Result<()> {
+    let body = feedback_payload(f)?;
+    let Some(base) = url() else {
+        return Err(Error::Other(
+            "this copy of Orbital has no feedback address (a development build); open an issue on GitHub instead".into(),
+        ));
+    };
+    post_feedback(base, &body).await
+}
+
+async fn post_feedback(base: &str, body: &serde_json::Value) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| Error::Other(e.to_string()))?;
+    let res = client
+        .post(format!("{base}/v1/feedback"))
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .map_err(|e| {
+            Error::Other(format!(
+                "couldn't reach the feedback server ({}); check the internet connection and try again",
+                e.without_url()
+            ))
+        })?;
+    match res.status().as_u16() {
+        200..=299 => Ok(()),
+        429 => Err(Error::Other(
+            "a lot of feedback arrived in the last hour; please try again later".into(),
+        )),
+        400 | 413 => Err(Error::InvalidInput("the feedback server refused this message".into())),
+        code => Err(Error::Other(format!("the feedback server answered {code}; please try again later"))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,5 +290,119 @@ mod tests {
         tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(send(&db, StatsEvent::Opened, Counts::default()));
+    }
+
+    fn fb(kind: &str, message: &str) -> Feedback {
+        Feedback {
+            kind: kind.into(),
+            about: " Docker ".into(),
+            message: message.into(),
+            contact: String::new(),
+        }
+    }
+
+    #[test]
+    fn feedback_sends_what_was_typed_and_the_version_only() {
+        let p = feedback_payload(&fb("idea", "  compose logs\u{7}\nplease ")).unwrap();
+        let mut keys: Vec<&str> = p.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, ["about", "arch", "contact", "kind", "message", "os", "version"]);
+        assert_eq!(p["message"], "compose logs\nplease");
+        assert_eq!(p["about"], "Docker");
+        assert!(feedback_payload(&fb("spam", "x")).is_err());
+        assert!(feedback_payload(&fb("idea", "  ")).is_err());
+        assert!(feedback_payload(&fb("idea", &"é".repeat(MAX_MESSAGE))).is_ok());
+        assert!(feedback_payload(&fb("idea", &"x".repeat(MAX_MESSAGE + 1))).is_err());
+        let mut long = fb("problem", "x");
+        long.contact = "c".repeat(MAX_CONTACT + 1);
+        assert!(feedback_payload(&long).is_err());
+        // Test builds have no server: a clear error, no network.
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(send_feedback(&fb("idea", "hi")))
+            .unwrap_err();
+        assert!(err.to_string().contains("GitHub"), "{err}");
+    }
+
+    /// The stats server stores exactly what `feedback_payload` sends.
+    #[cfg(unix)]
+    #[test]
+    fn the_stats_server_accepts_feedback() {
+        let body = feedback_payload(&fb("problem", "Files: \"permission denied\" <here>\nsecond line"))
+            .unwrap()
+            .to_string();
+        let check = format!(
+            "import sys; sys.path.insert(0, {dir:?}); import orbital_stats as s; f = s.clean_feedback({body:?}.encode()); assert f and f['kind'] == 'problem' and '\\n' in f['message'], f",
+            dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../stats-server"),
+        );
+        let out = match std::process::Command::new("python3").arg("-c").arg(check).output() {
+            Ok(o) => o,
+            Err(_) => return,
+        };
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// End to end: the real stats server on a local port takes feedback from
+    /// `post_feedback`, shows it (escaped) on the dashboard, and refuses junk.
+    #[cfg(unix)]
+    #[test]
+    fn feedback_reaches_the_stats_server_over_http() {
+        use std::io::{BufRead, BufReader};
+        let dir = tempfile::tempdir().unwrap();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../../stats-server/orbital_stats.py");
+        let token = "t0ken-for-the-test-only";
+        let Ok(mut child) = std::process::Command::new("python3")
+            .arg("-I")
+            .arg(file)
+            .env("ORBITAL_STATS_TOKEN", token)
+            .env("ORBITAL_STATS_DB", dir.path().join("s.db"))
+            .env("ORBITAL_STATS_PORT", port.to_string())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+        else {
+            return; // no python3 here
+        };
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        assert!(line.contains("listening"), "{line}");
+        let base = format!("http://127.0.0.1:{port}");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            let body = feedback_payload(&fb("problem", "<script>alert(1)</script> breaks")).unwrap();
+            post_feedback(&base, &body).await?;
+            let refused = post_feedback(&base, &serde_json::json!({"kind": "spam", "message": "x"})).await;
+            assert!(matches!(refused, Err(Error::InvalidInput(_))), "{refused:?}");
+            let page = reqwest::Client::new()
+                .get(format!("{base}/"))
+                .basic_auth("orbital", Some(token))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap();
+            assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt; breaks"), "{page}");
+            assert!(!page.contains("<script>alert"));
+            let list: serde_json::Value = serde_json::from_str(
+                &reqwest::Client::new()
+                    .get(format!("{base}/v1/feedback"))
+                    .basic_auth("orbital", Some(token))
+                    .send()
+                    .await
+                    .unwrap()
+                    .text()
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(list[0]["kind"], "problem");
+            assert_eq!(list[0]["about"], "Docker");
+            let anonymous = reqwest::get(format!("{base}/v1/feedback")).await.unwrap().status();
+            assert_eq!(anonymous.as_u16(), 401);
+            Ok::<_, Error>(())
+        });
+        let _ = child.kill();
+        result.unwrap();
     }
 }

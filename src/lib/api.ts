@@ -474,6 +474,9 @@ export interface MovePlan { name: string; image: string; imageId: string; repoDi
 export interface MoveOptions { ports?: PortMap[]; args?: string[]; envSet?: Record<string, string>; envRemove?: string[] }
 export interface MovePreview { plan: MovePlan; clashes: { noDocker: boolean; name: boolean; ports: number[]; paths: string[] }; target: string }
 
+export type FeedbackKind = "problem" | "idea" | "praise" | "other";
+export interface FeedbackInput { kind: FeedbackKind; about: string; message: string; contact: string }
+
 export interface StatsState { available: boolean; enabled: boolean | null }
 
 export type NetCheck = "ping" | "dns" | "port" | "http" | "trace";
@@ -1285,6 +1288,10 @@ export const api = {
   statsState: () => invoke<StatsState>("stats_state"),
   setStats: (enabled: boolean) => invoke<StatsState>("set_stats", { enabled }),
   statsPing: (event: "opened" | "active") => invoke<void>("stats_ping", { event }),
+  /** Sent to the project's feedback server; only what was typed, plus version and OS. */
+  sendFeedback: (feedback: FeedbackInput) => invoke<void>("send_feedback", { feedback }),
+  /** Whether this build has a feedback server (release builds); otherwise feedback goes to GitHub issues. */
+  feedbackAvailable: () => invoke<boolean>("feedback_available"),
   saveText: (path: string, text: string) => invoke<void>("save_text", { path, text }),
   auditExport: (format: "json" | "csv", path: string) => invoke<void>("audit_export", { format, path }),
   /** Results and alerts from the uptime checks, for as long as the page lives. */

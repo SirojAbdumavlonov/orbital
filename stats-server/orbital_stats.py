@@ -11,8 +11,20 @@ Orbital (only where the user said yes) sends small JSON events here:
 Only those fields are kept, each checked; anything else is dropped. No IP
 address, no request log, no cookies. Events are kept for 400 days.
 
+Feedback (sent only when someone writes it in Orbital's Feedback page and
+clicks Send; it doesn't need the statistics "yes"):
+
+    POST /v1/feedback
+    {"kind": "problem" | "idea" | "praise" | "other", "about": "Docker",
+     "message": "…", "contact": "", "version": "1.4.1", "os": "macos",
+     "arch": "aarch64"}
+
+The message (up to 4000 characters) and the optional contact (up to 200,
+for a reply) are what the person typed; nothing else about them is kept.
+
     GET /            the dashboard (HTTP Basic auth: user "orbital", the token)
     GET /v1/summary  the same numbers as JSON (same auth)
+    GET /v1/feedback the feedback as JSON, newest first (same auth)
     GET /healthz     "ok"
 
 Python 3.8+ standard library only. Settings come from the environment:
@@ -40,6 +52,13 @@ UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 VERSION = re.compile(r"^[0-9A-Za-z.+-]{1,32}$")
 WORD = re.compile(r"^[a-z0-9_]{1,16}$")
 EVENTS = ("opened", "active")
+KINDS = ("problem", "idea", "praise", "other")
+MAX_MESSAGE = 4000
+MAX_ABOUT = 80
+MAX_CONTACT = 200
+MAX_FEEDBACK_BODY = 24 * 1024
+# A spam brake: at most this many feedback messages are taken per hour, all senders together.
+FEEDBACK_PER_HOUR = 60
 KEEP_DAYS = 400
 MAX_BODY = 4096
 DAY = 86400
@@ -58,6 +77,18 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_at ON events(at);
 CREATE INDEX IF NOT EXISTS events_install ON events(install, at);
+CREATE TABLE IF NOT EXISTS feedback (
+  id INTEGER PRIMARY KEY,
+  at INTEGER NOT NULL,          -- server time, seconds
+  kind TEXT NOT NULL,
+  about TEXT NOT NULL,
+  message TEXT NOT NULL,
+  contact TEXT NOT NULL,
+  version TEXT NOT NULL,
+  os TEXT NOT NULL,
+  arch TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS feedback_at ON feedback(at);
 """
 
 
@@ -80,6 +111,28 @@ class Store:
             if now - self.pruned > DAY:
                 self.db.execute("DELETE FROM events WHERE at < ?", (now - KEEP_DAYS * DAY,))
                 self.pruned = now
+
+    def add_feedback(self, f, now=None):
+        """Stores one message; False when the hourly brake is reached."""
+        now = int(now if now is not None else time.time())
+        with self.lock, self.db:
+            recent = self.db.execute("SELECT COUNT(*) FROM feedback WHERE at >= ?", (now - 3600,)).fetchone()[0]
+            if recent >= FEEDBACK_PER_HOUR:
+                return False
+            self.db.execute(
+                "INSERT INTO feedback (at, kind, about, message, contact, version, os, arch) VALUES (?,?,?,?,?,?,?,?)",
+                (now, f["kind"], f["about"], f["message"], f["contact"], f["version"], f["os"], f["arch"]),
+            )
+        return True
+
+    def feedback(self, limit=200):
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT id, at, kind, about, message, contact, version, os, arch FROM feedback ORDER BY at DESC, id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        keys = ("id", "at", "kind", "about", "message", "contact", "version", "os", "arch")
+        return [dict(zip(keys, r)) for r in rows]
 
     def summary(self, now=None):
         now = int(now if now is not None else time.time())
@@ -155,7 +208,64 @@ def clean(body):
     return out if ok else None
 
 
-def page(s):
+CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def text(v, limit, required=False):
+    """A typed text field: control characters removed, trimmed, within its limit."""
+    if not isinstance(v, str):
+        return None
+    v = CONTROL.sub("", v).strip()
+    if (required and not v) or len(v) > limit:
+        return None
+    return v
+
+
+def clean_feedback(body):
+    """The feedback as stored, or None if anything is off."""
+    try:
+        f = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(f, dict):
+        return None
+    out = {
+        "kind": f.get("kind"),
+        "about": text(f.get("about", ""), MAX_ABOUT),
+        "message": text(f.get("message"), MAX_MESSAGE, required=True),
+        "contact": text(f.get("contact", ""), MAX_CONTACT),
+        "version": str(f.get("version", "")),
+        "os": str(f.get("os", "")),
+        "arch": str(f.get("arch", "")),
+    }
+    ok = (
+        out["kind"] in KINDS
+        and out["about"] is not None
+        and out["message"] is not None
+        and out["contact"] is not None
+        and VERSION.match(out["version"])
+        and WORD.match(out["os"])
+        and WORD.match(out["arch"])
+    )
+    return out if ok else None
+
+
+def feedback_html(items):
+    if not items:
+        return "<p>No feedback yet.</p>"
+    out = []
+    for f in items:
+        when = time.strftime("%Y-%m-%d %H:%M", time.gmtime(f["at"]))
+        meta = " · ".join(html.escape(x) for x in (f["kind"], f["about"], f"Orbital {f['version']}", f["os"]) if x)
+        contact = f"<div class=contact>Reply to: {html.escape(f['contact'])}</div>" if f["contact"] else ""
+        out.append(
+            f"<article class='fb {html.escape(f['kind'])}'><header><b>{meta}</b><span>{when}</span></header>"
+            f"<div class=msg>{html.escape(f['message'])}</div>{contact}</article>"
+        )
+    return "".join(out)
+
+
+def page(s, items=()):
     rows = "".join(
         f"<tr><td>{d['day']}</td><td>{d['people']}</td><td>{d['new']}</td>"
         f"<td><div class=bar style='width:{min(100, d['people'] * 100 // max(1, max(x['people'] for x in s['daily'])))}%'></div></td></tr>"
@@ -178,6 +288,10 @@ table{{width:100%;border-collapse:collapse}}td,th{{padding:5px 6px;border-bottom
 th{{color:var(--dim);font-weight:500}}.bar{{height:8px;background:var(--amber);border-radius:4px;min-width:2px}}
 ul{{list-style:none;padding:0;margin:0 0 16px}}li{{padding:3px 0;border-bottom:1px solid var(--line)}}li b{{display:inline-block;min-width:90px}}
 h2{{font-size:14px;color:var(--dim);font-weight:500;margin:0 0 8px}}
+.fb{{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--dim);border-radius:8px;padding:10px 12px;margin-bottom:8px}}
+.fb.problem{{border-left-color:#e5645a}}.fb.idea{{border-left-color:var(--amber)}}.fb.praise{{border-left-color:#4fbf8b}}
+.fb header{{display:flex;justify-content:space-between;gap:10px;color:var(--dim);font-size:12px;margin-bottom:4px}}.fb header b{{color:var(--ink);font-weight:500}}
+.msg{{white-space:pre-wrap;overflow-wrap:anywhere}}.contact{{color:var(--dim);font-size:12px;margin-top:6px}}
 </style>
 <main>
 <h1>Orbital usage</h1><p>Anonymous counts from people who agreed to share them. Times in UTC.</p>
@@ -193,6 +307,8 @@ h2{{font-size:14px;color:var(--dim);font-weight:500;margin:0 0 8px}}
 <div><h2>Last 14 days</h2><table><tr><th>Day</th><th>People</th><th>New</th><th></th></tr>{rows}</table></div>
 <div><h2>Versions (last 30 days)</h2><ul>{lst(s["versions"])}</ul><h2>Systems</h2><ul>{lst(s["os"])}</ul></div>
 </div>
+<h2 style="margin-top:24px">Feedback (newest first)</h2>
+{feedback_html(items)}
 </main>"""
 
 
@@ -222,12 +338,22 @@ def make_handler(store, token):
             return hmac.compare_digest(got.encode(), want.encode())
 
         def do_POST(self):
-            if self.path != "/v1/events":
+            limit = {"/v1/events": MAX_BODY, "/v1/feedback": MAX_FEEDBACK_BODY}.get(self.path)
+            if limit is None:
                 return self.send(404)
-            n = int(self.headers.get("Content-Length") or 0)
-            if n <= 0 or n > MAX_BODY:
-                return self.send(413 if n > MAX_BODY else 400)
-            e = clean(self.rfile.read(n))
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return self.send(400)
+            if n <= 0 or n > limit:
+                return self.send(413 if n > limit else 400)
+            body = self.rfile.read(n)
+            if self.path == "/v1/feedback":
+                f = clean_feedback(body)
+                if f is None:
+                    return self.send(400)
+                return self.send(204 if store.add_feedback(f) else 429)
+            e = clean(body)
             if e is None:
                 return self.send(400)
             store.add(e)
@@ -236,14 +362,16 @@ def make_handler(store, token):
         def do_GET(self):
             if self.path == "/healthz":
                 return self.send(200, b"ok")
-            if self.path not in ("/", "/v1/summary"):
+            if self.path not in ("/", "/v1/summary", "/v1/feedback"):
                 return self.send(404)
             if not self.authorized():
                 return self.send(401, b"sign in", extra=[("WWW-Authenticate", 'Basic realm="Orbital usage"')])
+            if self.path == "/v1/feedback":
+                return self.send(200, json.dumps(store.feedback()).encode(), "application/json")
             s = store.summary()
             if self.path == "/v1/summary":
                 return self.send(200, json.dumps(s).encode(), "application/json")
-            self.send(200, page(s).encode(), "text/html; charset=utf-8")
+            self.send(200, page(s, store.feedback()).encode(), "text/html; charset=utf-8")
 
     return Handler
 
@@ -277,6 +405,25 @@ def selftest():
     # Old events go once a day.
     s.add(clean(json.dumps(ev(b)).encode()), now + KEEP_DAYS * DAY)
     assert s.db.execute("SELECT COUNT(*) FROM events WHERE at < ?", (now,)).fetchone()[0] == 0
+    # Feedback: typed text is kept as typed (minus control characters), the rest checked.
+    fb = lambda **kw: json.dumps({"kind": "idea", "about": "Docker", "message": "  Add <b>compose</b> logs\x07 ", "contact": "",  # noqa: E731
+                                  "version": "1.4.1", "os": "macos", "arch": "aarch64", **kw}).encode()
+    f = clean_feedback(fb())
+    assert f and f["message"] == "Add <b>compose</b> logs" and f["about"] == "Docker", f
+    assert "ip" not in clean_feedback(fb(ip="203.0.113.9"))
+    for bad in [fb(kind="spam"), fb(message="   "), fb(message="x" * (MAX_MESSAGE + 1)), fb(contact="x" * 201),
+                fb(about=["Docker"]), fb(os="mac os"), fb(version="1; drop"), b"[]", b"{"]:
+        assert clean_feedback(bad) is None, bad
+    assert s.add_feedback(f, now) is True
+    assert s.add_feedback(clean_feedback(fb(kind="problem", contact="me@example.com")), now + 1) is True
+    items = s.feedback()
+    assert [i["kind"] for i in items] == ["problem", "idea"] and items[0]["contact"] == "me@example.com", items
+    shown = page(r, items)
+    assert "&lt;b&gt;compose&lt;/b&gt;" in shown and "<b>compose</b>" not in shown, "feedback must be escaped"
+    for i in range(FEEDBACK_PER_HOUR - 2):
+        assert s.add_feedback(f, now + 2 + i)
+    assert s.add_feedback(f, now + 100) is False, "hourly brake"
+    assert s.add_feedback(f, now + 3700) is True
     print("selftest ok")
 
 

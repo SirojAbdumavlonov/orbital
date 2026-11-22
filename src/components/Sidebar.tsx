@@ -1,11 +1,11 @@
 import { PROTOCOL_NAMES } from "./ProfileDialog";
 import { JobsMenu } from "./JobsMenu";
-import { Activity, HeartPulse, SquareCode, ChevronLeft, ChevronRight, FileInput, Globe, KeyRound, Loader2, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sun, Unplug } from "lucide-react";
+import { Activity, HeartPulse, SquareCode, ChevronLeft, ChevronRight, FileInput, Globe, Home, KeyRound, LifeBuoy, Loader2, MessageSquare, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sparkles, Sun, Unplug } from "lucide-react";
 import { isMac, KEYS } from "../lib/platform";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Profile } from "../lib/api";
-import { useStore } from "../store";
+import { goTo, useStore } from "../store";
 
 export function Sidebar() {
   const { profiles, sessions, active, connecting, connect, disconnect, setEditing, globalView, setGlobalView } = useStore();
@@ -36,6 +36,12 @@ export function Sidebar() {
           {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
         </button>
         <AddMenu />
+      </div>
+      {/* Back to the main page (recent servers, what's new); open connections stay open. */}
+      <div className="sidebar-home">
+        <button className={`nav-item ${!globalView && !active ? "on" : ""}`} title="Main page: recent servers and what's new. Open servers stay connected." onClick={() => goTo(null)}>
+          <Home size={15} /> Home
+        </button>
       </div>
       <div className="sidebar-scroll">
         {groups.length === 0 && <p className="faint" style={{ padding: "8px" }}>No servers yet.</p>}
@@ -83,6 +89,9 @@ export function Sidebar() {
       </div>
       <div className="sidebar-foot">
         <JobsMenu />
+        <button className={`nav-item ${globalView === "changes" ? "on" : ""}`} onClick={() => setGlobalView("changes")}>
+          <Sparkles size={15} /> Changes
+        </button>
         <button className={`nav-item ${globalView === "domains" ? "on" : ""}`} onClick={() => setGlobalView("domains")}>
           <Globe size={15} /> Domains
         </button>
@@ -101,6 +110,14 @@ export function Sidebar() {
         <button className={`nav-item ${globalView === "settings" ? "on" : ""}`} onClick={() => setGlobalView("settings")}>
           <Settings size={15} /> Settings
         </button>
+        <div className="nav-pair">
+          <button className={`nav-item ${globalView === "help" ? "on" : ""}`} onClick={() => setGlobalView("help")}>
+            <LifeBuoy size={15} /> Help
+          </button>
+          <button className={`nav-item ${globalView === "feedback" ? "on" : ""}`} onClick={() => setGlobalView("feedback")}>
+            <MessageSquare size={15} /> Feedback
+          </button>
+        </div>
       </div>
     </aside>
   );

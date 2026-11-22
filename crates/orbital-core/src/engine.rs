@@ -420,6 +420,16 @@ impl Engine {
         crate::stats::send(&self.db, event, counts).await;
     }
 
+    /// Feedback from the Feedback page, sent to the project's server (see `stats::send_feedback`).
+    /// Not in the activity log: it changes nothing on a server.
+    pub async fn send_feedback(&self, feedback: &crate::stats::Feedback) -> Result<()> {
+        crate::stats::send_feedback(feedback).await
+    }
+
+    pub fn feedback_available(&self) -> bool {
+        crate::stats::feedback_available()
+    }
+
     pub fn list_profiles(&self) -> Result<Vec<Profile>> {
         profiles::list(&self.db)
     }

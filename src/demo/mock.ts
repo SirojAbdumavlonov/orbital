@@ -1,3 +1,4 @@
+import pkg from "../../package.json";
 // Demo mode: a fake backend so the UI runs in a plain browser (`npm run demo`)
 // for design work, screenshots and marketing. Never included in the Tauri build path.
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -1232,11 +1233,14 @@ export function install() {
       case "stats_state": return statsState;
       case "set_stats": statsState = { available: true, enabled: args.enabled }; return statsState;
       case "stats_ping": return null;
+      case "feedback_available": return true;
+      case "send_feedback": await new Promise((r) => setTimeout(r, 700)); if (/fail/i.test(args.feedback.message)) throw { kind: "Other", message: "couldn't reach the feedback server (connection refused); check the internet connection and try again" }; return null;
       case "plugin:dialog|save": return `/Users/demo/Downloads/${args.options?.defaultPath ?? "download"}`;
       // Picking an SSH config file in the import dialog.
       case "plugin:dialog|open": return args.options?.title?.includes("SSH config") ? "/Users/demo/work/ssh_config" : null;
       // Updates: a newer version is always on offer; the download takes a few seconds.
-      case "plugin:app|version": return "1.0.0";
+      case "plugin:app|version": return pkg.version;
+      case "plugin:opener|open_url": window.open(args.url, "_blank", "noopener"); return null;
       case "plugin:updater|check":
         await new Promise((r) => setTimeout(r, 700));
         return {

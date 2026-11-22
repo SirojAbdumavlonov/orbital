@@ -813,6 +813,16 @@ pub fn set_stats(engine: Eng, enabled: bool) -> R<orbital_core::stats::StatsStat
 }
 
 #[tauri::command]
+pub async fn send_feedback(engine: Eng<'_>, feedback: orbital_core::stats::Feedback) -> R<()> {
+    engine.send_feedback(&feedback).await
+}
+
+#[tauri::command]
+pub fn feedback_available(engine: Eng) -> bool {
+    engine.feedback_available()
+}
+
+#[tauri::command]
 pub async fn stats_ping(engine: Eng<'_>, event: orbital_core::stats::StatsEvent) -> R<()> {
     engine.stats_ping(event).await;
     Ok(())

@@ -1,10 +1,10 @@
 import { Command } from "cmdk";
-import { Activity, ArrowRightLeft, Cable, HeartPulse, SquareCode, ArrowLeft, ArrowRight, Download, FileInput, FolderTree, Globe, Gauge, KeyRound, ListChecks, Moon, Plug, Plus, RefreshCw, Server, Settings, SquareTerminal, Sun, Unplug } from "lucide-react";
+import { Activity, ArrowRightLeft, Cable, HeartPulse, SquareCode, ArrowLeft, ArrowRight, Download, FileInput, FolderTree, Globe, Gauge, Home, KeyRound, LifeBuoy, ListChecks, MessageSquare, Moon, Plug, Plus, RefreshCw, Server, Settings, Sparkles, SquareTerminal, Sun, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useUpdates } from "../lib/updates";
 import { KEYS, mod } from "../lib/platform";
-import { Tab, useStore } from "../store";
+import { goTo, Tab, useStore } from "../store";
 import { toolIcon } from "./ServerHeader";
 
 const BASE_TABS: [Tab, string, typeof Gauge][] = [
@@ -107,10 +107,14 @@ export function CommandMenu() {
           <Command.Item value="snippets saved commands run many servers" onSelect={run(() => st.setGlobalView("snippets"))}><SquareCode size={14} /> Snippets</Command.Item>
           <Command.Item value="domains dns records cloudflare check" onSelect={run(() => st.setGlobalView("domains"))}><Globe size={14} /> Domains and DNS</Command.Item>
           <Command.Item value="activity log" onSelect={run(() => st.setGlobalView("activity"))}><Activity size={14} /> Activity log</Command.Item>
+          <Command.Item value="home main page start recent" onSelect={run(() => goTo(null))}><Home size={14} /> Home</Command.Item>
           <Command.Item value="uptime monitoring websites checks down" onSelect={run(() => st.setGlobalView("uptime"))}><HeartPulse size={14} /> Uptime</Command.Item>
           <Command.Item value="security touch id hosts" onSelect={run(() => st.setGlobalView("knownHosts"))}><KeyRound size={14} /> Security</Command.Item>
           <Command.Item value="settings preferences" onSelect={run(() => st.setGlobalView("settings"))}><Settings size={14} /> Settings</Command.Item>
           <Command.Item value="check for updates new version" onSelect={run(() => { st.setGlobalView("settings"); void useUpdates.getState().check(); })}><Download size={14} /> Check for updates…</Command.Item>
+          <Command.Item value="what's new release notes changelog" onSelect={run(() => st.setGlobalView("changes"))}><Sparkles size={14} /> What's new</Command.Item>
+          <Command.Item value="help getting started troubleshooting shortcuts" onSelect={run(() => st.setGlobalView("help"))}><LifeBuoy size={14} /> Help</Command.Item>
+          <Command.Item value="feedback report problem bug idea suggestion complain" onSelect={run(() => st.setGlobalView("feedback"))}><MessageSquare size={14} /> Send feedback…</Command.Item>
           <Command.Item value="theme dark light mode" onSelect={run(() => setPref({ theme: theme === "dark" ? "light" : "dark" }))}>
             {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />} Switch to {theme === "dark" ? "light" : "dark"} mode
           </Command.Item>
