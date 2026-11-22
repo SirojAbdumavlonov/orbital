@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.4.2 (2026-11-22)
+
 ### Added
 - **Copy and paste in Files** (⌘C / ⌘V on macOS, Ctrl+C / Ctrl+V on Windows and Linux, or the new Paste button):
   - files and folders copied in Finder, Explorer or a Linux file manager are uploaded to the open folder;
