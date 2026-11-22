@@ -240,6 +240,17 @@ pub async fn rename(engine: Eng<'_>, session_id: String, from: String, to: Strin
 }
 
 #[tauri::command]
+pub async fn copy_within(engine: Eng<'_>, session_id: String, from: String, to: String, progress: Channel<ProgressEvent>) -> R<()> {
+    progress::run_job(progress.id(), sink(progress), engine.copy_within(&session_id, &from, &to)).await
+}
+
+/// What the system clipboard holds that Files can paste: copied files, text, or an image.
+#[tauri::command]
+pub fn clipboard_read() -> crate::clipboard::ClipboardContents {
+    crate::clipboard::read()
+}
+
+#[tauri::command]
 pub async fn remove(engine: Eng<'_>, session_id: String, path: String, recursive: bool) -> R<()> {
     engine.remove(&session_id, &path, recursive).await
 }

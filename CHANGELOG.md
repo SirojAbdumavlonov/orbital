@@ -4,6 +4,20 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Copy and paste in Files** (⌘C / ⌘V on macOS, Ctrl+C / Ctrl+V on Windows and Linux, or the new Paste button):
+  - files and folders copied in Finder, Explorer or a Linux file manager are uploaded to the open folder;
+  - a file or folder copied in Orbital is pasted into another folder on the same server, or into a folder on another connected server;
+  - a copied screenshot or image is uploaded as a PNG.
+
+  The most recent copy wins, so copying something on your computer after copying in Orbital pastes that. A name already in the folder gets " copy" added (like Finder), so nothing is replaced. Copies on the same server keep permissions and times, use sudo when the folder needs it, and are recorded in the activity log.
+
+### Changed
+- **Usage statistics never show an error.** Sending already failed silently (no network, the statistics server down); now saving your answer does too.
+
+### Fixed
+- **Deleting an HTTPS certificate could break nginx** ("cannot load certificate … No such file or directory"). The check that a certificate isn't in use only searched /etc/nginx and skipped folders reached through links, so a site that nginx loads from elsewhere was missed. It now asks nginx itself for every file it loads (`nginx -T`).
+
 ## 1.4.1 (2026-11-22)
 
 ### Added

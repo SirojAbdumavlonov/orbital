@@ -1,6 +1,7 @@
 //! Tauri shell: a thin, typed bridge from the UI to `orbital_core::Engine`.
 //! No business logic lives here — everything is in the core crate, tested headless.
 
+mod clipboard;
 mod commands;
 
 use orbital_core::db::Database;
@@ -330,6 +331,8 @@ pub fn run() {
             commands::set_stats,
             commands::stats_ping,
             commands::send_feedback,
+            commands::copy_within,
+            commands::clipboard_read,
             commands::feedback_available,
             commands::container_action,
             commands::run_command,

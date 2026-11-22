@@ -321,12 +321,15 @@ pub fn delete_command(name: &str) -> Result<String> {
 }
 
 /// Lists the web-server config files that still point at a certificate, so it
-/// isn't deleted out from under a running site.
+/// isn't deleted out from under a running site. nginx is asked for every file
+/// it really loads (`nginx -T`, which also covers includes outside /etc/nginx
+/// and folders reached through links); Apache's folders are searched,
+/// following links (`grep -R`).
 pub fn usage_check_command(name: &str) -> Result<String> {
-    let dir = format!("/etc/letsencrypt/live/{}/", validate_cert_name(name)?);
+    let dir = quote(&format!("/etc/letsencrypt/live/{}/", validate_cert_name(name)?));
     Ok(format!(
-        "grep -rlF -- {} /etc/nginx /etc/apache2 /etc/httpd 2>/dev/null; true",
-        quote(&dir)
+        "{{ if command -v nginx >/dev/null 2>&1; then nginx -T 2>/dev/null | awk -v d={dir} '/^# configuration file /{{f=$4; sub(/:$/, \"\", f)}} index($0, d) && f != \"\" {{print f}}'; fi; \
+grep -RlF -- {dir} /etc/nginx /etc/apache2 /etc/httpd 2>/dev/null; }} | sort -u; true"
     ))
 }
 
@@ -518,7 +521,36 @@ timer=certbot.timer|ActiveState=active|LoadState=loaded|NextElapseUSecRealtime=S
         assert!(usage_check_command("x/../../etc").is_err());
         assert!(usage_check_command("shop.example.com")
             .unwrap()
-            .starts_with("grep -rlF -- /etc/letsencrypt/live/shop.example.com/ /etc/nginx"));
+            .contains("grep -RlF -- /etc/letsencrypt/live/shop.example.com/ /etc/nginx"));
+    }
+
+    /// The in-use check finds a site nginx loads from outside /etc/nginx (here a
+    /// fake `nginx -T`), lists each file once, and ignores other certificates.
+    #[cfg(unix)]
+    #[test]
+    fn usage_check_asks_nginx_for_every_loaded_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("nginx");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ncat <<'EOF'\n# configuration file /etc/nginx/nginx.conf:\nhttp { include /opt/sites/*.conf; }\n\n# configuration file /opt/sites/stats.conf:\nserver {\n    ssl_certificate /etc/letsencrypt/live/stats.example.com/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/stats.example.com/privkey.pem;\n}\n# configuration file /opt/sites/other.conf:\n    ssl_certificate /etc/letsencrypt/live/stats.example.com-0001/fullchain.pem;\nEOF\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let run = |name: &str| {
+            let o = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(usage_check_command(name).unwrap())
+                .env("PATH", format!("{}:/usr/bin:/bin", dir.path().display()))
+                .output()
+                .unwrap();
+            assert!(o.status.success());
+            String::from_utf8(o.stdout).unwrap()
+        };
+        assert_eq!(run("stats.example.com"), "/opt/sites/stats.conf\n");
+        assert_eq!(run("stats.example.com-0001"), "/opt/sites/other.conf\n");
+        assert_eq!(run("unused.example.com"), "");
     }
 
     // Runs the script meant for Linux servers through a local sh; Windows lacks the tools it reads.

@@ -1136,6 +1136,12 @@ export const api = {
     invoke<number>("upload", { sessionId, localPath, remotePath, progress: progressChannel(onProgress) }),
   download: (sessionId: string, remotePath: string, localPath: string) => invoke<number>("download", { sessionId, remotePath, localPath }),
 
+  /** Paste on the same server: copy a file or folder to another place there (cp, sudo when refused). */
+  copyWithin: (sessionId: string, from: string, to: string, onProgress?: OnProgress) =>
+    invoke<void>("copy_within", { sessionId, from, to, progress: progressChannel(onProgress) }),
+  /** What this computer's clipboard holds: copied files, text, or an image saved as a temporary PNG. */
+  clipboardRead: () => invoke<{ files: string[]; text: string | null; image: string | null; native: boolean }>("clipboard_read"),
+
   /** Copy a file or folder from one connected server to another (streamed through this computer). */
   copyBetween: (a: { srcSessionId: string; srcPath: string; dstSessionId: string; dstPath: string; overwrite: boolean }, onProgress?: OnProgress) =>
     invoke<TransferReport>("copy_between", { ...a, progress: progressChannel(onProgress) }),

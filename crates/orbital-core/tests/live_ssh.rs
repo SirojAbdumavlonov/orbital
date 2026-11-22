@@ -2219,3 +2219,61 @@ async fn find_files_and_download_a_folder() {
     assert!(engine.download_folder(&a.id, "/", &local).await.is_err());
     engine.run_command(&a.id, &format!("rm -rf {dir}"), false).await.unwrap();
 }
+
+/// Paste in Files on the same server: a file and a folder are copied with their
+/// contents and modes, an existing name or a folder into itself is refused,
+/// and the copy is in the activity log.
+#[tokio::test]
+async fn paste_copies_within_the_server() {
+    let Some(e) = env() else { return };
+    let Some(key) = e.key.clone() else { return };
+    let engine = engine();
+    let p = engine.create_profile(profile(&e, AuthMethod::Key, Some(key))).unwrap();
+    let a = connect(&engine, &p.id, None).await;
+    let dir = format!("{}/orbital-it-paste-{}", a.home, std::process::id());
+    engine
+        .run_command(
+            &a.id,
+            &format!("mkdir -p '{dir}/app dir/sub' && echo hi > '{dir}/app dir/sub/a.txt' && printf x > '{dir}/run.sh' && chmod 750 '{dir}/run.sh'"),
+            false,
+        )
+        .await
+        .unwrap();
+
+    engine
+        .copy_within(&a.id, &format!("{dir}/run.sh"), &format!("{dir}/run copy.sh"))
+        .await
+        .unwrap();
+    engine
+        .copy_within(&a.id, &format!("{dir}/app dir"), &format!("{dir}/app dir copy"))
+        .await
+        .unwrap();
+    let out = engine
+        .run_command(
+            &a.id,
+            &format!("cat '{dir}/app dir copy/sub/a.txt'; stat -c %a '{dir}/run copy.sh' 2>/dev/null || stat -f %Lp '{dir}/run copy.sh'"),
+            false,
+        )
+        .await
+        .unwrap();
+    let text = out.stdout;
+    assert!(text.contains("hi") && text.contains("750"), "{text}");
+
+    let exists = engine
+        .copy_within(&a.id, &format!("{dir}/run.sh"), &format!("{dir}/run copy.sh"))
+        .await;
+    assert!(exists.unwrap_err().to_string().contains("already exists"));
+    assert!(engine
+        .copy_within(&a.id, &format!("{dir}/app dir"), &format!("{dir}/app dir/sub/x"))
+        .await
+        .is_err());
+
+    let log = engine
+        .audit_query(&AuditFilter {
+            limit: Some(500),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(log.iter().any(|ev| ev.action == "file.copy" && ev.outcome == Outcome::Success));
+    engine.run_command(&a.id, &format!("rm -rf '{dir}'"), false).await.unwrap();
+}

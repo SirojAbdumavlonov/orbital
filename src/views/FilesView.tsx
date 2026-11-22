@@ -1,9 +1,9 @@
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   ArrowRightLeft, ArrowUp, ChevronRight, Download, Eye, EyeOff, FilePlus, FileText, Folder, FolderPlus, FolderUp, History, Link2, Lock, Pencil, RefreshCw, RotateCcw, Save,
-  Search, ShieldCheck, SquareTerminal, Star, Trash2, Upload, X,
+  ClipboardPaste, Search, ShieldCheck, SquareTerminal, Star, Trash2, Upload, X,
 } from "lucide-react";
-import { isMac, mod } from "../lib/platform";
+import { isMac, KEYS, mod } from "../lib/platform";
 import Editor, { DiffEditor, DiffOnMount, OnMount } from "@monaco-editor/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { confirm, Modal } from "../components/ui";
@@ -16,6 +16,7 @@ import "../lib/monaco";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { isSsh, OpenFile, SessionState, useStore } from "../store";
 import { useKept } from "../lib/kept";
+import { baseName as localName, freeName, pasteAction, typingIn, useCopied } from "../lib/paste";
 
 export function FilesView({ s }: { s: SessionState }) {
   return (
@@ -134,9 +135,12 @@ function Browser({ s }: { s: SessionState }) {
     }
   }
 
-  async function uploadPaths(paths: string[]) {
+  /** `fresh`: pasted files get a free name ("a copy.txt") instead of replacing one with the same name. */
+  async function uploadPaths(paths: string[], fresh = false) {
+    const taken = entries.map((e) => e.name);
     for (const p of paths) {
-      const name = p.split(/[\\/]/).pop()!;
+      const name = fresh ? freeName(localName(p), taken) : localName(p);
+      taken.push(name);
       const to = joinPath(s.cwd, name);
       try {
         await runJob((pr) => api.upload(sid, p, to, pr), { key: `upload:${sid}`, title: `Uploading ${name}`, sid, quietHere: false, done: (n) => `Uploaded ${name} (${bytes(n)})` });
@@ -157,6 +161,75 @@ function Browser({ s }: { s: SessionState }) {
     const picked = await openDialog({ directory: true, multiple: false, title: `Upload a folder to ${s.cwd}` });
     if (typeof picked === "string") uploadPaths([picked]);
   }
+
+  // ---- copy and paste (⌘C / ⌘V; Ctrl+C / Ctrl+V on Windows and Linux) ----
+  const copied = useCopied((c) => c.entry);
+  function copyEntry(e: FileEntry) {
+    useCopied.getState().set({ sid, path: e.path, name: e.name, dir: e.kind === "dir", server: s.profile.name });
+    // Its path goes on the system clipboard too: it pastes into a terminal, and a later copy elsewhere wins.
+    void navigator.clipboard?.writeText(e.path).catch(() => {});
+    toast({ kind: "info", title: `Copied ${e.name}`, body: `Paste it with ${KEYS.paste} in any folder, on this server or another one.` });
+  }
+  async function paste() {
+    let sys = { files: [] as string[], text: null as string | null, image: null as string | null, native: false };
+    try {
+      sys = await api.clipboardRead();
+    } catch {
+      // Not available: fall back to the web view's text clipboard below.
+    }
+    if (!sys.native) sys.text = await navigator.clipboard?.readText().catch(() => null) ?? null;
+    const act = pasteAction(sys, useCopied.getState().entry, { sid });
+    const taken = entries.map((e) => e.name);
+    if (act.kind === "upload") return uploadPaths(act.paths, true);
+    if (act.kind === "image") return uploadPaths([act.path], true);
+    if (act.kind === "nothing") return toast({ kind: "info", title: "Nothing to paste", body: act.why });
+    const from = act.from;
+    const to = joinPath(s.cwd, freeName(from.name, taken, from.dir));
+    if (!ssh) return toast({ kind: "error", title: "Can't paste here", body: "Copying between folders works on servers connected over SSH; upload or download instead." });
+    if (act.kind === "copySame") {
+      if (to === from.path || s.cwd === from.path || s.cwd.startsWith(from.path + "/")) {
+        return toast({ kind: "error", title: "Can't paste here", body: "A folder can't be copied into itself." });
+      }
+      try {
+        await runJob((p) => api.copyWithin(sid, from.path, to, p), { key: `copy:${sid}`, title: `Copying ${from.name}`, sid, quietHere: false, done: () => `Copied ${from.name} to ${s.cwd}` });
+      } catch {
+        // The job reports the error.
+      }
+    } else {
+      const src = useStore.getState().sessions[from.sid];
+      if (!src || src.lost) return toast({ kind: "error", title: `Reconnect ${from.server} first`, body: `${from.name} was copied from ${from.server}, which isn't connected now.` });
+      if (!isSsh(src)) return toast({ kind: "error", title: "Can't paste here", body: "Copying between servers works for servers connected over SSH." });
+      try {
+        await runJob((p) => api.copyBetween({ srcSessionId: from.sid, srcPath: from.path, dstSessionId: sid, dstPath: to, overwrite: false }, p), {
+          key: `copy:${sid}`, title: `Copying ${from.name} from ${from.server}`, sid, quietHere: false, done: () => `Copied ${from.name} from ${from.server} to ${s.cwd}`,
+        });
+      } catch {
+        // The job reports the error.
+      }
+    }
+    load();
+  }
+  // Latest versions for the key handler, which is set up once.
+  const keys = useRef({ copyEntry, paste, selected: null as FileEntry | null });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const st = useStore.getState();
+      if (st.globalView || st.active !== sid || st.sessions[sid]?.tab !== "files" || !mod(e) || e.altKey || e.shiftKey) return;
+      if (typingIn(e.target) || document.querySelector("[role=dialog]")) return;
+      const k = e.key.toLowerCase();
+      if (k === "c") {
+        // Selected text on the page copies as text, as usual.
+        if (window.getSelection()?.toString() || !keys.current.selected) return;
+        e.preventDefault();
+        keys.current.copyEntry(keys.current.selected);
+      } else if (k === "v") {
+        e.preventDefault();
+        void keys.current.paste();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sid]);
 
   // Native drag & drop from Finder.
   const [dropping, setDropping] = useState(false);
@@ -181,6 +254,7 @@ function Browser({ s }: { s: SessionState }) {
 
   const visible = entries.filter((e) => (showHidden || !e.hidden) && (!filter || e.name.toLowerCase().includes(filter.toLowerCase())));
   const selected = entries.find((e) => e.path === sel) ?? null;
+  keys.current = { copyEntry, paste, selected };
 
   return (
     <section className={`browser ${dropping ? "dropzone" : ""}`} aria-label="Remote files">
@@ -209,6 +283,12 @@ function Browser({ s }: { s: SessionState }) {
         <button className="icon-btn" title="New folder" aria-label="New folder" onClick={() => setNewItem("folder")}><FolderPlus size={15} /></button>
         <button className="icon-btn" title="Upload files from this computer (or drop files and folders here)" aria-label="Upload files" onClick={pickUpload}><Upload size={15} /></button>
         <button className="icon-btn" title="Upload a folder from this computer" aria-label="Upload folder" onClick={pickUploadFolder}><FolderUp size={15} /></button>
+        <button
+          className="icon-btn"
+          title={copied ? `Paste ${copied.name} here (${KEYS.paste}), or files copied on this computer` : `Paste files copied on this computer, or a file copied here with ${KEYS.copy} (${KEYS.paste})`}
+          aria-label="Paste"
+          onClick={() => void paste()}
+        ><ClipboardPaste size={15} /></button>
         {ssh && <button className="icon-btn" title="Open terminal in this folder" aria-label="Open terminal here" onClick={() => openTerminal(sid, s.cwd)}><SquareTerminal size={15} /></button>}
         {ssh && <button className="icon-btn" title="Send files or folders to another server" aria-label="Send to another server" onClick={() => setPickSend(true)}><ArrowRightLeft size={15} /></button>}
         {ssh && <button className={`icon-btn ${finding ? "on" : ""}`} title="Find files in this folder and below" aria-label="Find files" onClick={() => (finding ? closeFind() : setFinding(true))}><Search size={15} /></button>}

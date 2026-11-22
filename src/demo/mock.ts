@@ -146,8 +146,14 @@ const dirs: Record<string, [string, "file" | "dir" | "symlink", number, string][
   "/home/deploy": [[".bashrc", "file", 3771, "rw-r--r--"], [".ssh", "dir", 4096, "rwx------"], ["apps", "dir", 4096, "rwxr-xr-x"], ["backup.sh", "file", 812, "rwxr-xr-x"], ["docker-compose.yml", "file", 1460, "rw-r--r--"]],
   "/etc/nginx": [["conf.d", "dir", 4096, "rwxr-xr-x"], ["sites-available", "dir", 4096, "rwxr-xr-x"], ["sites-enabled", "dir", 4096, "rwxr-xr-x"], ["snippets", "dir", 4096, "rwxr-xr-x"], ["fastcgi_params", "file", 1125, "rw-r--r--"], ["mime.types", "file", 5465, "rw-r--r--"], ["nginx.conf", "file", 1482, "rw-r--r--"]],
 };
+/** Files pasted or uploaded in the demo, by folder, so they show up. */
+const added: Record<string, [string, string, number, string][]> = {};
+const addEntry = (path: string, kind = "file", size = 18_400_000) => {
+  const dir = path.slice(0, path.lastIndexOf("/")) || "/";
+  (added[dir] ??= []).push([path.slice(path.lastIndexOf("/") + 1), kind, size, kind === "dir" ? "rwxr-xr-x" : "rw-r--r--"]);
+};
 const listing = (path: string) =>
-  (dirs[path] ?? [["README.md", "file", 2048, "rw-r--r--"]]).map(([name, kind, size, mode], i) => ({
+  [...(dirs[path] ?? [["README.md", "file", 2048, "rw-r--r--"]]), ...(added[path] ?? [])].map(([name, kind, size, mode], i) => ({
     name, path: (path === "/" ? "" : path) + "/" + name, kind, size, mode, modeOctal: 0o644,
     mtime: now() - (i + 1) * 5400 * (i + 2), owner: path.startsWith("/etc") ? "root" : "deploy", group: path.startsWith("/etc") ? "root" : "deploy",
     uid: 0, gid: 0, hidden: name.startsWith("."),
@@ -991,11 +997,19 @@ export function install() {
         if (!args.force) throw { kind: "PreflightFailed", message: "Pre-flight check failed", data: { check: "web server config", output: `These files still use this certificate, so the web server would fail to start without it:\n/etc/nginx/sites-enabled/${args.name.split(".")[0]}` } };
         return certbotOut(`Deleted all files relating to certificate ${args.name}.`);
       case "copy_between":
+        addEntry(args.dstPath, "file", 48_211_300);
         await progress(args.progress, [[0, "step", `Copying ${args.srcPath} …`], ...transferEvents(12, 48_211_300, ["app.js", "vendor.js", "logo.png", "index.html"], 5000)]);
         return { files: 12, dirs: 3, bytes: 48_211_300, skipped: 0 };
       case "upload":
         await progress(args.progress, transferEvents(1, 18_400_000, [args.remotePath], 3000));
+        addEntry(args.remotePath);
         return 18_400_000;
+      case "copy_within":
+        await progress(args.progress, [[0, "step", `Copying ${args.from} to ${args.to} …`], [900, "line", ""]]);
+        addEntry(args.to, (dirs[args.from] ? "dir" : "file"), 4096);
+        return null;
+      // The demo's clipboard: set window.__clipboard = { files: [...] } (or text/image) to try ⌘V.
+      case "clipboard_read": return { files: [], text: null, image: null, native: true, ...((window as any).__clipboard ?? {}) };
       case "service_action":
         await progress(args.progress, [[0, "step", `Running systemctl ${args.action} ${args.unit} …`], ...(args.unit.startsWith("nginx") ? [[400, "line", "nginx: the configuration file /etc/nginx/nginx.conf syntax is ok"], [200, "line", "nginx: configuration file /etc/nginx/nginx.conf test is successful"]] as [number, "line", string][] : []), [900, "line", ""]]);
         return { command: `systemctl ${args.action} -- ${args.unit}`, preflight: args.unit.startsWith("nginx") ? ["nginx -t", "syntax is ok"] : null, output: { stdout: "", stderr: "", exitCode: 0, durationMs: 120 } };

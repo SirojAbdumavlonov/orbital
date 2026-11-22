@@ -17,9 +17,14 @@ export const useStats = create<{ state: StatsState | null; load(): Promise<void>
       set({ state: { available: false, enabled: null } });
     }
   },
+  // Statistics never bother the user: a failure to save the answer or to send
+  // anything is silent (the answer then lasts until Orbital closes).
   async set(on) {
-    const state = await api.setStats(on);
-    set({ state });
+    try {
+      set({ state: await api.setStats(on) });
+    } catch {
+      set((s) => ({ state: { available: s.state?.available ?? true, enabled: on } }));
+    }
     if (on) void api.statsPing("opened").catch(() => {});
   },
 }));

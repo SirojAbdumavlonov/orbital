@@ -1063,6 +1063,26 @@ impl Engine {
         .await
     }
 
+    /// Paste in Files: copy a file or folder to another place on the same server.
+    pub async fn copy_within(&self, sid: &str, from: &str, to: &str) -> Result<()> {
+        if self.storage_session(sid).await.is_some() {
+            return Err(Error::InvalidInput(
+                "copying within this storage isn't supported; download and upload instead".into(),
+            ));
+        }
+        let s = self.session(sid).await?;
+        progress::step(format!("Copying {from} to {to} …"));
+        self.audited(
+            &s,
+            Category::File,
+            "file.copy",
+            Some(&format!("{from} → {to}")),
+            None,
+            s.copy_within(from, to),
+        )
+        .await
+    }
+
     pub async fn remove(&self, sid: &str, path: &str, recursive: bool) -> Result<()> {
         if let Some(st) = self.storage_session(sid).await {
             let action = if recursive { "file.delete_recursive" } else { "file.delete" };

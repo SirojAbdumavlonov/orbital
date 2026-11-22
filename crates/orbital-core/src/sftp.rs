@@ -7,6 +7,7 @@ use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::{FileAttributes, OpenFlags};
 use serde::Serialize;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Files larger than this are not opened in the editor (download them instead).
@@ -170,6 +171,31 @@ pub fn rename_command(from: &str, to: &str) -> String {
         "if [ -e {t} ] || [ -L {t} ]; then echo 'already exists' >&2; exit 1; fi; mv -- {} {t}",
         quote(from)
     )
+}
+
+/// Copy a file or folder on the same server (paste in Files), keeping modes
+/// and times and copying links as links; refused when the target exists.
+pub fn copy_command(from: &str, to: &str) -> String {
+    let t = quote(to);
+    format!(
+        "if [ -e {t} ] || [ -L {t} ]; then echo 'already exists' >&2; exit 1; fi; cp -pRP -- {} {t}",
+        quote(from)
+    )
+}
+
+/// Paths for a copy on one server: both absolute, different, and not a folder into itself.
+pub fn check_copy(from: &str, to: &str) -> Result<()> {
+    validate_path(from)?;
+    validate_path(to)?;
+    let f = from.trim_end_matches('/');
+    let t = to.trim_end_matches('/');
+    if f.is_empty() || f == t {
+        return Err(Error::InvalidInput("choose a different name or folder for the copy".into()));
+    }
+    if t.starts_with(&format!("{f}/")) {
+        return Err(Error::InvalidInput("a folder can't be copied into itself".into()));
+    }
+    Ok(())
 }
 
 /// Delete as root: a file or link, an empty folder, or a folder with everything in it.
@@ -418,6 +444,22 @@ impl SshSession {
         match tried {
             Err(e) if denied(&e) && self.elevation_needed() => self.as_root(&create_command(path)).await,
             r => r,
+        }
+    }
+
+    /// Copy within this server (`cp`), with sudo when the login user is refused.
+    /// Up to an hour, for big folders.
+    pub async fn copy_within(&self, from: &str, to: &str) -> Result<()> {
+        check_copy(from, to)?;
+        let cmd = copy_command(from, to);
+        let limit = Duration::from_secs(3600);
+        match self.exec_with_input(&cmd, None, limit).await?.check() {
+            Ok(_) => Ok(()),
+            Err(e) if denied(&e) && self.elevation_needed() => {
+                self.exec_privileged_with(&cmd, None, limit).await?.check()?;
+                Ok(())
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -824,6 +866,16 @@ mod tests {
             "if [ -e '/opt/a b' ] || [ -L '/opt/a b' ]; then echo 'already exists' >&2; exit 1; fi; : > '/opt/a b'"
         );
         assert!(rename_command("/a", "/b").ends_with("mv -- /a /b"));
+        assert!(copy_command("/a b", "/c").ends_with("cp -pRP -- '/a b' /c"));
+        assert!(copy_command("/a", "/c d").starts_with("if [ -e '/c d' ]"));
+        assert!(check_copy("/etc/nginx", "/etc/nginx copy").is_ok());
+        assert!(check_copy("/srv/app", "/srv/app/app").is_err(), "into itself");
+        assert!(check_copy("/srv/app", "/srv/app/").is_err(), "same path");
+        assert!(check_copy("srv", "/x").is_err(), "relative");
+        assert!(
+            check_copy("/srv/app", "/srv/application").is_ok(),
+            "a sibling that only shares a prefix"
+        );
         assert_eq!(remove_command("/a", true), "rm -rf -- /a");
         assert!(remove_command("/a", false).contains("rmdir -- /a; else rm -f -- /a"));
         assert!(place_command("/tmp/x/s", "/opt/s").contains("cp -R -- /tmp/x/s/. /opt/s"));
@@ -832,6 +884,7 @@ mod tests {
             list_command("/x"),
             create_command("/x"),
             rename_command("/x", "/y"),
+            copy_command("/x", "/y"),
             remove_command("/x", false),
             place_command("/a", "/b"),
         ] {

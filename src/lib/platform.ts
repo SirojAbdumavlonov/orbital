@@ -9,8 +9,8 @@ export const mod = (e: { metaKey: boolean; ctrlKey: boolean }) => (isMac ? e.met
 
 /** Shortcut labels as each platform writes them. */
 export const KEYS = isMac
-  ? { commandMenu: "⌘K", back: "⌘[", forward: "⌘]", newServer: "⌘N", sidebar: "⌃⌘S", delete: "⌘⌫" }
-  : { commandMenu: "Ctrl+K", back: "Alt+←", forward: "Alt+→", newServer: "Ctrl+N", sidebar: "Ctrl+Shift+S", delete: "Delete" };
+  ? { commandMenu: "⌘K", back: "⌘[", forward: "⌘]", newServer: "⌘N", sidebar: "⌃⌘S", delete: "⌘⌫", copy: "⌘C", paste: "⌘V" }
+  : { commandMenu: "Ctrl+K", back: "Alt+←", forward: "Alt+→", newServer: "Ctrl+N", sidebar: "Ctrl+Shift+S", delete: "Delete", copy: "Ctrl+C", paste: "Ctrl+V" };
 
 /** Is this the shortcut that shows and hides the sidebar? */
 export const isSidebarKey = (e: KeyboardEvent) =>
