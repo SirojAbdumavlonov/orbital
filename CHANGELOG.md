@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.4.1 (2026-11-22)
+
 ### Added
 - **What's new**: after an update, a window in the middle of the screen says what changed since the version you had before (every version in between), and the main page shows the new version's changes, each with a short description, until you remove the card with ×. The new **Changes** page in the sidebar lists every version at any time. Each version links to its full notes on GitHub; the notes come with the app, so they work offline.
 - **Feedback** (sidebar, and ⌘K "Send feedback…"): report a problem, suggest an idea or say what works, about Orbital in general, one part of it, or one change from the Changes page (each has a **Feedback** link). Only what you type, the Orbital version and your system are sent, to Orbital's own server; an optional contact lets us answer. It doesn't depend on the usage statistics setting.
