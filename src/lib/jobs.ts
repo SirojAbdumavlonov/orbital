@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { installPercent, isProgressLine } from "./installProgress";
 import { api, asApiError, type OnProgress, type ProgressEvent } from "./api";
 import { currentLoc, goTo, reachable, sameLoc, useStore, type Loc } from "../store";
 
@@ -26,6 +27,8 @@ export interface Job {
   last?: string;
   lines: string[];
   transfer?: { files: number; bytes: number; current: string };
+  /** 0–100 when the command reports how far it got (installs from the "+" window). */
+  percent?: number;
   started: number;
   ended?: number;
   /** How it ended, in words. */
@@ -56,8 +59,12 @@ export function applyProgress(j: Job, e: ProgressEvent): Partial<Job> {
   switch (e.type) {
     case "step":
       return { step: e.text, lines: [...j.lines, `› ${e.text}`].slice(-MAX_LINES) };
-    case "line":
-      return { last: e.text, lines: [...j.lines, e.text].slice(-MAX_LINES) };
+    case "line": {
+      // A line the command prints for the progress ring (installs) moves the percent and isn't shown.
+      if (isProgressLine(e.text)) return { percent: Math.max(j.percent ?? 0, installPercent([e.text])) };
+      const pct = installPercent([e.text]);
+      return { last: e.text, lines: [...j.lines, e.text].slice(-MAX_LINES), ...(pct > (j.percent ?? 0) ? { percent: pct } : {}) };
+    }
     case "transfer":
       return { transfer: { files: e.files, bytes: e.bytes, current: e.current } };
   }

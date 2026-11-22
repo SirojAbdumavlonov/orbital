@@ -3,7 +3,7 @@ import { CheckupView } from "./views/CheckupView";
 import { UpdatesView } from "./views/UpdatesView";
 import { CleanupView } from "./views/CleanupView";
 import { AgentView } from "./views/AgentView";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Modal } from "./components/ui";
 import { useNavigationGestures } from "./lib/navigation";
 import { CommandMenu } from "./components/CommandMenu";
@@ -32,7 +32,8 @@ import { StatsPrompt } from "./components/StatsPrompt";
 import { HelpView } from "./views/HelpView";
 import { FeedbackView } from "./views/FeedbackView";
 import { ChangesView, useWhatsNewAnnounce, WhatsNewDialog } from "./components/WhatsNew";
-import { isSidebarKey, mod } from "./lib/platform";
+import { isMac, isSidebarKey, mod } from "./lib/platform";
+import { isPaneKey, usePanes } from "./lib/panes";
 import { useUptimeAlerts } from "./lib/uptime";
 import { UptimeView } from "./views/UptimeView";
 import { MonitorView } from "./views/MonitorView";
@@ -147,9 +148,23 @@ function ReconnectPrompt() {
 /** One mounted workspace per open server. Files and terminals stay alive when hidden. */
 function Workspace({ s, visible }: { s: SessionState; visible: boolean }) {
   useMetricsPoller(s, visible);
+  const paneHidden = usePanes((p) => p.hidden.includes(s.tab));
+  // Whether this tab has a right-hand pane to hide (some tool tabs are one page).
+  const ref = useRef<HTMLDivElement>(null);
+  const [hasPane, setHasPane] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !visible) return;
+    const look = () => setHasPane(s.tab === "files" || !!el.querySelector(".split > .drawer"));
+    look();
+    let frame = 0;
+    const mo = new MutationObserver(() => { cancelAnimationFrame(frame); frame = requestAnimationFrame(look); });
+    mo.observe(el, { childList: true, subtree: true });
+    return () => { mo.disconnect(); cancelAnimationFrame(frame); };
+  }, [visible, s.tab]);
   return (
-    <div className="main" style={{ display: visible ? "flex" : "none" }}>
-      <ServerHeader s={s} />
+    <div ref={ref} className={`main ${paneHidden ? "pane-hidden" : ""}`} style={{ display: visible ? "flex" : "none" }}>
+      <ServerHeader s={s} hasPane={hasPane} />
       <div className="view" style={{ display: s.tab === "files" ? "flex" : "none" }}><FilesView s={s} /></div>
       <div className="view" style={{ display: s.tab === "terminal" ? "flex" : "none" }}><TerminalView s={s} /></div>
       {visible && s.tab === "services" && <ServicesView s={s} />}
@@ -181,6 +196,14 @@ export default function App() {
         e.preventDefault();
         const st = useSettings.getState();
         st.set({ sidebarHidden: !st.sidebarHidden });
+      }
+      if (isPaneKey(e, isMac)) {
+        const st = useStore.getState();
+        const sess = st.active && !st.globalView ? st.sessions[st.active] : null;
+        if (sess) {
+          e.preventDefault();
+          usePanes.getState().toggle(sess.tab);
+        }
       }
       if (mod(e) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
         e.preventDefault();

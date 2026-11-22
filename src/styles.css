@@ -994,3 +994,15 @@ kbd { font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border: 1px
 .feedback-sent svg { color: var(--ok); }
 .feedback-sent h3 { margin: 6px 0 0; font-size: 16px; }
 .feedback-sent p { margin: 0 0 10px; }
+
+/* A tab's right-hand pane, hidden (⌘\\ or the button at the end of the tab row) */
+.main.pane-hidden .files, .main.pane-hidden .split { grid-template-columns: minmax(0, 1fr); }
+.main.pane-hidden .files > .editor, .main.pane-hidden .split > .drawer { display: none; }
+.tabs .pane-toggle { align-self: center; margin-left: auto; flex: none; }
+
+/* Install progress in the "+" window */
+.progress-ring { flex: none; }
+.progress-ring circle { fill: none; stroke-width: 2.5; }
+.progress-ring-track { stroke: var(--slate-4); }
+.progress-ring-fill { stroke: var(--amber); stroke-linecap: round; transition: stroke-dashoffset .4s ease; }
+.picker-card.try .badge { font-variant-numeric: tabular-nums; }

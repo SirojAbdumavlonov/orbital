@@ -1215,7 +1215,12 @@ export function install() {
       ];
       case "install_software": {
         if (args.id === "apache" && !args.force) throw { kind: "PreflightFailed", message: "port 80", data: { check: "port 80 is already in use", output: "Another program listens on port 80, so this web server would fail to start:\nLISTEN 0 511 0.0.0.0:80 users:((\"nginx\",pid=812))" } };
-        await progress(args.progress, [[0, "step", `Installing ${args.id} from the server's package repositories …`], [600, "line", "Reading package lists..."], [600, "line", `Setting up ${args.id} ...`], [600, "line", "Created symlink /etc/systemd/system/multi-user.target.wants/…"]]);
+        // Like the real script: phase markers and apt's status lines drive the progress ring.
+        const steps: [number, "line" | "step", string][] = [[0, "step", `Installing ${args.id} from the server's package repositories …`], [300, "line", "@@progress 2"], [700, "line", "Reading package lists..."], [500, "line", "@@progress 10"]];
+        for (let i = 1; i <= 6; i++) steps.push([450, "line", `dlstatus:1:${(i * 100) / 6}:Retrieving file ${i} of 6`]);
+        for (let i = 1; i <= 6; i++) steps.push([450, "line", `pmstatus:${args.id}:${(i * 100) / 6}:Installing ${args.id}`], [0, "line", i % 2 ? `Setting up ${args.id}-part${i} ...` : `Unpacking ${args.id}-part${i} ...`]);
+        steps.push([400, "line", "@@progress 92"], [500, "line", "@@progress 96"], [600, "line", "Created symlink /etc/systemd/system/multi-user.target.wants/…"]);
+        await progress(args.progress, steps);
         demoInstalled.add(args.id);
         return { stdout: "", stderr: "", exitCode: 0, durationMs: 2100 };
       }

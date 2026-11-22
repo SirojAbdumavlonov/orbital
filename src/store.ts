@@ -3,6 +3,7 @@ import { toast as sonner } from "sonner";
 import { useSettings } from "./lib/settings";
 import { create } from "zustand";
 import { api, asApiError, ApiError, ConnectOpts, DetectedTool, Metrics, Profile, SessionInfo, Validator , setNotConnectedHandler } from "./lib/api";
+import { usePanes } from "./lib/panes";
 import { forgetKept, restoreKept, takeKept } from "./lib/kept";
 
 /** Built-in tabs, plus one `tool:<id>` tab per piece of detected software the user opened. */
@@ -387,6 +388,8 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async openFile(sessionId, path) {
+    // Opening a file shows the editor again if it was hidden.
+    usePanes.getState().show("files");
     const s = get().sessions[sessionId];
     if (!s) return;
     // From a tool tab (nginx, sshd, …) the editor opens beside it, so the user stays there.

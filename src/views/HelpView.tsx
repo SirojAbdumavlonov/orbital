@@ -110,6 +110,7 @@ export function HelpView() {
                 <tr><td><kbd>{KEYS.newServer}</kbd></td><td>Add a server</td></tr>
                 <tr><td><kbd>{KEYS.back}</kbd> <kbd>{KEYS.forward}</kbd></td><td>Back and forward between places</td></tr>
                 <tr><td><kbd>{KEYS.sidebar}</kbd></td><td>Show or hide the sidebar</td></tr>
+                <tr><td><kbd>{KEYS.pane}</kbd></td><td>Hide or show the right-hand pane (the editor in Files, the details panel in Services, Docker…) to give the list the whole width</td></tr>
                 <tr><td><kbd>{KEYS.copy}</kbd> <kbd>{KEYS.paste}</kbd></td><td>In Files: copy the selected file or folder, and paste here files copied in Orbital (same or another server) or on this computer, or a copied screenshot</td></tr>
                 <tr><td><kbd>→</kbd></td><td>In the terminal, at the end of a line: accept the suggestion</td></tr>
               </tbody>

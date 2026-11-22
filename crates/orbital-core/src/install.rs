@@ -150,9 +150,13 @@ pub fn find(id: &str) -> Result<&'static Installable> {
 }
 
 /// The install script (run as root): packages, first-time setup, start the service.
+/// It reports how far it got for the progress ring in the "+" window:
+/// `@@progress N` lines between phases, apt's own percentages
+/// (`APT::Status-Fd=1`: `dlstatus:` downloading, `pmstatus:` installing), and
+/// dnf/yum's package counts; the UI reads them (src/lib/installProgress.ts).
 pub fn script(i: &Installable) -> String {
     let mut s = format!(
-        "set -e\nif command -v apt-get >/dev/null 2>&1; then\n  export DEBIAN_FRONTEND=noninteractive\n  apt-get update -q\n  apt-get install -y -q {apt}\nelif command -v dnf >/dev/null 2>&1; then\n  dnf install -y {dnf}\nelif command -v yum >/dev/null 2>&1; then\n  yum install -y {dnf}\nelse\n  echo 'This server has neither apt nor dnf; install it with its own package manager.' >&2; exit 2\nfi\n",
+        "set -e\necho '@@progress 2'\nif command -v apt-get >/dev/null 2>&1; then\n  export DEBIAN_FRONTEND=noninteractive\n  apt-get update -q\n  echo '@@progress 10'\n  apt-get install -y -q -o APT::Status-Fd=1 {apt}\nelif command -v dnf >/dev/null 2>&1; then\n  echo '@@progress 10'\n  dnf install -y {dnf}\nelif command -v yum >/dev/null 2>&1; then\n  echo '@@progress 10'\n  yum install -y {dnf}\nelse\n  echo 'This server has neither apt nor dnf; install it with its own package manager.' >&2; exit 2\nfi\necho '@@progress 92'\n",
         apt = i.apt.join(" "),
         dnf = i.dnf.join(" ")
     );
@@ -161,6 +165,7 @@ pub fn script(i: &Installable) -> String {
         s.push('\n');
     }
     if !i.services.is_empty() {
+        s.push_str("echo '@@progress 96'\n");
         s.push_str(&format!(
             "for u in {}; do if systemctl list-unit-files \"$u.service\" >/dev/null 2>&1 && systemctl cat \"$u.service\" >/dev/null 2>&1; then systemctl enable --now \"$u\"; break; fi; done\n",
             i.services.join(" ")
@@ -186,6 +191,10 @@ mod tests {
         for i in INSTALLABLE {
             let s = script(i);
             assert!(s.contains("apt-get install -y -q") && s.contains("dnf install -y"), "{s}");
+            assert!(
+                s.contains("APT::Status-Fd=1") && s.contains("@@progress 10") && s.contains("@@progress 92"),
+                "progress for the ring: {s}"
+            );
             for p in i.apt.iter().chain(i.dnf) {
                 assert!(p.chars().all(|c| c.is_ascii_alphanumeric() || "-.".contains(c)), "{p}");
             }

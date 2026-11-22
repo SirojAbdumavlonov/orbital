@@ -1,11 +1,13 @@
 import { Bot, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound, Radar, Download } from "lucide-react";
-import { Activity, Boxes, Cable, Clock, Cpu, Database, FolderTree, Gauge, Globe, ListChecks, LockKeyhole, Network, Plus, RefreshCw, ShieldCheck, SquareTerminal, X } from "lucide-react";
+import { Activity, Boxes, Cable, Clock, Cpu, Database, FolderTree, Gauge, Globe, ListChecks, LockKeyhole, Network, PanelRightClose, PanelRightOpen, Plus, RefreshCw, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, asApiError, DetectedTool, InstallOption } from "../lib/api";
-import { runJob } from "../lib/jobs";
+import { runJob, useRunningJob } from "../lib/jobs";
 import { withSafetyOverride } from "../lib/remote";
 import { bytes, duration } from "../lib/format";
 import { useSettings } from "../lib/settings";
+import { usePanes } from "../lib/panes";
+import { KEYS } from "../lib/platform";
 import { ALWAYS_TOOLS, DEDICATED_TOOLS, isSsh, SessionState, Tab, useStore } from "../store";
 import { PROTOCOL_NAMES } from "./ProfileDialog";
 import { confirm, LiveNumber, Modal, Sparkline, StateDot } from "./ui";
@@ -130,11 +132,7 @@ function AddToolMenu({ s }: { s: SessionState }) {
                 <div className="picker-title">You may try <span className="faint">· not on this server yet; Orbital installs and starts it</span></div>
                 <div className="picker-grid">
                   {tryShown.map((o) => (
-                    <button key={o.id} className="picker-card try" disabled={!!installing} onClick={() => install(o)} title={`Install ${o.name} (${o.apt.join(" ")})`}>
-                      <Download size={17} className={installing === o.id ? "spin" : ""} />
-                      <span className="picker-text"><b>{o.name}</b><small>{o.hint}</small></span>
-                      <span className="badge">{installing === o.id ? "installing…" : "Install"}</span>
-                    </button>
+                    <InstallCard key={o.id} sid={s.info.id} o={o} busy={!!installing} onInstall={() => install(o)} />
                   ))}
                 </div>
               </>
@@ -191,7 +189,7 @@ export function useMetricsPoller(s: SessionState, visible: boolean) {
   }, [s.info.id, visible]);
 }
 
-export function ServerHeader({ s }: { s: SessionState }) {
+export function ServerHeader({ s, hasPane }: { s: SessionState; hasPane?: boolean }) {
   const { setTab, order, sessions, active, setActive, disconnect, closeTool, reconnect } = useStore();
   const last = s.metrics[s.metrics.length - 1];
   const cpuHist = s.metrics.map((m) => m.cpuPercent ?? 0).slice(-40);
@@ -288,7 +286,51 @@ export function ServerHeader({ s }: { s: SessionState }) {
         })}
         </div>
         {isSsh(s) && <AddToolMenu s={s} />}
+        {hasPane && <PaneToggle tab={s.tab} />}
       </nav>
     </header>
+  );
+}
+
+/** Hides or shows the tab's right-hand pane (Files' editor, a list's details panel); remembered per tab. */
+function PaneToggle({ tab }: { tab: string }) {
+  const hidden = usePanes((p) => p.hidden.includes(tab));
+  const what = tab === "files" ? "editor" : "details panel";
+  return (
+    <button
+      className={`icon-btn pane-toggle ${hidden ? "on" : ""}`}
+      aria-label={hidden ? `Show the ${what}` : `Hide the ${what}`}
+      aria-pressed={hidden}
+      title={`${hidden ? "Show" : "Hide"} the ${what} (${KEYS.pane})`}
+      onClick={() => usePanes.getState().toggle(tab)}
+    >
+      {hidden ? <PanelRightOpen size={15} /> : <PanelRightClose size={15} />}
+    </button>
+  );
+}
+
+/** A "You may try" card; while it installs, a ring fills with the install's progress. */
+function InstallCard({ sid, o, busy, onInstall }: { sid: string; o: InstallOption; busy: boolean; onInstall: () => void }) {
+  const job = useRunningJob(`install:${sid}:${o.id}`);
+  const pct = job?.percent ?? 0;
+  return (
+    <button className="picker-card try" disabled={busy || !!job} onClick={onInstall} title={job ? job.last ?? `Installing ${o.name}…` : `Install ${o.name} (${o.apt.join(" ")})`}>
+      {job ? <ProgressRing percent={pct} label={`Installing ${o.name}`} /> : <Download size={17} />}
+      <span className="picker-text"><b>{o.name}</b><small>{o.hint}</small></span>
+      <span className="badge">{job ? `${pct}%` : "Install"}</span>
+    </button>
+  );
+}
+
+/** A small ring that fills clockwise from the top as `percent` grows. */
+export function ProgressRing({ percent, size = 18, label }: { percent: number; size?: number; label: string }) {
+  const r = (size - 3) / 2;
+  const c = 2 * Math.PI * r;
+  const p = Math.max(0, Math.min(100, percent));
+  return (
+    <svg className="progress-ring" width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(p)}>
+      <circle className="progress-ring-track" cx={size / 2} cy={size / 2} r={r} />
+      <circle className="progress-ring-fill" cx={size / 2} cy={size / 2} r={r} strokeDasharray={c} strokeDashoffset={c * (1 - p / 100)} transform={`rotate(-90 ${size / 2} ${size / 2})`} />
+    </svg>
   );
 }
