@@ -4,7 +4,7 @@ import { create } from "zustand";
 // open a config file, run a snippet…). Kept per server on this computer, in
 // localStorage `orbital.favourites.<profile id>`. Pure helpers are tested.
 
-export type FavKind = "restart" | "reload" | "file" | "folder" | "snippet";
+export type FavKind = "restart" | "reload" | "container" | "file" | "folder" | "snippet";
 
 export interface Favourite {
   id: string;
@@ -18,6 +18,7 @@ export interface Favourite {
 export const FAV_KINDS: { kind: FavKind; name: string }[] = [
   { kind: "restart", name: "Restart a service" },
   { kind: "reload", name: "Reload a service" },
+  { kind: "container", name: "Restart a Docker container" },
   { kind: "file", name: "Open a file" },
   { kind: "folder", name: "Open a folder" },
   { kind: "snippet", name: "Run a snippet" },
@@ -28,8 +29,9 @@ const UNIT = /^[A-Za-z0-9@._:-]{1,200}$/;
 /** Why a favourite can't be saved, or null. */
 export function favProblem(kind: FavKind, target: string): string | null {
   const t = target.trim();
-  if (!t) return kind === "snippet" ? "choose a snippet" : kind === "file" || kind === "folder" ? "give the path" : "give the service's name";
+  if (!t) return kind === "snippet" ? "choose a snippet" : kind === "file" || kind === "folder" ? "give the path" : kind === "container" ? "choose the container" : "give the service's name";
   if ((kind === "restart" || kind === "reload") && !UNIT.test(t)) return "a service name has only letters, digits and @ . _ : -";
+  if (kind === "container" && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(t)) return "a container name has only letters, digits and _ . -";
   if ((kind === "file" || kind === "folder") && !t.startsWith("/")) return "the path must start with /";
   return null;
 }
@@ -41,6 +43,7 @@ export function defaultLabel(kind: FavKind, target: string, snippetName?: string
   switch (kind) {
     case "restart": return `Restart ${unit}`;
     case "reload": return `Reload ${unit}`;
+    case "container": return `Restart ${t}`;
     case "file": return t.split("/").pop() || t;
     case "folder": return t === "/" ? "/" : `${t.split("/").pop()}/`;
     case "snippet": return snippetName ?? "Snippet";

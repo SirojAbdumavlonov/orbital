@@ -26,8 +26,14 @@ pub const CRON_DIR: &str = "/etc/cron.d";
 pub enum BackupSource {
     /// A folder, as a .tar.gz.
     Folder { path: String },
-    /// A database on this server, with its own dump tool.
-    Database { engine: DbKind, name: String },
+    /// A database, with its own dump tool: on the server itself, or inside a
+    /// running Docker container (`container`), reached with `docker exec`.
+    Database {
+        engine: DbKind,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        container: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,9 +131,13 @@ pub fn validate(j: &BackupJob) -> Result<BackupJob> {
             validate_path(p)?;
             BackupSource::Folder { path: p.to_string() }
         }
-        BackupSource::Database { engine, name } => BackupSource::Database {
+        BackupSource::Database { engine, name, container } => BackupSource::Database {
             engine: *engine,
             name: validate_db_name(name.trim())?.to_string(),
+            container: match container.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+                Some(c) => Some(crate::shell::validate_container(c)?.to_string()),
+                None => None,
+            },
         },
     };
     let s = j.schedule;
@@ -165,7 +175,11 @@ fn dump_command(source: &BackupSource) -> String {
             let parent = if parent.is_empty() { "/" } else { parent };
             format!("tar czf - -C {} -- {}", quote(parent), quote(base))
         }
-        BackupSource::Database { engine, name } => {
+        BackupSource::Database {
+            engine,
+            name,
+            container: None,
+        } => {
             let db = quote(name);
             match engine {
                 DbKind::Postgres => format!("as_pg pg_dump -Fc -d {db}"),
@@ -175,7 +189,61 @@ fn dump_command(source: &BackupSource) -> String {
                 DbKind::Mongo => format!("mongodump --quiet --archive --gzip --db={db}"),
             }
         }
+        BackupSource::Database {
+            engine,
+            name,
+            container: Some(c),
+        } => {
+            let db = quote(name);
+            let inner = match engine {
+                DbKind::Postgres => format!("pg_dump -Fc -d {db}"),
+                DbKind::Mysql => format!(
+                    "D=$(command -v mysqldump || command -v mariadb-dump); \"$D\" --single-transaction --quick --routines --triggers --events --databases {db}"
+                ),
+                DbKind::Mongo => format!("mongodump --quiet --archive --gzip --db={db}"),
+            };
+            let exec = in_container(c, &inner, false);
+            match engine {
+                // The dump fails inside; the marker file is written out here, then compressed here.
+                DbKind::Mysql => format!("( {exec} || echo x > \"$f.failed\" ) | gzip"),
+                _ => exec,
+            }
+        }
     }
+}
+
+/// `docker exec` of a fixed script inside a container, with the login details
+/// the image's variables give (POSTGRES_USER, MYSQL_ROOT_PASSWORD, …).
+/// `stdin`: the script reads what's piped in (restores).
+fn in_container(container: &str, script: &str, stdin: bool) -> String {
+    format!(
+        "docker exec {}-- {} sh -c {}",
+        if stdin { "-i " } else { "" },
+        quote(container),
+        quote(&format!("{}{script}", crate::docker::CONTAINER_PRELUDE))
+    )
+}
+
+/// A read-only check that the dump tool a job needs is on the server: prints
+/// `@@missing <tool>` when it isn't (nothing for folders, which only need tar).
+pub fn tool_check(source: &BackupSource) -> Option<String> {
+    let BackupSource::Database { engine, container, .. } = source else {
+        return None;
+    };
+    let (test, tool) = match engine {
+        DbKind::Postgres => ("command -v pg_dump", "pg_dump (PostgreSQL)"),
+        DbKind::Mysql => ("command -v mysqldump || command -v mariadb-dump", "mysqldump (MySQL/MariaDB)"),
+        DbKind::Mongo => ("command -v mongodump", "mongodump (MongoDB database tools)"),
+    };
+    Some(match container {
+        None => format!("{{ {test}; }} >/dev/null 2>&1 || echo '@@missing {tool}'"),
+        Some(c) => format!(
+            "docker exec -- {} sh -c {} >/dev/null 2>&1 || echo {}",
+            quote(c),
+            quote(test),
+            quote(&format!("@@missing {tool} in the container {c}"))
+        ),
+    })
 }
 
 /// The job's script, writing into `base`/<id> (BACKUP_DIR on servers; a temp folder in tests).
@@ -386,7 +454,46 @@ pub fn restore_command_in(j: &BackupJob, file: &str, to: RestoreTo, base: &str) 
             let parent = if parent.is_empty() { "/" } else { parent };
             format!("set -e; tar xzf {f} -C {}; echo \"@@restored \"{}", quote(parent), quote(path))
         }
-        (BackupSource::Database { engine, name }, _) => {
+        (
+            BackupSource::Database {
+                engine,
+                name,
+                container: Some(c),
+            },
+            _,
+        ) => {
+            let db = quote(name);
+            let run = match engine {
+                DbKind::Postgres => format!(
+                    "{} < {f}",
+                    in_container(c, &format!("pg_restore --clean --if-exists --no-owner -d {db}"), true)
+                ),
+                DbKind::Mysql => format!(
+                    "gunzip -c {f} | {}",
+                    in_container(c, "M=$(command -v mysql || command -v mariadb); \"$M\"", true)
+                ),
+                DbKind::Mongo => format!(
+                    "{} < {f}",
+                    in_container(
+                        c,
+                        &format!(
+                            "mongorestore --quiet --drop --archive --gzip --nsInclude={}",
+                            quote(&format!("{name}.*"))
+                        ),
+                        true
+                    )
+                ),
+            };
+            format!("set -e\n{run}\necho \"@@restored \"{db}")
+        }
+        (
+            BackupSource::Database {
+                engine,
+                name,
+                container: None,
+            },
+            _,
+        ) => {
             let db = quote(name);
             let run = match engine {
                 DbKind::Postgres => format!("as_pg pg_restore --clean --if-exists --no-owner -d {db} < {f}"),
@@ -460,12 +567,91 @@ mod tests {
             source: BackupSource::Database {
                 engine: DbKind::Postgres,
                 name: "shop; drop".into(),
+                container: None,
             },
             ..folder_job("/srv", 1)
         };
         assert!(validate(&db).is_err());
         assert_eq!(slug("  Shop database (main)! "), "shop-database-main");
         assert_eq!(slug("!!!"), "backup");
+    }
+
+    #[test]
+    fn databases_in_containers_are_dumped_and_restored_through_docker_exec() {
+        let j = BackupJob {
+            source: BackupSource::Database {
+                engine: DbKind::Mysql,
+                name: "shop".into(),
+                container: Some("shop-db".into()),
+            },
+            ..folder_job("/srv", 3)
+        };
+        let s = script(&j).unwrap();
+        assert!(s.contains("( docker exec -- shop-db sh -c "), "{s}");
+        assert!(
+            s.contains("MYSQL_ROOT_PASSWORD") && s.contains("--databases shop"),
+            "the image's login and the database"
+        );
+        assert!(
+            s.contains(" || echo x > \"$f.failed\" ) | gzip"),
+            "failure seen on the host, compressed on the host"
+        );
+        let pg = BackupJob {
+            source: BackupSource::Database {
+                engine: DbKind::Postgres,
+                name: "shop".into(),
+                container: Some("pg".into()),
+            },
+            ..folder_job("/srv", 3)
+        };
+        let r = restore_command(
+            &pg,
+            "/var/backups/orbital/site-files/site-files-20261122-031500.dump",
+            RestoreTo::Original,
+        )
+        .unwrap();
+        assert!(
+            r.contains("docker exec -i -- pg sh -c ") && r.contains("pg_restore --clean") && r.ends_with("echo \"@@restored \"shop"),
+            "{r}"
+        );
+        for c in [s, r, tool_check(&pg.source).unwrap()] {
+            let o = std::process::Command::new("sh").arg("-n").arg("-c").arg(&c).output().unwrap();
+            assert!(o.status.success(), "{c}");
+        }
+        assert!(tool_check(&pg.source).unwrap().contains("in the container pg"));
+        // A container name that isn't one is refused; the job's JSON keeps it.
+        let bad = BackupJob {
+            source: BackupSource::Database {
+                engine: DbKind::Postgres,
+                name: "shop".into(),
+                container: Some("a;b".into()),
+            },
+            ..folder_job("/srv", 3)
+        };
+        assert!(validate(&bad).is_err());
+        let back: BackupJob = serde_json::from_str(&serde_json::to_string(&validate(&pg).unwrap()).unwrap()).unwrap();
+        assert_eq!(back, validate(&pg).unwrap());
+    }
+
+    #[test]
+    fn database_jobs_check_their_dump_tool() {
+        assert!(tool_check(&BackupSource::Folder { path: "/srv".into() }).is_none());
+        for engine in [DbKind::Postgres, DbKind::Mysql, DbKind::Mongo] {
+            let c = tool_check(&BackupSource::Database {
+                engine,
+                name: "x".into(),
+                container: None,
+            })
+            .unwrap();
+            let c = c.as_str();
+            let o = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(c)
+                .env("PATH", "/nonexistent")
+                .output()
+                .unwrap();
+            assert!(String::from_utf8_lossy(&o.stdout).starts_with("@@missing "), "{c}");
+        }
     }
 
     #[test]
@@ -505,6 +691,7 @@ mod tests {
             source: BackupSource::Database {
                 engine,
                 name: "shop".into(),
+                container: None,
             },
             ..folder_job("/srv", 3)
         };

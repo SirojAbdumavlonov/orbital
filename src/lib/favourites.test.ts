@@ -10,10 +10,13 @@ describe("favourites", () => {
     expect(favProblem("file", "etc/hosts")).toMatch(/start with \//);
     expect(favProblem("folder", "/var/log")).toBeNull();
     expect(favProblem("snippet", "")).toMatch(/choose/);
+    expect(favProblem("container", "shop-api")).toBeNull();
+    expect(favProblem("container", "a;b")).toMatch(/letters/);
   });
   it("makes short default labels", () => {
     expect(defaultLabel("restart", "nginx.service")).toBe("Restart nginx");
     expect(defaultLabel("reload", "php8.3-fpm")).toBe("Reload php8.3-fpm");
+    expect(defaultLabel("container", "shop-api")).toBe("Restart shop-api");
     expect(defaultLabel("file", "/etc/nginx/nginx.conf")).toBe("nginx.conf");
     expect(defaultLabel("folder", "/var/log/")).toBe("log/");
     expect(defaultLabel("folder", "/")).toBe("/");

@@ -2883,6 +2883,16 @@ impl Engine {
         let s = self.session(sid).await?;
         let job = b::validate(job).map_err(|e| self.refused_as(&s, Category::Command, "backup.save", &job.id, e))?;
         let (script, cron, _) = b::paths(&job.id)?;
+        if let Some(check) = b::tool_check(&job.source) {
+            progress::step("Checking that the database's backup tool is installed …");
+            let (o, _) = s.exec_inspect(&check).await?;
+            if let Some(tool) = o.stdout.lines().find_map(|l| l.strip_prefix("@@missing ")) {
+                let e = Error::InvalidInput(format!(
+                    "{tool} isn't installed on this server, so this database can't be backed up here"
+                ));
+                return Err(self.refused_as(&s, Category::Command, "backup.save", &job.id, e));
+            }
+        }
         progress::step(format!("Writing the backup job {} …", job.name));
         let t = std::time::Duration::from_secs(60);
         self.system_exec_with(

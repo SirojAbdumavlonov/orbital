@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 vi.mock("../store", () => ({ isSsh: () => true, useStore: { getState: () => ({ sessions: {} }), subscribe: () => () => {} } }));
 vi.mock("./settings", () => ({ useSettings: { getState: () => ({ healthAlerts: true }) } }));
-const { assess, alertStep, NO_ALERTS } = await import("./health");
+const { assess, alertStep, NO_ALERTS, troubledContainers } = await import("./health");
 
 const GB = 1024 ** 3;
 const metrics = (over: any = {}) => ({
@@ -63,5 +63,19 @@ describe("alertStep", () => {
   });
   it("ignores checks without numbers", () => {
     expect(alertStep(NO_ALERTS, "web", { level: "unknown", reasons: [] }, [])).toEqual({ next: NO_ALERTS, messages: [] });
+  });
+});
+
+describe("containers", () => {
+  it("counts containers stuck restarting or unhealthy, not ones that simply stopped", () => {
+    const t = troubledContainers([
+      { names: "shop-worker", state: "restarting", status: "Restarting (1) 12 seconds ago" },
+      { names: "api", state: "running", status: "Up 3 hours (unhealthy)" },
+      { names: "web", state: "running", status: "Up 3 hours (healthy)" },
+      { names: "migrate-once", state: "exited", status: "Exited (0) 3 days ago" },
+    ]);
+    expect(t).toEqual(["shop-worker keeps restarting", "api is unhealthy"]);
+    expect(assess(metrics(), [], t)).toEqual({ level: "warn", reasons: ["Container shop-worker keeps restarting", "Container api is unhealthy"] });
+    expect(alertStep(NO_ALERTS, "web", { level: "warn", reasons: [] }, ["container api is unhealthy"]).messages[0].title).toBe("web: api is unhealthy");
   });
 });

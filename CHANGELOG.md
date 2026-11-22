@@ -4,6 +4,13 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Containers count too**: the health dot and alerts include containers stuck restarting or reported unhealthy by their health check, and favourite actions can restart a Docker container.
+
+### Fixed
+- **Backups find databases wherever they run.** The new-backup dialog lists every PostgreSQL, MySQL/MariaDB and MongoDB Orbital finds: installed or running on the server, and in running Docker containers ("MongoDB in the container analytics-mongo"), then the databases of the one you pick. A database in a container is dumped and restored inside it (`docker exec`), with the login its image's variables give (POSTGRES_USER, MYSQL_ROOT_PASSWORD, …); the backup is kept on the server like the others. With none found, "A database" is off and says so. Saving a database backup is refused when its dump tool is missing (on the server or in the container).
+- **Network check lost its results when you switched tabs**, including a traceroute still running. Results now stay per server: a check carries on while you're elsewhere and is there when you come back, along with what you typed. The last 30 results, with their output, are kept on this computer between launches (Clear empties the list).
+
 ## 1.4.6 (2026-11-22)
 
 ### Added

@@ -19,6 +19,31 @@ const ENGINES: { kind: DbKind; name: string; tool: string }[] = [
 ];
 const pad = (n: number) => String(n).padStart(2, "0");
 
+/** A database server to back up from: on the server itself, or in a running container. */
+export interface DbPlace {
+  engine: DbKind;
+  container: string | null;
+  label: string;
+  /** For the select. */
+  value: string;
+}
+
+/**
+ * Every database server Orbital found: installed or running on the server
+ * (binary, service or process), and in running Docker containers whose image
+ * is that database. `null` tools: not detected yet.
+ */
+export function dbChoices(tools: { id: string; onHost: boolean; containers: string[] }[] | null): DbPlace[] {
+  const out: DbPlace[] = [];
+  for (const e of ENGINES) {
+    const t = (tools ?? []).find((x) => x.id === e.tool);
+    if (!t) continue;
+    if (t.onHost) out.push({ engine: e.kind, container: null, label: `${e.name} on this server`, value: `${e.kind}|` });
+    for (const c of t.containers) out.push({ engine: e.kind, container: c, label: `${e.name} in the container ${c}`, value: `${e.kind}|${c}` });
+  }
+  return out;
+}
+
 export function scheduleText(j: BackupJob): string {
   const t = `${pad(j.schedule.hour)}:${pad(j.schedule.minute)}`;
   return j.schedule.every === "day" ? `Every day at ${t}` : `${DAYS[j.schedule.weekday]}s at ${t}`;
@@ -26,7 +51,7 @@ export function scheduleText(j: BackupJob): string {
 
 export function sourceText(j: BackupJob): string {
   const s = j.source;
-  return s.kind === "folder" ? s.path : `${ENGINES.find((e) => e.kind === s.engine)?.name ?? s.engine} database ${s.name}`;
+  return s.kind === "folder" ? s.path : `${ENGINES.find((e) => e.kind === s.engine)?.name ?? s.engine} database ${s.name}${s.container ? ` in the container ${s.container}` : ""}`;
 }
 
 /** An id for a new job from its name, not taken yet. */
@@ -168,29 +193,52 @@ function RunButton({ sid, j, onRun }: { sid: string; j: BackupJob; onRun: () => 
 
 function JobDialog({ s, job, taken, onClose, onSaved }: { s: SessionState; job: BackupJob | null; taken: string[]; onClose: () => void; onSaved: () => void }) {
   const sid = s.info.id;
-  const engines = ENGINES.filter((e) => s.tools?.some((t) => t.id === e.tool && t.onHost !== false));
+  const places = dbChoices(s.tools);
+  // Software detection may not have run yet: run it, so the database choice is real.
+  const detectTools = useStore((x) => x.detectTools);
+  useEffect(() => { if (s.tools === null) void detectTools(sid); }, [sid]);
   const [name, setName] = useState(job?.name ?? "");
   const [kind, setKind] = useState<"folder" | "database">(job?.source.kind ?? "folder");
   const [path, setPath] = useState(job?.source.kind === "folder" ? job.source.path : "/var/www/");
-  const [engine, setEngine] = useState<DbKind>(job?.source.kind === "database" ? job.source.engine : engines[0]?.kind ?? "postgres");
+  const initialPlace = job?.source.kind === "database" ? `${job.source.engine}|${job.source.container ?? ""}` : places[0]?.value ?? "";
+  const [placeValue, setPlaceValue] = useState(initialPlace);
+  const place = places.find((p) => p.value === placeValue) ?? null;
+  const engine: DbKind = place?.engine ?? (job?.source.kind === "database" ? job.source.engine : "postgres");
+  const container = place ? place.container : job?.source.kind === "database" ? job.source.container ?? null : null;
   const [db, setDb] = useState(job?.source.kind === "database" ? job.source.name : "");
-  const [dbs, setDbs] = useState<string[]>([]);
+  const [dbs, setDbs] = useState<string[] | null>(null);
+  const [dbError, setDbError] = useState<string | null>(null);
   const [every, setEvery] = useState<"day" | "week">(job?.schedule.every ?? "day");
   const [weekday, setWeekday] = useState(job?.schedule.weekday ?? 0);
   const [time, setTime] = useState(job ? `${pad(job.schedule.hour)}:${pad(job.schedule.minute)}` : "03:30");
   const [keep, setKeep] = useState(String(job?.keep ?? 7));
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // The choice must be one found on the server; otherwise take the first that is.
   useEffect(() => {
-    if (kind !== "database") return;
-    api.listDatabases(sid, engine).then((r) => setDbs(r.databases.filter((d) => !d.system).map((d) => d.name)), () => setDbs([]));
-  }, [kind, engine, sid]);
+    if (places.length && !places.some((p) => p.value === placeValue)) setPlaceValue(places[0].value);
+  }, [places.map((p) => p.value).join()]);
+  // Read the databases of the chosen server, and pick the first if none is chosen yet.
+  useEffect(() => {
+    if (kind !== "database" || !place) return;
+    setDbs(null);
+    setDbError(null);
+    api.listDatabases(sid, engine, container).then(
+      (r) => {
+        const names = r.databases.filter((d) => !d.system).map((d) => d.name);
+        setDbs(names);
+        setDbError(r.error);
+        setDb((cur) => (cur && (names.includes(cur) || job) ? cur : names[0] ?? ""));
+      },
+      (e) => { setDbs([]); setDbError(asApiError(e).message); },
+    );
+  }, [kind, placeValue, sid, places.length]);
   const [hh, mm] = time.split(":").map((x) => Number(x));
   const save = async () => {
     const j: BackupJob = {
       id: job?.id ?? newId(name, taken),
       name: name.trim() || (kind === "folder" ? path.split("/").filter(Boolean).pop() ?? "Folder" : db),
-      source: kind === "folder" ? { kind, path: path.trim() } : { kind, engine, name: db.trim() },
+      source: kind === "folder" ? { kind, path: path.trim() } : { kind, engine, name: db.trim(), container },
       schedule: { every, weekday, hour: hh || 0, minute: mm || 0 },
       keep: Number(keep) || 0,
     };
@@ -211,7 +259,7 @@ function JobDialog({ s, job, taken, onClose, onSaved }: { s: SessionState; job: 
       subtitle="Saved on the server as a cron job; it runs as root at the time you choose (the server's clock)."
       keepOnOutsideClick
       onClose={onClose}
-      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={save}>{busy ? "Saving…" : job ? "Save" : "Schedule backup"}</button></>}
+      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || (kind === "database" && !db.trim()) || (kind === "folder" && !path.trim())} onClick={save}>{busy ? "Saving…" : job ? "Save" : "Schedule backup"}</button></>}
     >
       <div className="route-form">
         <label className="field"><span>Name</span><input className="input" value={name} placeholder="Shop uploads" onChange={(e) => setName(e.target.value)} autoFocus /></label>
@@ -219,8 +267,15 @@ function JobDialog({ s, job, taken, onClose, onSaved }: { s: SessionState; job: 
           <span>What to back up</span>
           <div className="segmented" style={{ alignSelf: "flex-start" }}>
             <button className={kind === "folder" ? "on" : ""} onClick={() => setKind("folder")}>A folder</button>
-            <button className={kind === "database" ? "on" : ""} onClick={() => setKind("database")}>A database</button>
+            <button className={kind === "database" ? "on" : ""} disabled={!places.length && !(job?.source.kind === "database")} onClick={() => setKind("database")}>A database</button>
           </div>
+          {!places.length && (
+            <span className="hint">
+              {s.tools === null
+                ? "Looking for database servers on this server and in its containers…"
+                : "No PostgreSQL, MySQL/MariaDB or MongoDB found, on the server or in a running container, so there's no database to back up. (Install one from the + next to the server's tabs.)"}
+            </span>
+          )}
         </div>
         {kind === "folder" ? (
           <label className="field"><span>Folder</span><input className="input mono" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/var/www/example.com" /><span className="hint">Saved as a .tar.gz with everything inside it.</span></label>
@@ -228,14 +283,21 @@ function JobDialog({ s, job, taken, onClose, onSaved }: { s: SessionState; job: 
           <div className="grid2">
             <label className="field">
               <span>Database server</span>
-              <select className="input" value={engine} onChange={(e) => setEngine(e.target.value as DbKind)}>
-                {(engines.length ? engines : ENGINES).map((e) => <option key={e.kind} value={e.kind}>{e.name}</option>)}
+              <select className="input" value={placeValue} onChange={(e) => { setPlaceValue(e.target.value); setDb(""); }}>
+                {places.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
               </select>
+              <span className="hint">{container ? "Dumped inside the container (docker exec), with the login its image variables give; saved on the server." : "Found on this server."}</span>
             </label>
             <label className="field">
               <span>Database</span>
-              <input className="input mono" list="backup-dbs" value={db} onChange={(e) => setDb(e.target.value)} placeholder="shop" />
-              <datalist id="backup-dbs">{dbs.map((d) => <option key={d} value={d} />)}</datalist>
+              <select className="input mono" value={db} disabled={!dbs || dbs.length === 0} onChange={(e) => setDb(e.target.value)}>
+                {dbs === null && <option value="">Reading the databases…</option>}
+                {dbs !== null && dbs.length === 0 && <option value="">{job?.source.kind === "database" ? job.source.name : "No databases"}</option>}
+                {job?.source.kind === "database" && dbs && dbs.length > 0 && !dbs.includes(job.source.name) && <option value={job.source.name}>{job.source.name} (not found now)</option>}
+                {(dbs ?? []).map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+              {dbError && <span className="hint" style={{ color: "var(--bad)" }}>{dbError}</span>}
+              {dbs !== null && dbs.length === 0 && !dbError && <span className="hint">This database server has no databases of its own yet (system databases aren't listed).</span>}
             </label>
           </div>
         )}

@@ -532,7 +532,7 @@ export interface MoveOptions { ports?: PortMap[]; args?: string[]; envSet?: Reco
 export interface MovePreview { plan: MovePlan; clashes: { noDocker: boolean; name: boolean; ports: number[]; paths: string[] }; target: string }
 
 // ---------- scheduled backups ----------
-export type BackupSource = { kind: "folder"; path: string } | { kind: "database"; engine: DbKind; name: string };
+export type BackupSource = { kind: "folder"; path: string } | { kind: "database"; engine: DbKind; name: string; container?: string | null };
 export interface BackupSchedule { every: "day" | "week"; weekday: number; hour: number; minute: number }
 export interface BackupJob { id: string; name: string; source: BackupSource; schedule: BackupSchedule; keep: number }
 export interface BackupFile { path: string; bytes: number; at: number }

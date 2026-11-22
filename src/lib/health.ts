@@ -18,7 +18,14 @@ export interface Health {
 /** File systems that are always "full" or don't matter for space. */
 const IGNORED_FS = /^(tmpfs|devtmpfs|overlay|squashfs|iso9660|udf|efivarfs|ramfs|nsfs|fuse\..*)$/;
 
-export function assess(m: Metrics | undefined, failed: string[] | undefined): Health {
+/** Containers in trouble: stuck restarting, or reported unhealthy by their own health check. */
+export function troubledContainers(list: { names: string; state: string; status: string }[]): string[] {
+  return list
+    .filter((c) => c.state === "restarting" || /\(unhealthy\)/.test(c.status))
+    .map((c) => `${c.names} ${c.state === "restarting" ? "keeps restarting" : "is unhealthy"}`);
+}
+
+export function assess(m: Metrics | undefined, failed: string[] | undefined, containers: string[] = []): Health {
   if (!m) return { level: "unknown", reasons: [] };
   const bad: string[] = [];
   const warn: string[] = [];
@@ -42,12 +49,14 @@ export function assess(m: Metrics | undefined, failed: string[] | undefined): He
     const names = failed.map((u) => u.replace(/\.service$/, ""));
     warn.push(failed.length === 1 ? `${names[0]} failed` : `${failed.length} services failed (${names.slice(0, 3).join(", ")}${failed.length > 3 ? ", …" : ""})`);
   }
+  for (const c of containers.slice(0, 3)) warn.push(`Container ${c}`);
+  if (containers.length > 3) warn.push(`${containers.length - 3} more containers in trouble`);
   const reasons = [...bad, ...warn];
   return { level: bad.length ? "bad" : warn.length ? "warn" : "ok", reasons };
 }
 
-/** Failed services per connected server (session id). */
-export const useFailed = create<{ bySession: Record<string, string[]> }>(() => ({ bySession: {} }));
+/** Failed services per connected server (session id), and containers in trouble. */
+export const useFailed = create<{ bySession: Record<string, string[]>; containers: Record<string, string[]> }>(() => ({ bySession: {}, containers: {} }));
 
 const FAILED_EVERY_MS = 60_000;
 
@@ -56,21 +65,32 @@ export function useFailedPolling() {
   useEffect(() => {
     let stop = false;
     const tick = async () => {
-      const sessions = Object.values(useStore.getState().sessions).filter((s) => !s.lost && isSsh(s) && s.info.hasSystemd);
+      const sessions = Object.values(useStore.getState().sessions).filter((s) => !s.lost && isSsh(s));
       const next: Record<string, string[]> = {};
+      const boxes: Record<string, string[]> = {};
       await Promise.all(
         sessions.map(async (s) => {
-          try {
-            next[s.info.id] = await api.failedUnits(s.info.id);
-          } catch {
-            // Unknown this time: keep what we had.
-            const prev = useFailed.getState().bySession[s.info.id];
-            if (prev) next[s.info.id] = prev;
+          const prev = useFailed.getState();
+          // Services (systemd) and containers (Docker): wherever the server runs its software.
+          if (s.info.hasSystemd) {
+            try {
+              next[s.info.id] = await api.failedUnits(s.info.id);
+            } catch {
+              // Unknown this time: keep what we had.
+              if (prev.bySession[s.info.id]) next[s.info.id] = prev.bySession[s.info.id];
+            }
+          }
+          if (s.info.dockerVersion || s.tools?.some((t) => t.id === "docker")) {
+            try {
+              boxes[s.info.id] = troubledContainers(await api.listContainers(s.info.id));
+            } catch {
+              if (prev.containers[s.info.id]) boxes[s.info.id] = prev.containers[s.info.id];
+            }
           }
         }),
       );
       if (!stop) {
-        useFailed.setState({ bySession: next });
+        useFailed.setState({ bySession: next, containers: boxes });
         checkAlerts();
       }
     };
@@ -95,7 +115,8 @@ export function useFailedPolling() {
 export function useSessionHealth(sid: string | undefined): Health {
   const m = useStore((st) => (sid ? st.sessions[sid]?.metrics[st.sessions[sid].metrics.length - 1] : undefined));
   const failed = useFailed((f) => (sid ? f.bySession[sid] : undefined));
-  return assess(m, failed);
+  const boxes = useFailed((f) => (sid ? f.containers[sid] : undefined));
+  return assess(m, failed, boxes);
 }
 
 // ---------- alerts ----------
@@ -130,8 +151,10 @@ export function alertStep(prev: AlertState, server: string, h: Health, failed: s
   const redFor = h.level === "bad" ? prev.redFor + 1 : 0;
   let alerted = prev.alerted;
   if (newlyFailed.length) {
-    const names = newlyFailed.map((u) => u.replace(/\.service$/, ""));
-    messages.push({ kind: "bad", title: `${server}: ${names.length === 1 ? `${names[0]} failed` : `${names.length} services failed`}`, body: names.join(", ") });
+    // Services read "nginx failed"; containers come described ("container api is unhealthy").
+    const what = newlyFailed.map((u) => (u.startsWith("container ") ? u.slice("container ".length) : `${u.replace(/\.service$/, "")} failed`));
+    const names = newlyFailed.map((u) => (u.startsWith("container ") ? u.slice("container ".length).split(" ")[0] : u.replace(/\.service$/, "")));
+    messages.push({ kind: "bad", title: `${server}: ${what.length === 1 ? what[0] : `${what.length} problems`}`, body: what.length === 1 ? names[0] : what.join(", ") });
     alerted = true;
   } else if (redFor === 2 && !prev.alerted) {
     messages.push({ kind: "bad", title: `${server} needs attention`, body: h.reasons.slice(0, 3).join(" · ") });
@@ -166,9 +189,11 @@ export function checkAlerts() {
   for (const s of Object.values(st.sessions)) {
     if (s.lost || !isSsh(s)) continue;
     const failed = useFailed.getState().bySession[s.info.id] ?? [];
-    const h = assess(s.metrics[s.metrics.length - 1], failed);
+    const boxes = useFailed.getState().containers[s.info.id] ?? [];
+    const h = assess(s.metrics[s.metrics.length - 1], failed, boxes);
     // Keyed by server, so a reconnect doesn't alert again.
-    const { next, messages } = alertStep(alertStates[s.profile.id] ?? NO_ALERTS, s.profile.name, h, failed);
+    // Containers in trouble alert like failed services: at once, and once.
+    const { next, messages } = alertStep(alertStates[s.profile.id] ?? NO_ALERTS, s.profile.name, h, [...failed, ...boxes.map((b) => `container ${b}`)]);
     alertStates[s.profile.id] = next;
     if (muted.includes(s.profile.id)) continue;
     for (const m of messages) {

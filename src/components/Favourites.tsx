@@ -1,4 +1,4 @@
-import { FileText, Folder, Play, RotateCcw, RefreshCw, Star, X } from "lucide-react";
+import { Boxes, FileText, Folder, Play, RotateCcw, RefreshCw, Star, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, asApiError, Snippet } from "../lib/api";
 import { defaultLabel, FAV_KINDS, Favourite, FavKind, favProblem, useFavourites } from "../lib/favourites";
@@ -6,7 +6,7 @@ import { runJob } from "../lib/jobs";
 import { isSsh, SessionState, useStore } from "../store";
 import { Modal } from "./ui";
 
-const ICONS: Record<FavKind, typeof Star> = { restart: RotateCcw, reload: RefreshCw, file: FileText, folder: Folder, snippet: Play };
+const ICONS: Record<FavKind, typeof Star> = { restart: RotateCcw, reload: RefreshCw, container: Boxes, file: FileText, folder: Folder, snippet: Play };
 
 /** One-click buttons under the server's name; nothing shows until one is added. */
 export function FavouriteBar({ s }: { s: SessionState }) {
@@ -34,7 +34,11 @@ function FavButton({ s, f }: { s: SessionState; f: Favourite }) {
     }
     setBusy(true);
     try {
-      if (f.kind === "restart" || f.kind === "reload") {
+      if (f.kind === "container") {
+        await runJob((p) => api.containerAction(sid, f.target, "restart", p), {
+          key: `fav:${sid}:${f.id}`, title: f.label, sid, done: () => `${f.label}: done`,
+        });
+      } else if (f.kind === "restart" || f.kind === "reload") {
         await runJob((p) => api.serviceAction(sid, f.target, f.kind as "restart" | "reload", p), {
           key: `fav:${sid}:${f.id}`, title: f.label, sid, done: () => `${f.label}: done`,
         });
@@ -83,8 +87,13 @@ export function FavouriteAdd({ s }: { s: SessionState }) {
 
 function AddDialog({ s, onClose }: { s: SessionState; onClose: () => void }) {
   const ssh = isSsh(s);
-  const kinds = FAV_KINDS.filter((k) => ssh || k.kind === "file" || k.kind === "folder");
-  const [kind, setKind] = useState<FavKind>(ssh && s.info.hasSystemd ? "restart" : "folder");
+  // Offer what this server has: systemd services, Docker containers, files.
+  const hasDocker = !!s.info.dockerVersion || !!s.tools?.some((t) => t.id === "docker");
+  const kinds = FAV_KINDS.filter((k) =>
+    k.kind === "file" || k.kind === "folder" ||
+    (ssh && (k.kind === "snippet" || ((k.kind === "restart" || k.kind === "reload") && s.info.hasSystemd) || (k.kind === "container" && hasDocker))));
+  const [kind, setKind] = useState<FavKind>(ssh && s.info.hasSystemd ? "restart" : ssh && hasDocker ? "container" : "folder");
+  const [containers, setContainers] = useState<string[]>([]);
   const [target, setTarget] = useState("");
   const [label, setLabel] = useState("");
   const [units, setUnits] = useState<string[]>([]);
@@ -92,6 +101,7 @@ function AddDialog({ s, onClose }: { s: SessionState; onClose: () => void }) {
   useEffect(() => {
     if (ssh && s.info.hasSystemd) api.listServices(s.info.id).then((l) => setUnits(l.map((x) => x.unit))).catch(() => {});
     api.snippets().then((l) => setSnippets(l.filter((x) => x.params.length === 0))).catch(() => {});
+    if (ssh && hasDocker) api.listContainers(s.info.id).then((l) => setContainers(l.map((c) => c.names))).catch(() => {});
   }, [s.info.id]);
   // Sensible starting points: where you are now.
   useEffect(() => {
@@ -127,6 +137,15 @@ function AddDialog({ s, onClose }: { s: SessionState; onClose: () => void }) {
             <input className="input mono" list="fav-units" placeholder="nginx" value={target} onChange={(e) => setTarget(e.target.value)} autoFocus />
             <datalist id="fav-units">{units.map((u) => <option key={u} value={u} />)}</datalist>
             <span className="hint">The pre-flight checks still run (for example nginx -t before nginx restarts).</span>
+          </label>
+        )}
+        {kind === "container" && (
+          <label className="field">
+            <span>Container</span>
+            <select className="input mono" value={target} onChange={(e) => setTarget(e.target.value)}>
+              <option value="">Choose…</option>
+              {containers.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
           </label>
         )}
         {(kind === "file" || kind === "folder") && (
