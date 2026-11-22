@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.4.3 (2026-11-22)
+
 ### Added
 - **Hide the right-hand pane** to give the list the whole width: the editor in Files, the details panel in Services, Docker, Nginx, Users, Cron and the other list pages. Use the button at the right end of the tab row, or ⌘\ (Ctrl+\ on Windows and Linux). Each tab remembers its choice; opening a file shows the editor again.
 
