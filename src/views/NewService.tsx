@@ -17,7 +17,7 @@ export function unitName(s: string): string {
 export function previewUnit(spec: ServiceSpec): string {
   const q = (x: string) => `"${x.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/%/g, "%%").replace(/\$/g, "$$$$")}"`;
   const lines = ["[Unit]", `Description=${spec.description || spec.name}`, "After=network-online.target", "", "[Service]"];
-  if (spec.workdir) lines.push(`WorkingDirectory=${q(spec.workdir)}`);
+  if (spec.workdir) lines.push(`WorkingDirectory=${spec.workdir.replace(/%/g, "%%")}`);
   if (spec.user && spec.user !== "root") lines.push(`User=${spec.user}`);
   if (spec.env.some(([k]) => k.trim())) lines.push(`EnvironmentFile=/etc/orbital/env/${spec.name}.env   # root only`);
   lines.push(`ExecStart=/bin/sh -c ${q(spec.command)}`);

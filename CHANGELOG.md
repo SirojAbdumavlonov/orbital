@@ -4,6 +4,9 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Fixed
+- **New service with a folder failed** ("WorkingDirectory= path is not absolute"): the folder was written in quotes, which systemd takes literally. Nothing was left behind (the unit check refused it and it was rolled back); now it works.
+
 ## 1.5.0 (2026-11-24)
 
 ### Added

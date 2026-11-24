@@ -136,7 +136,8 @@ pub fn render_unit(s: &ServiceSpec) -> String {
     let mut u = format!("{MARK}; change it in Orbital (Services) or here.\n[Unit]\nDescription={}\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\n",
         if s.description.is_empty() { s.name.clone() } else { s.description.replace('%', "%%") });
     if let Some(w) = &s.workdir {
-        u.push_str(&format!("WorkingDirectory={}\n", systemd_quote(w)));
+        // Taken literally (no quotes; spaces are fine), with systemd's % specifiers escaped.
+        u.push_str(&format!("WorkingDirectory={}\n", w.replace('%', "%%")));
     }
     if let Some(user) = &s.user {
         u.push_str(&format!("User={user}\n"));
@@ -280,7 +281,7 @@ mod tests {
             u.contains("ExecStart=/bin/sh -c \"node server.js --port 3000 | tee -a /var/log/shop.log\"\n"),
             "{u}"
         );
-        assert!(u.contains("User=deploy\n") && u.contains("WorkingDirectory=\"/srv/shop\"\n") && u.contains("Restart=always\n"));
+        assert!(u.contains("User=deploy\n") && u.contains("WorkingDirectory=/srv/shop\n") && u.contains("Restart=always\n"));
         assert!(u.contains("EnvironmentFile=/etc/orbital/env/shop-api.env\n"));
         assert!(!u.contains("DB_PASSWORD") && !u.contains("p\\\"a"), "secrets stay out of the unit");
         let e = render_env(&v);
