@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.6.0 (2026-11-24)
+
 ### Added
 - **Apps** (Compose stacks → Apps): install Uptime Kuma, Portainer, Vaultwarden, Gitea, n8n, Grafana, WordPress, Nextcloud, Metabase or Adminer in one click. Each one runs as a Compose stack that only the server itself can reach (127.0.0.1). Open opens it in your browser through SSH, and Publish with a domain sets up New website with HTTPS. Passwords are generated for you and shown once. They live only in a private `.env` file on the server, never in Orbital or its activity log. The name, the port and free memory are checked first.
 - **More software to install** (the "+" menu): Caddy, PHP-FPM, Node.js, Memcached, Supervisor, chrony time sync, automatic security updates, WireGuard and the Prometheus node exporter, from the server's own package repositories. Each one gets its own tab.
