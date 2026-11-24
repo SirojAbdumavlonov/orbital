@@ -1,7 +1,11 @@
-import { Bell, BellOff, FileInput, Loader2, Plus } from "lucide-react";
+import { Bell, BellOff, FileInput, Loader2, NotebookPen, Plus } from "lucide-react";
 import { isSsh, SessionState, useStore } from "../store";
 import { Profile } from "../lib/api";
 import { useHealthMute, useSessionHealth } from "../lib/health";
+import { useHistory } from "../lib/metricHistory";
+import { updatesText, useFleet } from "../lib/fleet";
+import { noteTitle, readNote, useNotes } from "../lib/notes";
+import { Sparkline } from "./ui";
 import { duration, relativeTime } from "../lib/format";
 // Bundled with the code (not fetched from /logo.svg), so it shows however the page is served.
 import logo from "../assets/logo.svg";
@@ -49,16 +53,22 @@ function ServerCard({ p, s }: { p: Profile; s?: SessionState }) {
   const { connect, connecting } = useStore();
   const h = useSessionHealth(s?.info.id);
   const muted = useHealthMute((x) => x.muted.includes(p.id));
+  const note = useNotes((x) => x.byProfile[p.id]?.text) ?? readNote(p.id).text;
   const m = s?.metrics[s.metrics.length - 1];
   const disk = m?.disks.filter((d) => d.totalBytes > 64 * 1024 * 1024 && !/^(tmpfs|devtmpfs|overlay|squashfs)$/.test(d.fsType)).sort((a, b) => b.usedPercent - a.usedPercent)[0];
   const mem = m && m.memTotal ? Math.round(((m.memTotal - m.memAvailable) / m.memTotal) * 100) : null;
   const level = s ? h.level : "off";
+  const fleet = useFleet((f) => f.updates[p.id]);
+  const upd = updatesText(fleet);
+  const hist = useHistory((x) => x.byProfile[p.id]) ?? [];
+  const trend = hist.slice(-120).map((x) => x.cpu ?? 0);
   return (
     <button className={`server-card ${level}`} onClick={() => connect(p.id)} title={s ? `Open ${p.name}` : `Connect to ${p.name}`}>
       <div className="server-card-head">
         <span className={`dot ${s ? `live health-${h.level}` : ""}`} />
         <b>{p.name}</b>
         {connecting[p.id] && <Loader2 size={13} className="spin faint" />}
+        {note && <span className="card-note" title={`Notes: ${noteTitle(note)}`}><NotebookPen size={12} /></span>}
         <span
           role="button"
           tabIndex={0}
@@ -83,6 +93,19 @@ function ServerCard({ p, s }: { p: Profile; s?: SessionState }) {
         <span className="faint server-card-note">
           {s ? (isSsh(s) ? "Connected · reading…" : "Connected (file storage)") : p.lastConnectedAt ? `Not connected · last opened ${relativeTime(when(p) / 1000)}` : "Not connected yet"}
         </span>
+      )}
+      {s && trend.length > 1 && (
+        <div className="server-card-trend" title="CPU over the last 2 hours"><Sparkline values={trend} width={200} height={22} fluid /></div>
+      )}
+      {s && upd && (
+        <span
+          role="button"
+          tabIndex={0}
+          className={`server-card-updates ${fleet?.security || fleet?.reboot ? "warn" : ""}`}
+          title="Open the Updates tab"
+          onClick={(e) => { e.stopPropagation(); useStore.getState().setActive(s.info.id); useStore.getState().openTool(s.info.id, "updates"); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); useStore.getState().setActive(s.info.id); useStore.getState().openTool(s.info.id, "updates"); } }}
+        >{upd}</span>
       )}
       {s && (h.level === "warn" || h.level === "bad") && (
         <div className={`server-card-reasons ${h.level}`}>{h.reasons.slice(0, 3).map((r) => <span key={r}>{r}</span>)}</div>

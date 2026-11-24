@@ -263,6 +263,65 @@ pub async fn nginx_route_change(
 }
 
 #[tauri::command]
+pub async fn stacks(engine: Eng<'_>, session_id: String) -> R<Vec<orbital_core::stacks::Stack>> {
+    engine.stacks(&session_id).await
+}
+
+#[tauri::command]
+pub async fn create_stack(
+    engine: Eng<'_>,
+    session_id: String,
+    name: String,
+    content: String,
+    deploy: bool,
+    progress: Channel<ProgressEvent>,
+) -> R<Option<ExecOutput>> {
+    progress::run_job(
+        progress.id(),
+        sink(progress),
+        engine.create_stack(&session_id, &name, &content, deploy),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn stack_action(
+    engine: Eng<'_>,
+    session_id: String,
+    name: String,
+    file: String,
+    action: orbital_core::stacks::StackAction,
+    progress: Channel<ProgressEvent>,
+) -> R<ExecOutput> {
+    progress::run_job(
+        progress.id(),
+        sink(progress),
+        engine.stack_action(&session_id, &name, &file, action),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn add_swap(engine: Eng<'_>, session_id: String, mb: u32, progress: Channel<ProgressEvent>) -> R<u64> {
+    progress::run_job(progress.id(), sink(progress), engine.add_swap(&session_id, mb)).await
+}
+
+#[tauri::command]
+pub async fn create_service(
+    engine: Eng<'_>,
+    session_id: String,
+    spec: orbital_core::units::ServiceSpec,
+    progress: Channel<ProgressEvent>,
+) -> R<(bool, String)> {
+    progress::run_job(progress.id(), sink(progress), engine.create_service(&session_id, &spec)).await
+}
+
+#[tauri::command]
+pub async fn remove_service(engine: Eng<'_>, session_id: String, name: String) -> R<()> {
+    engine.remove_service(&session_id, &name).await
+}
+
+#[tauri::command]
 pub async fn backup_jobs(engine: Eng<'_>, session_id: String) -> R<Vec<orbital_core::backups::BackupStatus>> {
     engine.backup_jobs(&session_id).await
 }
@@ -1232,6 +1291,16 @@ pub async fn docker_version(engine: Eng<'_>, session_id: String) -> R<Option<Str
 #[tauri::command]
 pub async fn website_test(engine: Eng<'_>, session_id: String, domain: String, https: bool) -> R<orbital_core::website::SiteTest> {
     engine.website_test(&session_id, &domain, https).await
+}
+
+#[tauri::command]
+pub async fn nginx_broken_sites(engine: Eng<'_>, session_id: String) -> R<Vec<orbital_core::website::BrokenSite>> {
+    engine.nginx_broken_sites(&session_id).await
+}
+
+#[tauri::command]
+pub async fn disable_site(engine: Eng<'_>, session_id: String, link: String, progress: Channel<ProgressEvent>) -> R<String> {
+    progress::run_job(progress.id(), sink(progress), engine.disable_site(&session_id, &link)).await
 }
 
 #[tauri::command]

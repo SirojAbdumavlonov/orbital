@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../components/ui";
 import { api, asApiError, CertbotStatus, DnsAccount, DnsRecord, DnsZone, ExecOutput, SiteKind, WebsiteInput, WebsitePlan, WebsiteReport } from "../lib/api";
 import { runJob, useRunningJob } from "../lib/jobs";
+import { BrokenSitesFix } from "../components/BrokenSites";
 import { JobProgress } from "../components/JobProgress";
 import { useStore } from "../store";
 import { DnsReadiness } from "./CertbotView";
@@ -167,21 +168,6 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
     }, 400);
     return () => { alive = false; clearTimeout(t); };
   }, [step, inputKey, report, sid, planRev]);
-
-  // nginx broken by its stock default site (pointing at a deleted certificate): turn that site
-  // off by its sites-enabled link only. The default file itself is never changed.
-  const [fixing, setFixing] = useState(false);
-  async function defaultOff() {
-    setFixing(true);
-    try {
-      await runJob((p) => api.disableDefaultSite(sid, p), { key: `website:${sid}`, title: "Turning nginx's default site off", sid, quietHere: true, done: () => "nginx's default site is off; nginx works again" });
-      setPlanRev((n) => n + 1);
-    } catch {
-      // The job reports the error.
-    } finally {
-      setFixing(false);
-    }
-  }
 
   const job = useRunningJob(`website:${sid}`);
   async function createSite() {
@@ -384,17 +370,7 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
           {planError && <div className="alert" style={{ whiteSpace: "pre-wrap" }}>{planError}</div>}
           {plan && plan.blockers.length > 0 && (
             <div className="alert"><b>Can't create this site yet:</b><ul className="steps" style={{ marginTop: 6 }}>{plan.blockers.map((b) => <li key={b} style={{ whiteSpace: "pre-wrap" }}>{b}</li>)}</ul>
-              {plan.defaultOffFixes && (
-                <div className="default-off">
-                  <p>
-                    The cause is nginx's own default site: it still points at a certificate that was deleted
-                    (<span className="mono">{plan.defaultMissing.join(", ")}</span>). Orbital can turn that site off by removing
-                    its link in <span className="mono">sites-enabled/</span>. The file <span className="mono">sites-available/default</span> stays
-                    exactly as it is, and if nginx still fails, the link is put back.
-                  </p>
-                  <button className="btn primary" disabled={fixing} onClick={defaultOff}>{fixing ? "Turning it off…" : "Turn off nginx's default site"}</button>
-                </div>
-              )}
+              <BrokenSitesFix sid={sid} sites={plan.brokenSites ?? []} onFixed={() => setPlanRev((n) => n + 1)} />
             </div>
           )}
           {plan && (

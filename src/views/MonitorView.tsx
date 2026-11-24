@@ -1,11 +1,13 @@
+import { HistoryChart } from "../components/HistoryChart";
 import { AlertTriangle, ArrowUp, CheckCircle2, File, Folder, FolderOpen, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Bar, confirm, LiveNumber, Sparkline } from "../components/ui";
+import { Bar, confirm, LiveNumber, Modal, Sparkline } from "../components/ui";
+import { runJob } from "../lib/jobs";
 import { api, DiskUsage, Metrics, ProcessReport } from "../lib/api";
 import { asApiError } from "../lib/api";
 import { useRemote } from "../lib/remote";
 import { bytes, duration, rate } from "../lib/format";
-import { SessionState, useStore } from "../store";
+import { isSsh, SessionState, useStore } from "../store";
 import { useKept } from "../lib/kept";
 
 const VIRT: Record<string, string> = { none: "Physical machine", kvm: "Virtual machine (KVM)", qemu: "Virtual machine (QEMU)", xen: "Virtual machine (Xen)", vmware: "Virtual machine (VMware)", microsoft: "Virtual machine (Hyper-V)", oracle: "Virtual machine (VirtualBox)", amazon: "Virtual machine (AWS Nitro)", lxc: "Container (LXC)", docker: "Container (Docker)", openvz: "Container (OpenVZ)", wsl: "WSL" };
@@ -311,6 +313,7 @@ export function MonitorView({ s }: { s: SessionState }) {
         <p className="faint" style={{ margin: "8px 0 0", fontSize: 12 }}>{bytes(m.memAvailable)} available · {bytes(m.memCached)} cache</p>
         <h4 style={{ marginTop: 14 }}>Swap <span className="faint">{m.swapTotal ? `${bytes(m.swapUsed)} of ${bytes(m.swapTotal)}` : "none"}</span></h4>
         {m.swapTotal > 0 && <Bar value={swapPct} hot={swapPct > 50} />}
+        {m.swapTotal === 0 && isSsh(s) && <AddSwap s={s} memTotal={m.memTotal} />}
       </section>
 
       <section className="panel span-4">
@@ -323,6 +326,11 @@ export function MonitorView({ s }: { s: SessionState }) {
           <div><div className="faint" style={{ fontSize: 12 }}>In</div><b>{rate(m.netRxPerSec)}</b></div>
           <div><div className="faint" style={{ fontSize: 12 }}>Out</div><b>{rate(m.netTxPerSec)}</b></div>
         </div>
+      </section>
+
+      <section className="panel span-12">
+        <h4>Last 24 hours</h4>
+        <HistoryChart profileId={s.profile.id} />
       </section>
 
       <section className="panel span-7">
@@ -356,5 +364,57 @@ export function MonitorView({ s }: { s: SessionState }) {
       <UsageByProgram s={s} memTotal={m.memTotal} />
       <DiskByFolder s={s} mounts={m.disks.map((d) => d.mount)} />
     </div>
+  );
+}
+
+/** A size suggestion for swap, as in orbital_core::swap::suggest_mb. */
+export function suggestSwapMb(memBytes: number): number {
+  const mb = Math.floor(memBytes / (1024 * 1024));
+  const raw = mb < 2048 ? mb * 2 : mb <= 8192 ? mb : 4096;
+  return Math.min(8192, Math.max(1024, Math.ceil(raw / 256) * 256));
+}
+
+/** Servers without swap (common on small VPSs) can be given some, safely. */
+function AddSwap({ s, memTotal }: { s: SessionState; memTotal: number }) {
+  const [open, setOpen] = useState(false);
+  const suggested = suggestSwapMb(memTotal);
+  const [mb, setMb] = useState(suggested);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const sizes = [...new Set([1024, 2048, 4096, 8192, suggested])].sort((a, b) => a - b);
+  const go = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await runJob((p) => api.addSwap(s.info.id, mb, p), { key: `swap:${s.info.id}`, title: `Adding ${mb / 1024} GB of swap`, sid: s.info.id, done: (b) => `Swap is on: ${bytes(b)}` });
+      setOpen(false);
+    } catch (e) {
+      setProblem(asApiError(e).message.replace(/^Invalid input: /, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <p className="faint" style={{ margin: "6px 0 0", fontSize: 12 }}>
+        No swap: when memory runs out, the kernel kills a program. <button className="link-btn" onClick={() => setOpen(true)}>Add swap…</button>
+      </p>
+      {open && (
+        <Modal title="Add swap" subtitle="A swap file on the main disk, on now and after every reboot." onClose={() => setOpen(false)}
+          footer={<><button className="btn" onClick={() => setOpen(false)}>Cancel</button><button className="btn primary" disabled={busy} onClick={go}>{busy ? "Adding…" : `Add ${mb / 1024} GB`}</button></>}>
+          <div className="route-form">
+            <div className="field">
+              <span>Size</span>
+              <div className="segmented" style={{ alignSelf: "flex-start" }}>
+                {sizes.map((x) => <button key={x} className={mb === x ? "on" : ""} onClick={() => setMb(x)}>{x % 1024 ? `${(x / 1024).toFixed(2)} GB` : `${x / 1024} GB`}{x === suggested ? " ·  suggested" : ""}</button>)}
+              </div>
+              <span className="hint">Suggested from {bytes(memTotal)} of memory. Orbital checks first: nothing changes if swap is on already, /swapfile exists, or the disk hasn't room for it plus 1 GB.</span>
+            </div>
+            <p className="faint" style={{ margin: 0, fontSize: 12.5 }}>Creates /swapfile (root only), turns it on, adds it to /etc/fstab and sets vm.swappiness=10 so memory is used first.</p>
+            {problem && <div className="alert">{problem}</div>}
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }

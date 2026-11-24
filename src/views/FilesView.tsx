@@ -1,7 +1,7 @@
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   ArrowRightLeft, ArrowUp, ChevronRight, Download, Eye, EyeOff, FilePlus, FileText, Folder, FolderPlus, FolderUp, History, Link2, Lock, Pencil, RefreshCw, RotateCcw, Save,
-  ClipboardPaste, Search, ShieldCheck, SquareTerminal, Star, Trash2, Upload, X,
+  ClipboardPaste, GitCompare, Search, ShieldCheck, SquareTerminal, Star, Trash2, Upload, X,
 } from "lucide-react";
 import { isMac, KEYS, mod } from "../lib/platform";
 import Editor, { DiffEditor, DiffOnMount, OnMount } from "@monaco-editor/react";
@@ -666,6 +666,7 @@ export function EditorPane({ s }: { s: SessionState }) {
   const file = s.files.find((f) => f.path === s.activeFile) ?? null;
   const [review, setReview] = useState<OpenFile | null>(null);
   const [versions, setVersions] = useState<OpenFile | null>(null);
+  const [comparing, setComparing] = useState<OpenFile | null>(null);
   const saveRef = useRef<() => void>(() => {});
 
   const update = (path: string, p: Partial<OpenFile>) =>
@@ -749,6 +750,7 @@ export function EditorPane({ s }: { s: SessionState }) {
         {file.validator && <span className="badge ok"><ShieldCheck size={11} /> Checked by {file.validator.name}</span>}
         <span style={{ flex: 1 }} />
         {isSsh(s) && <button className="icon-btn" title="Earlier versions (backups made by safe save)" aria-label="Earlier versions" onClick={() => setVersions(file)}><History size={14} /></button>}
+        <button className="icon-btn" title="Compare with the same file on another server (or another file)" aria-label="Compare with another server" onClick={() => setComparing(file)}><GitCompare size={14} /></button>
         <button className="icon-btn" title="Reload from server" aria-label="Reload from server" onClick={() => reload(file)}><RefreshCw size={14} /></button>
         <button className="btn primary" disabled={!dirty} onClick={() => save(file)}><Save size={14} /> {file.validator || !file.writable ? "Review & save" : "Save"}</button>
       </div>
@@ -769,6 +771,7 @@ export function EditorPane({ s }: { s: SessionState }) {
           }}
         />
       </div>
+      {comparing && <CompareDialog s={s} file={comparing} onClose={() => setComparing(null)} />}
       {versions && <VersionsDialog s={s} file={versions} onClose={() => setVersions(null)} onRestored={async () => { const f = versions; setVersions(null); await reload(f); }} />}
       {review && <SaveReview s={s} file={review} onClose={() => setReview(null)} onSaved={(rep) => {
         update(review.path, { original: review.content, mtime: rep.newMtime, writable: review.writable });
@@ -988,4 +991,62 @@ function useBookmarks(profileId: string): [string[], (m: string[]) => void] {
     }
   };
   return [marks, save];
+}
+
+/**
+ * Compare the open file with the same path on another connected server (or
+ * another path, on any server): configuration drift at a glance. Read-only;
+ * the right side is what's on the other server now.
+ */
+function CompareDialog({ s, file, onClose }: { s: SessionState; file: OpenFile; onClose: () => void }) {
+  const monacoTheme = useResolvedTheme() === "light" ? "orbital-light" : "orbital-dark";
+  const sessions = useStore((x) => x.sessions);
+  const others = Object.values(sessions).filter((x) => !x.lost);
+  const [target, setTarget] = useState(others.find((x) => x.info.id !== s.info.id)?.info.id ?? s.info.id);
+  const [path, setPath] = useState(file.path);
+  const [content, setContent] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const diffRef = useRef<Parameters<DiffOnMount>[0] | null>(null);
+  useEffect(() => () => {
+    const ed = diffRef.current;
+    const m = ed?.getModel();
+    ed?.setModel(null);
+    m?.original.dispose();
+    m?.modified.dispose();
+  }, []);
+  const load = async () => {
+    setContent(null);
+    setError(null);
+    try {
+      setContent((await api.readFile(target, path.trim())).content);
+    } catch (e) {
+      setError(asApiError(e).message);
+    }
+  };
+  useEffect(() => { void load(); }, []);
+  const there = sessions[target]?.profile.name ?? "the other server";
+  const same = content !== null && content === file.content;
+  return (
+    <Modal title={`Compare ${file.path.split("/").pop()}`} subtitle="Left: this file in the editor. Right: the file on the server you choose, as it is now." wide onClose={onClose}>
+      <div className="compare">
+        <div className="compare-pick">
+          <select className="input" value={target} onChange={(e) => setTarget(e.target.value)}>
+            {others.map((x) => <option key={x.info.id} value={x.info.id}>{x.profile.name}{x.info.id === s.info.id ? " (this server)" : ""}</option>)}
+          </select>
+          <input className="input mono" value={path} onChange={(e) => setPath(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void load()} spellCheck={false} />
+          <button className="btn" onClick={() => void load()}>Compare</button>
+        </div>
+        {error && <div className="alert">{error}</div>}
+        {same && <div className="faint compare-same">The two files are identical.</div>}
+        <div className="versions-labels"><span>{s.profile.name}: {file.path}{file.content !== file.original ? " (unsaved edits)" : ""}</span><span>{there}: {path}</span></div>
+        <div className="compare-diff">
+          {content === null && !error
+            ? <div className="empty"><p>Reading it from {there}…</p></div>
+            : content !== null && <DiffEditor theme={monacoTheme} original={file.content} modified={content} language={languageFor(file.path)} keepCurrentOriginalModel keepCurrentModifiedModel
+                onMount={(ed) => (diffRef.current = ed)}
+                options={{ readOnly: true, renderSideBySide: true, useInlineViewWhenSpaceIsLimited: false, minimap: { enabled: false }, fontFamily: "JetBrains Mono", fontSize: 12.5, automaticLayout: true, scrollBeyondLastLine: false }} />}
+        </div>
+      </div>
+    </Modal>
+  );
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 vi.mock("../store", () => ({ isSsh: () => true, useStore: { getState: () => ({ sessions: {} }), subscribe: () => () => {} } }));
-vi.mock("./settings", () => ({ useSettings: { getState: () => ({ healthAlerts: true }) } }));
+vi.mock("./settings", () => ({ DEFAULT_THRESHOLDS: { diskWarn: 85, diskBad: 95, memWarn: 90, memBad: 95, loadWarn: 1.2, loadBad: 2 }, useSettings: { getState: () => ({ healthAlerts: true }) } }));
 const { assess, alertStep, NO_ALERTS, troubledContainers } = await import("./health");
 
 const GB = 1024 ** 3;
@@ -78,4 +78,9 @@ describe("containers", () => {
     expect(assess(metrics(), [], t)).toEqual({ level: "warn", reasons: ["Container shop-worker keeps restarting", "Container api is unhealthy"] });
     expect(alertStep(NO_ALERTS, "web", { level: "warn", reasons: [] }, ["container api is unhealthy"]).messages[0].title).toBe("web: api is unhealthy");
   });
+});
+
+it("uses the thresholds from Settings", () => {
+  const strict = { diskWarn: 30, diskBad: 50, memWarn: 40, memBad: 99, loadWarn: 0.1, loadBad: 9 };
+  expect(assess(metrics(), [], [], strict)).toEqual({ level: "warn", reasons: ["Disk / 40%", "Memory 50% used", "Load 0.5 on 4 cores"] });
 });

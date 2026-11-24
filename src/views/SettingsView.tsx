@@ -2,7 +2,7 @@ import { Download, Monitor, Moon, RefreshCw, RotateCcw, Sun } from "lucide-react
 import { isMac, isWindows, KEYS } from "../lib/platform";
 import { useEffect, useState } from "react";
 import { confirm } from "../components/ui";
-import { ACCENTS, ThemePref, useResolvedTheme, useSettings } from "../lib/settings";
+import { ACCENTS, DEFAULT_THRESHOLDS, ThemePref, useResolvedTheme, useSettings } from "../lib/settings";
 import { bytes } from "../lib/format";
 import { useUpdates } from "../lib/updates";
 import { useStore } from "../store";
@@ -154,6 +154,9 @@ export function SettingsView() {
           </Row>
 
           <h3 className="settings-title">Monitoring</h3>
+          <Row title="When to warn" hint="A server's dot turns orange at the first number and red at the second (alerts go out when it stays red). Disk and memory in % used; load per CPU core.">
+            <Thresholds />
+          </Row>
           <Row title="Health alerts" hint="A notification when a connected server needs attention for a minute or more (a disk nearly full, memory or load high) or a service fails, and when it's back to normal. Mute one server from its card on Home.">
             <input type="checkbox" className="switch" checked={st.healthAlerts} onChange={(e) => st.set({ healthAlerts: e.target.checked })} />
           </Row>
@@ -200,6 +203,34 @@ export function SettingsView() {
           </Row>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Warning and alarm levels for disk, memory and load (health dots, cards and alerts). */
+function Thresholds() {
+  const th = useSettings((x) => x.thresholds);
+  const set = useSettings((x) => x.set);
+  const field = (k: keyof typeof th, step: number, max: number) => (
+    <input
+      className="input mono threshold"
+      type="number"
+      step={step}
+      min={step}
+      max={max}
+      value={th[k]}
+      onChange={(e) => {
+        const v = Number(e.target.value);
+        if (Number.isFinite(v) && v > 0 && v <= max) set({ thresholds: { ...th, [k]: v } });
+      }}
+    />
+  );
+  return (
+    <div className="thresholds">
+      <span>Disk</span>{field("diskWarn", 1, 100)}<span className="faint">/</span>{field("diskBad", 1, 100)}<span className="faint">%</span>
+      <span>Memory</span>{field("memWarn", 1, 100)}<span className="faint">/</span>{field("memBad", 1, 100)}<span className="faint">%</span>
+      <span>Load</span>{field("loadWarn", 0.1, 20)}<span className="faint">/</span>{field("loadBad", 0.1, 20)}<span className="faint">× cores</span>
+      <button className="btn ghost" onClick={() => set({ thresholds: DEFAULT_THRESHOLDS })}>Defaults</button>
     </div>
   );
 }

@@ -531,6 +531,14 @@ export interface MovePlan { name: string; image: string; imageId: string; repoDi
 export interface MoveOptions { ports?: PortMap[]; args?: string[]; envSet?: Record<string, string>; envRemove?: string[] }
 export interface MovePreview { plan: MovePlan; clashes: { noDocker: boolean; name: boolean; ports: number[]; paths: string[] }; target: string }
 
+// ---------- Docker Compose stacks ----------
+export interface Stack { name: string; status: string; files: string[]; running: boolean; ours: boolean }
+export type StackAction = "up" | "pullUp" | "restart" | "down" | "logs";
+
+// ---------- services made by Orbital ----------
+export type RestartPolicy = "always" | "onFailure" | "no";
+export interface ServiceSpec { name: string; description: string; command: string; workdir: string | null; user: string | null; restart: RestartPolicy; env: [string, string][] }
+
 // ---------- scheduled backups ----------
 export type BackupSource = { kind: "folder"; path: string } | { kind: "database"; engine: DbKind; name: string; container?: string | null };
 export interface BackupSchedule { every: "day" | "week"; weekday: number; hour: number; minute: number }
@@ -901,7 +909,10 @@ export interface WebsitePlan {
   /** nginx is broken by its default site pointing at deleted certificates; turning it off repairs it. */
   defaultOffFixes: boolean;
   defaultMissing: string[];
+  /** Enabled files that break nginx (deleted certificate, dangling link). */
+  brokenSites: BrokenSite[];
 }
+export interface BrokenSite { file: string; link: boolean; missing: string[]; dangling: boolean; stock: boolean }
 export interface WebsiteReport { plan: WebsitePlan; write: SafeWriteReport; rootCreated: boolean; reloaded: boolean; reloadOutput: string }
 
 // ---------- certbot ----------
@@ -1215,6 +1226,10 @@ export const api = {
     invoke<number>("upload", { sessionId, localPath, remotePath, progress: progressChannel(onProgress) }),
   download: (sessionId: string, remotePath: string, localPath: string) => invoke<number>("download", { sessionId, remotePath, localPath }),
 
+  /** Enabled nginx files that break the configuration (read-only). */
+  nginxBrokenSites: (sessionId: string) => invoke<BrokenSite[]>("nginx_broken_sites", { sessionId }),
+  /** Turn a site off by removing its sites-enabled link (its file is kept); put back if nginx still fails. */
+  disableSite: (sessionId: string, link: string, onProgress?: OnProgress) => invoke<string>("disable_site", { sessionId, link, progress: progressChannel(onProgress) }),
   /** Turn nginx's default site off by its sites-enabled link (the file isn't touched); put back if nginx still fails. */
   disableDefaultSite: (sessionId: string, onProgress?: OnProgress) => invoke<string>("disable_default_site", { sessionId, progress: progressChannel(onProgress) }),
   /** Paste on the same server: copy a file or folder to another place there (cp, sudo when refused). */
@@ -1305,6 +1320,17 @@ export const api = {
   redisAction: (sessionId: string, action: RedisAction, container: string | null = null) => invoke<RedisInfo>("redis_action", { sessionId, action, container }),
   systemInfo: (sessionId: string) => invoke<SystemInfo>("system_info", { sessionId }),
   metrics: (sessionId: string) => invoke<Metrics>("metrics", { sessionId }),
+  stacks: (sessionId: string) => invoke<Stack[]>("stacks", { sessionId }),
+  /** A new stack in /opt/stacks/<name>/compose.yaml (checked by docker compose config); deployed with `deploy`. */
+  createStack: (sessionId: string, name: string, content: string, deploy: boolean, onProgress?: OnProgress) =>
+    invoke<ExecOutput | null>("create_stack", { sessionId, name, content, deploy, progress: progressChannel(onProgress) }),
+  stackAction: (sessionId: string, name: string, file: string, action: StackAction, onProgress?: OnProgress) =>
+    invoke<ExecOutput>("stack_action", { sessionId, name, file, action, progress: progressChannel(onProgress) }),
+  /** Add a swap file of this many MB (refused when swap is already on or the disk is short). Returns the swap size in bytes. */
+  addSwap: (sessionId: string, mb: number, onProgress?: OnProgress) => invoke<number>("add_swap", { sessionId, mb, progress: progressChannel(onProgress) }),
+  /** Turn a command into a running systemd service; returns [running, systemctl output]. */
+  createService: (sessionId: string, spec: ServiceSpec, onProgress?: OnProgress) => invoke<[boolean, string]>("create_service", { sessionId, spec, progress: progressChannel(onProgress) }),
+  removeService: (sessionId: string, name: string) => invoke<void>("remove_service", { sessionId, name }),
   backupJobs: (sessionId: string) => invoke<BackupStatus[]>("backup_jobs", { sessionId }),
   saveBackupJob: (sessionId: string, job: BackupJob, onProgress?: OnProgress) => invoke<BackupJob>("save_backup_job", { sessionId, job, progress: progressChannel(onProgress) }),
   deleteBackupJob: (sessionId: string, id: string, files: boolean) => invoke<void>("delete_backup_job", { sessionId, id, files }),

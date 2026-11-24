@@ -31,11 +31,15 @@ import { useStatsPings } from "./lib/stats";
 import { StatsPrompt } from "./components/StatsPrompt";
 import { HelpView } from "./views/HelpView";
 import { BackupsView } from "./views/BackupsView";
+import { NotesView } from "./views/NotesView";
+import { StacksView } from "./views/StacksView";
 import { FeedbackView } from "./views/FeedbackView";
 import { ChangesView, useWhatsNewAnnounce, WhatsNewDialog } from "./components/WhatsNew";
 import { isMac, isSidebarKey, mod } from "./lib/platform";
 import { isPaneKey, usePanes } from "./lib/panes";
 import { useFailedPolling } from "./lib/health";
+import { useHistoryRecorder } from "./lib/metricHistory";
+import { useFleetUpdates } from "./lib/fleet";
 import { useSessionRestore } from "./lib/restore";
 import { useUptimeAlerts } from "./lib/uptime";
 import { UptimeView } from "./views/UptimeView";
@@ -99,6 +103,8 @@ const TOOL_VIEWS: Record<string, (p: { s: SessionState }) => JSX.Element> = {
   tunnels: TunnelsView,
   network: NetworkView,
   backups: BackupsView,
+  notes: NotesView,
+  stacks: StacksView,
 };
 
 function ToolTab({ s, id }: { s: SessionState; id: string }) {
@@ -190,6 +196,8 @@ export default function App() {
   useWhatsNewAnnounce();
   useUptimeAlerts();
   useFailedPolling();
+  useHistoryRecorder();
+  useFleetUpdates();
   const profilesLoaded = useStore((x) => x.profilesLoaded);
   useSessionRestore(profilesLoaded);
 

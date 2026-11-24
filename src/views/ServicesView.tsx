@@ -1,4 +1,4 @@
-import { Play, ScrollText, RefreshCw, RotateCw, Search, Square, ToggleLeft, ToggleRight, Zap } from "lucide-react";
+import { Plus, Play, ScrollText, RefreshCw, RotateCw, Search, Square, ToggleLeft, ToggleRight, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { confirm, StateDot, DrawerClose } from "../components/ui";
 import { api, asApiError, Service, ServiceAction, ServiceDetail } from "../lib/api";
@@ -8,6 +8,7 @@ import { rangeSeconds, useLogPane } from "../components/LogPane";
 import { bytes } from "../lib/format";
 import { SessionState, useStore } from "../store";
 import { useKept } from "../lib/kept";
+import { NewServiceDialog } from "./NewService";
 
 type Filter = "all" | "running" | "failed" | "stopped";
 
@@ -19,6 +20,7 @@ export function ServicesView({ s }: { s: SessionState }) {
   const [q, setQ] = useKept(`${s.info.id}:services:q`, "");
   const [filter, setFilter] = useKept<Filter>(`${s.info.id}:services:filter`, "running");
   const [sel, setSel] = useKept<string | null>(`${s.info.id}:services:sel`, null);
+  const [creating, setCreating] = useState(false);
   const [detail, setDetail] = useState<ServiceDetail | null>(null);
   const [busy, setBusy] = useState<ServiceAction | null>(null);
   const job = useRunningJob(`service:${sid}`);
@@ -113,8 +115,10 @@ export function ServicesView({ s }: { s: SessionState }) {
         </div>
         <div className="search"><Search size={14} /><input className="input" placeholder="Find a service" value={q} onChange={(e) => setQ(e.target.value)} /></div>
         <span className="spacer" />
+        <button className="btn" onClick={() => setCreating(true)} title="Run a command as a service that starts at boot and restarts when it stops"><Plus size={13} /> New service</button>
         <button className="icon-btn" aria-label="Refresh" onClick={load}><RefreshCw size={14} className={loading ? "spin" : ""} /></button>
       </div>
+      {creating && <NewServiceDialog s={s} onClose={() => setCreating(false)} onCreated={(unit) => { setCreating(false); setFilter("all"); setQ(unit.replace(/\.service$/, "")); setSel(unit); void load(); }} />}
       <div className="split">
         <div className="scroll">
           <table className="table">

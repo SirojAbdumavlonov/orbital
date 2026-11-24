@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { useEffect } from "react";
 import { api, Metrics } from "./api";
 import { isSsh, useStore } from "../store";
-import { useSettings } from "./settings";
+import { DEFAULT_THRESHOLDS, Thresholds, useSettings } from "./settings";
 
 // How a connected server is doing, at a glance (the sidebar's dot and the
 // overview on Home): from its latest metrics (already polled) and the failed
@@ -25,25 +25,26 @@ export function troubledContainers(list: { names: string; state: string; status:
     .map((c) => `${c.names} ${c.state === "restarting" ? "keeps restarting" : "is unhealthy"}`);
 }
 
-export function assess(m: Metrics | undefined, failed: string[] | undefined, containers: string[] = []): Health {
+
+export function assess(m: Metrics | undefined, failed: string[] | undefined, containers: string[] = [], th: Thresholds = DEFAULT_THRESHOLDS): Health {
   if (!m) return { level: "unknown", reasons: [] };
   const bad: string[] = [];
   const warn: string[] = [];
   for (const d of m.disks) {
     if (IGNORED_FS.test(d.fsType) || d.mount.startsWith("/snap/") || d.totalBytes < 64 * 1024 * 1024) continue;
     const pct = Math.round(d.usedPercent);
-    if (pct >= 95) bad.push(`Disk ${d.mount} ${pct}%`);
-    else if (pct >= 85) warn.push(`Disk ${d.mount} ${pct}%`);
+    if (pct >= th.diskBad) bad.push(`Disk ${d.mount} ${pct}%`);
+    else if (pct >= th.diskWarn) warn.push(`Disk ${d.mount} ${pct}%`);
   }
   if (m.memTotal > 0) {
-    const free = (m.memAvailable / m.memTotal) * 100;
-    if (free < 5) bad.push(`Memory ${Math.round(100 - free)}% used`);
-    else if (free < 10) warn.push(`Memory ${Math.round(100 - free)}% used`);
+    const used = 100 - (m.memAvailable / m.memTotal) * 100;
+    if (used >= th.memBad) bad.push(`Memory ${Math.round(used)}% used`);
+    else if (used >= th.memWarn) warn.push(`Memory ${Math.round(used)}% used`);
   }
   if (m.cores > 0) {
     const perCore = m.load[0] / m.cores;
-    if (perCore >= 2) bad.push(`Load ${m.load[0].toFixed(1)} on ${m.cores} cores`);
-    else if (perCore >= 1.2) warn.push(`Load ${m.load[0].toFixed(1)} on ${m.cores} cores`);
+    if (perCore >= th.loadBad) bad.push(`Load ${m.load[0].toFixed(1)} on ${m.cores} cores`);
+    else if (perCore >= th.loadWarn) warn.push(`Load ${m.load[0].toFixed(1)} on ${m.cores} cores`);
   }
   if (failed && failed.length) {
     const names = failed.map((u) => u.replace(/\.service$/, ""));
@@ -116,7 +117,8 @@ export function useSessionHealth(sid: string | undefined): Health {
   const m = useStore((st) => (sid ? st.sessions[sid]?.metrics[st.sessions[sid].metrics.length - 1] : undefined));
   const failed = useFailed((f) => (sid ? f.bySession[sid] : undefined));
   const boxes = useFailed((f) => (sid ? f.containers[sid] : undefined));
-  return assess(m, failed, boxes);
+  const th = useSettings((x) => x.thresholds);
+  return assess(m, failed, boxes, th);
 }
 
 // ---------- alerts ----------
@@ -190,7 +192,7 @@ export function checkAlerts() {
     if (s.lost || !isSsh(s)) continue;
     const failed = useFailed.getState().bySession[s.info.id] ?? [];
     const boxes = useFailed.getState().containers[s.info.id] ?? [];
-    const h = assess(s.metrics[s.metrics.length - 1], failed, boxes);
+    const h = assess(s.metrics[s.metrics.length - 1], failed, boxes, useSettings.getState().thresholds);
     // Keyed by server, so a reconnect doesn't alert again.
     // Containers in trouble alert like failed services: at once, and once.
     const { next, messages } = alertStep(alertStates[s.profile.id] ?? NO_ALERTS, s.profile.name, h, [...failed, ...boxes.map((b) => `container ${b}`)]);

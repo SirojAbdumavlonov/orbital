@@ -1,4 +1,4 @@
-import { Archive, Bot, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound, Radar, Download } from "lucide-react";
+import { Archive, Bot, Layers, NotebookPen, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound, Radar, Download } from "lucide-react";
 import { Activity, Boxes, Cable, Clock, Cpu, Database, FolderTree, Gauge, Globe, ListChecks, LockKeyhole, Network, PanelRightClose, PanelRightOpen, Plus, RefreshCw, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, asApiError, DetectedTool, InstallOption } from "../lib/api";
@@ -36,6 +36,8 @@ const BUILTIN: Record<string, { name: string; hint: string; icon: typeof Gauge }
   logs: { name: "Logs", hint: "Follow log files, services and containers live", icon: ScrollText },
   tunnels: { name: "Port forwarding", hint: "Use a server port (or a container on 127.0.0.1) at localhost here", icon: ArrowLeftRight },
   ports: { name: "Open ports", hint: "What listens where, and who can reach it", icon: Cable },
+  stacks: { name: "Compose stacks", hint: "Docker Compose projects: create, deploy, pull and redeploy, logs", icon: Layers },
+  notes: { name: "Notes", hint: "Your notes about this server: what runs where, how to deploy, who to call", icon: NotebookPen },
   backups: { name: "Backups", hint: "Back up folders and databases on a schedule, keep the last few, restore", icon: Archive },
   network: { name: "Network check", hint: "Can the server reach a host, port or URL? Ping, DNS, port, HTTP, traceroute", icon: Radar },
   users: { name: "Users", hint: "Accounts, groups, sudo and SSH keys", icon: UsersIcon },

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { confirm, Modal } from "../components/ui";
 import { api, asApiError, AuthorizedKey, AuthorizedKeys, LocalKey } from "../lib/api";
 import { useRemote, withSafetyOverride } from "../lib/remote";
-import { SessionState, useStore } from "../store";
+import { isSsh, SessionState, useStore } from "../store";
 
 const short = (fp: string | null) => (fp ? `${fp.slice(0, 19)}…${fp.slice(-6)}` : "can't be read");
 const typeName = (a: string) => (a === "ssh-ed25519" ? "Ed25519" : a === "ssh-rsa" ? "RSA" : a.startsWith("ecdsa") ? "ECDSA" : a.startsWith("sk-") ? "Security key" : a);
@@ -87,11 +87,34 @@ function AddKeyDialog({ s, local, authorized, onClose, onAdded }: { s: SessionSt
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const already = new Set(authorized.keys.map((k) => k.fingerprint));
+  // The same key on other connected servers, in one go (each with its own lockout check and activity-log entry).
+  const sessions = useStore((x) => x.sessions);
+  const others = Object.values(sessions).filter((x) => !x.lost && isSsh(x) && x.info.id !== s.info.id);
+  const [also, setAlso] = useState<string[]>([]);
+  const toast = useStore((x) => x.toast);
   async function add(text: string, from?: LocalKey) {
     setBusy(true);
     setError(null);
     try {
-      onAdded(await api.addAuthorizedKey(s.info.id, text), from);
+      const here = await api.addAuthorizedKey(s.info.id, text);
+      const results = await Promise.all(also.map(async (id) => {
+        const name = sessions[id]?.profile.name ?? id;
+        try {
+          await api.addAuthorizedKey(id, text);
+          return { name, ok: true, msg: "" };
+        } catch (e) {
+          return { name, ok: false, msg: asApiError(e).message };
+        }
+      }));
+      if (results.length) {
+        const failed = results.filter((r) => !r.ok);
+        toast({
+          kind: failed.length ? "error" : "success",
+          title: failed.length ? `Added on ${results.length - failed.length + 1} of ${results.length + 1} servers` : `Key allowed on ${results.length + 1} servers`,
+          body: failed.length ? failed.map((r) => `${r.name}: ${r.msg}`).join("\n") : [s.profile.name, ...results.map((r) => r.name)].join(", "),
+        });
+      }
+      onAdded(here, from);
     } catch (e) {
       setError(asApiError(e).message);
     } finally {
@@ -117,6 +140,19 @@ function AddKeyDialog({ s, local, authorized, onClose, onAdded }: { s: SessionSt
           <textarea className="input mono" rows={4} placeholder="ssh-ed25519 AAAAC3Nza… name@laptop" value={line} onChange={(e) => setLine(e.target.value)} />
           <small className="hint">The contents of someone's <span className="mono">.pub</span> file. Never paste a private key.</small>
         </label>
+        {others.length > 0 && (
+          <div className="field"><span>Also allow it on</span>
+            <div className="also-servers">
+              {others.map((x) => (
+                <label key={x.info.id} className="check">
+                  <input type="checkbox" checked={also.includes(x.info.id)} onChange={(e) => setAlso(e.target.checked ? [...also, x.info.id] : also.filter((i) => i !== x.info.id))} />
+                  <span>{x.profile.name} <span className="faint mono">{x.profile.username}@{x.profile.host}</span></span>
+                </label>
+              ))}
+            </div>
+            <small className="hint">For the account each server connects as. Connected servers only.</small>
+          </div>
+        )}
         {error && <div className="notice bad-text" style={{ margin: 0 }}>{error}</div>}
       </div>
     </Modal>

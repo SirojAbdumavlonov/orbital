@@ -2365,6 +2365,8 @@ async fn nginx_default_site_is_never_changed() {
         eprintln!("skipped: no sites-enabled/default link here");
         return;
     }
+    // A healthy nginx has nothing to repair.
+    assert!(engine.nginx_broken_sites(&s.id).await.unwrap().is_empty());
     let sum = "sha256sum /etc/nginx/sites-available/default";
     let before = root(sum).await.stdout;
 
@@ -2482,4 +2484,180 @@ async fn scheduled_folder_backup_runs_and_restores() {
         .unwrap()
         .stdout;
     assert!(gone.matches("No such file").count() == 2, "{gone}");
+}
+
+/// Services → New service: a command becomes a running systemd service, its
+/// secret stays in a root-only env file (not the unit), a name the system
+/// already uses is refused, and the service is removed again.
+/// Writes under /etc/systemd and /etc/orbital: ORBITAL_IT_USERS=1 (CI).
+#[tokio::test]
+async fn new_service_runs_keeps_secrets_out_and_is_removed() {
+    use orbital_core::units::{Restart, ServiceSpec};
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_USERS").is_err() || std::env::var("ORBITAL_IT_NO_PASSWORD").is_ok() {
+        eprintln!("skipped: set ORBITAL_IT_USERS=1 on a disposable machine with systemd");
+        return;
+    }
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    if !s.has_systemd {
+        eprintln!("skipped: no systemd here");
+        return;
+    }
+    let name = format!("orbital-it-{}", std::process::id());
+    let spec = ServiceSpec {
+        name: name.clone(),
+        description: "Orbital test service".into(),
+        command: "while true; do sleep 30; done".into(),
+        workdir: Some("/tmp".into()),
+        user: None,
+        restart: Restart::Always,
+        env: vec![("API_TOKEN".into(), "not-a-real-secret-123".into())],
+    };
+    let (active, out) = engine.create_service(&s.id, &spec).await.unwrap();
+    assert!(active, "{out}");
+    let files = engine
+        .run_command(
+            &s.id,
+            &format!("cat /etc/systemd/system/{name}.service; stat -c '%a' /etc/orbital/env/{name}.env"),
+            true,
+        )
+        .await
+        .unwrap()
+        .stdout;
+    assert!(
+        files.contains("EnvironmentFile=/etc/orbital/env/") && !files.contains("not-a-real-secret-123"),
+        "{files}"
+    );
+    assert!(files.trim_end().ends_with("600"), "{files}");
+
+    // A unit the system already has is never shadowed.
+    let taken = ServiceSpec {
+        name: "cron".into(),
+        ..spec.clone()
+    };
+    assert!(engine.create_service(&s.id, &taken).await.is_err());
+    // Nor removed through Orbital.
+    assert!(engine.remove_service(&s.id, "cron").await.is_err());
+
+    engine.remove_service(&s.id, &name).await.unwrap();
+    let gone = engine
+        .run_command(
+            &s.id,
+            &format!("systemctl is-active {name}.service; ls /etc/systemd/system/{name}.service 2>&1"),
+            true,
+        )
+        .await
+        .unwrap()
+        .stdout;
+    assert!(
+        gone.contains("No such file") && !gone.lines().next().unwrap_or("").starts_with("active"),
+        "{gone}"
+    );
+    let log = engine
+        .audit_query(&AuditFilter {
+            limit: Some(500),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(
+        log.iter()
+            .all(|ev| !ev.command.clone().unwrap_or_default().contains("not-a-real-secret-123")),
+        "secret never logged"
+    );
+}
+
+/// Add swap: on a server that already has swap (CI's runner does) nothing is
+/// changed and the reason is given; a size out of range is refused.
+#[tokio::test]
+async fn add_swap_checks_before_changing_anything() {
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_USERS").is_err() || std::env::var("ORBITAL_IT_NO_PASSWORD").is_ok() {
+        eprintln!("skipped: set ORBITAL_IT_USERS=1 on a disposable machine");
+        return;
+    }
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    assert!(engine.add_swap(&s.id, 10).await.is_err(), "too small");
+    let has_swap = !engine
+        .run_command(&s.id, "swapon --show --noheadings", true)
+        .await
+        .unwrap()
+        .stdout
+        .trim()
+        .is_empty();
+    if has_swap {
+        let before = engine.run_command(&s.id, "cat /etc/fstab", true).await.unwrap().stdout;
+        let err = engine.add_swap(&s.id, 1024).await.unwrap_err().to_string();
+        assert!(err.contains("already on"), "{err}");
+        assert_eq!(
+            engine.run_command(&s.id, "cat /etc/fstab", true).await.unwrap().stdout,
+            before,
+            "nothing changed"
+        );
+    }
+}
+
+/// Compose stacks: a file Compose rejects is never kept; a real stack is
+/// created, deployed, listed as running, its logs read, and stopped.
+/// Needs Docker with Compose v2 (CI's runner has it): ORBITAL_IT_USERS=1.
+#[tokio::test]
+async fn compose_stack_is_checked_deployed_and_stopped() {
+    use orbital_core::stacks::{stack_file, StackAction};
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_USERS").is_err() || std::env::var("ORBITAL_IT_NO_PASSWORD").is_ok() {
+        eprintln!("skipped: set ORBITAL_IT_USERS=1 on a disposable machine with Docker");
+        return;
+    }
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    if !engine
+        .run_command(&s.id, "docker compose version >/dev/null 2>&1 && echo yes", true)
+        .await
+        .unwrap()
+        .stdout
+        .contains("yes")
+    {
+        eprintln!("skipped: no docker compose here");
+        return;
+    }
+    let name = format!("orbital-it-{}", std::process::id());
+    let bad = engine
+        .create_stack(&s.id, &format!("{name}-bad"), "services: [this is not compose", false)
+        .await;
+    assert!(matches!(bad, Err(Error::ValidationFailed { .. })), "{bad:?}");
+    assert!(engine
+        .run_command(&s.id, &format!("test -e /opt/stacks/{name}-bad && echo kept"), true)
+        .await
+        .unwrap()
+        .stdout
+        .trim()
+        .is_empty());
+
+    let compose = "services:\n  idle:\n    image: busybox:1.36\n    command: [\"sh\", \"-c\", \"echo started; sleep 300\"]\n";
+    let out = engine.create_stack(&s.id, &name, compose, true).await.unwrap().expect("deployed");
+    assert!(out.ok(), "{}", out.combined());
+    let list = engine.stacks(&s.id).await.unwrap();
+    let st = list.iter().find(|x| x.name == name).expect("listed");
+    assert!(st.running && st.ours, "{st:?}");
+    let file = stack_file(&name);
+    // Logs show what the container printed (it may take a moment to start).
+    let mut logs = String::new();
+    for _ in 0..10 {
+        logs = engine.stack_action(&s.id, &name, &file, StackAction::Logs).await.unwrap().stdout;
+        if logs.contains("started") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    assert!(logs.contains("started"), "{logs}");
+    // Creating it twice is refused.
+    assert!(engine.create_stack(&s.id, &name, compose, false).await.is_err());
+    let down = engine.stack_action(&s.id, &name, &file, StackAction::Down).await.unwrap();
+    assert!(down.ok(), "{}", down.combined());
+    assert!(!engine.stacks(&s.id).await.unwrap().iter().any(|x| x.name == name && x.running));
+    engine
+        .run_command(&s.id, &format!("rm -rf /opt/stacks/{name} /opt/stacks/{name}-bad"), true)
+        .await
+        .unwrap();
 }

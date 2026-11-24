@@ -1402,19 +1402,34 @@ impl Engine {
     /// the file itself is never changed. Put back (and refused) if nginx still
     /// fails without it. Returns the file the link pointed at.
     pub async fn disable_default_site(&self, sid: &str) -> Result<String> {
+        self.disable_site(sid, crate::website::DEFAULT_LINK).await
+    }
+
+    /// Enabled nginx files that break the configuration (a deleted
+    /// certificate, a dangling link). Read-only.
+    pub async fn nginx_broken_sites(&self, sid: &str) -> Result<Vec<crate::website::BrokenSite>> {
+        self.session(sid).await?.nginx_broken_sites().await
+    }
+
+    /// Turn a site off by removing its link in sites-enabled (its file is kept);
+    /// put back, and refused, when nginx still fails without it.
+    pub async fn disable_site(&self, sid: &str, link: &str) -> Result<String> {
         let s = self.session(sid).await?;
-        const ACTION: &str = "nginx.default_off";
-        let script = crate::website::DEFAULT_OFF_SCRIPT;
-        progress::step("Turning nginx's default site off (its link only) and testing nginx …");
-        let sent = s.privileged_command(script);
-        let o = match s.exec_privileged(script).await {
+        const ACTION: &str = "nginx.site_off";
+        let script = crate::website::site_off_script(link).map_err(|e| self.refused_as(&s, Category::Config, ACTION, link, e))?;
+        progress::step(format!(
+            "Turning {} off (its link only) and testing nginx …",
+            link.rsplit('/').next().unwrap_or(link)
+        ));
+        let sent = s.privileged_command(&script);
+        let o = match s.exec_privileged(&script).await {
             Ok(o) => o,
             Err(e) => {
-                self.record_error(&s, Category::Config, ACTION, crate::website::DEFAULT_LINK, Some(sent), &e);
+                self.record_error(&s, Category::Config, ACTION, link, Some(sent), &e);
                 return Err(e);
             }
         };
-        self.record_exec(&s, Category::Config, ACTION, crate::website::DEFAULT_LINK, &sent, &o);
+        self.record_exec(&s, Category::Config, ACTION, link, &sent, &o);
         if !o.ok() {
             return Err(Error::ValidationFailed {
                 validator: "nginx -t".into(),
@@ -1424,7 +1439,7 @@ impl Engine {
         let target = o
             .stdout
             .lines()
-            .find_map(|l| l.strip_prefix("@@default_off "))
+            .find_map(|l| l.strip_prefix("@@site_off "))
             .unwrap_or("")
             .to_string();
         if !target.is_empty() {
@@ -2866,6 +2881,191 @@ impl Engine {
                 Err(e)
             }
         }
+    }
+
+    // ---------- Docker Compose stacks ----------
+
+    /// Compose projects on the server and Orbital's undeployed stacks. Read-only.
+    pub async fn stacks(&self, sid: &str) -> Result<Vec<crate::stacks::Stack>> {
+        let s = self.session(sid).await?;
+        let (o, _) = s.exec_inspect(crate::stacks::LIST_SCRIPT).await?;
+        Ok(crate::stacks::parse_list(&o.stdout))
+    }
+
+    /// A new stack in /opt/stacks/<name>/compose.yaml, checked by `docker
+    /// compose config` before it's kept; deployed at once with `deploy`.
+    pub async fn create_stack(&self, sid: &str, name: &str, content: &str, deploy: bool) -> Result<Option<ExecOutput>> {
+        use crate::stacks as st;
+        let s = self.session(sid).await?;
+        st::validate_name(name).map_err(|e| self.refused_as(&s, Category::Docker, "stack.create", name, e))?;
+        if self.stacks(sid).await?.iter().any(|x| x.name == name) {
+            let e = Error::InvalidInput(format!("a stack named {name} already exists; open it instead"));
+            return Err(self.refused_as(&s, Category::Docker, "stack.create", name, e));
+        }
+        progress::step(format!("Creating {} …", st::stack_file(name)));
+        self.system_exec(
+            &s,
+            "stack.mkdir",
+            name,
+            &st::mkdir_command(name)?,
+            std::time::Duration::from_secs(30),
+        )
+        .await?
+        .check()?;
+        let file = st::stack_file(name);
+        let validator = crate::config_edit::Validator {
+            name: "docker compose config".into(),
+            command: st::CONFIG_CHECK.into(),
+            stage: crate::config_edit::ValidateStage::PreInstall,
+        };
+        progress::step("Checking it with docker compose config …");
+        if let Err(e) = self
+            .audited(
+                &s,
+                Category::Docker,
+                "stack.create",
+                Some(name),
+                None,
+                s.safe_write(&file, content, Some(validator), true, None),
+            )
+            .await
+        {
+            // Nothing was kept: take the empty folder back too.
+            let dir = crate::shell::quote(&format!("{}/{name}", st::STACK_DIR));
+            let _ = s.exec_privileged(&format!("rmdir -- {dir} 2>/dev/null; true")).await;
+            return Err(e);
+        }
+        if deploy {
+            return Ok(Some(self.stack_action(sid, name, &file, crate::stacks::StackAction::Up).await?));
+        }
+        Ok(None)
+    }
+
+    /// Deploy, pull and redeploy, restart, stop or read the logs of a stack.
+    /// Returns Compose's output whether it worked or not.
+    pub async fn stack_action(&self, sid: &str, name: &str, file: &str, action: crate::stacks::StackAction) -> Result<ExecOutput> {
+        use crate::stacks::StackAction as A;
+        let s = self.session(sid).await?;
+        let args = crate::stacks::args(name, file, action)?;
+        let verb = match action {
+            A::Up => "up",
+            A::PullUp => "pull_up",
+            A::Restart => "restart",
+            A::Down => "down",
+            A::Logs => "logs",
+        };
+        if action == A::Logs {
+            return Ok(s.docker(&args).await?.1);
+        }
+        progress::step(format!("docker compose {} for {name} …", verb.replace('_', " + ")));
+        let action_name = format!("stack.{verb}");
+        match progress::with_output(s.docker(&args)).await {
+            Ok((cmd, out)) => {
+                self.record_exec(&s, Category::Docker, &action_name, name, &cmd, &out);
+                Ok(out)
+            }
+            Err(e) => {
+                self.record_error(&s, Category::Docker, &action_name, name, None, &e);
+                Err(e)
+            }
+        }
+    }
+
+    // ---------- swap ----------
+
+    /// Add a swap file of `mb` MB (checks first; refused when swap is on already
+    /// or the disk hasn't room). Returns the new swap size in bytes.
+    pub async fn add_swap(&self, sid: &str, mb: u32) -> Result<u64> {
+        let s = self.session(sid).await?;
+        let script = crate::swap::add_script(mb).map_err(|e| self.refused_as(&s, Category::Command, "swap.add", &format!("{mb} MB"), e))?;
+        progress::step(format!("Adding {mb} MB of swap …"));
+        let o = self
+            .system_exec(&s, "swap.add", &format!("{mb} MB"), &script, std::time::Duration::from_secs(600))
+            .await?;
+        if !o.ok() {
+            return Err(Error::InvalidInput(o.stderr.trim().to_string()));
+        }
+        Ok(o.stdout
+            .lines()
+            .find_map(|l| l.strip_prefix("@@swap "))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0))
+    }
+
+    // ---------- services made by Orbital ----------
+
+    /// Turn a command into a systemd service: unit (+ root-only env file),
+    /// verified with systemd-analyze (rolled back if it fails), then enabled
+    /// and started. Refused when a unit by that name exists and isn't Orbital's.
+    /// Returns systemctl's output and whether it's running.
+    pub async fn create_service(&self, sid: &str, spec: &crate::units::ServiceSpec) -> Result<(bool, String)> {
+        use crate::units as u;
+        let s = self.session(sid).await?;
+        let spec = u::validate(spec).map_err(|e| self.refused_as(&s, Category::Service, "service.create", &spec.name, e))?;
+        progress::step(format!("Checking that {}.service is free …", spec.name));
+        let (o, _) = s.exec_inspect(&u::existing_check(&spec.name)).await?;
+        if let Some(path) = o.stdout.lines().find_map(|l| l.strip_prefix("@@theirs ")) {
+            let e = Error::InvalidInput(format!(
+                "a service named {}.service already exists ({path}) and wasn't created by Orbital; choose another name",
+                spec.name
+            ));
+            return Err(self.refused_as(&s, Category::Service, "service.create", &spec.name, e));
+        }
+        let t = std::time::Duration::from_secs(60);
+        if !spec.env.is_empty() {
+            progress::step("Writing its environment (root only) …");
+            self.system_exec_with(
+                &s,
+                "service.env",
+                &spec.name,
+                &u::write_env_command(&spec.name),
+                Some(u::render_env(&spec).as_bytes()),
+                t,
+            )
+            .await?
+            .check()?;
+        }
+        progress::step(format!(
+            "Writing {} and checking it with systemd-analyze …",
+            u::unit_path(&spec.name)
+        ));
+        let path = u::unit_path(&spec.name);
+        let validator = crate::config_edit::Validator {
+            name: "systemd-analyze".into(),
+            command: format!("systemd-analyze verify {}", crate::shell::quote(&path)),
+            stage: crate::config_edit::ValidateStage::PostInstall,
+        };
+        self.audited(
+            &s,
+            Category::Service,
+            "service.create",
+            Some(&spec.name),
+            None,
+            s.safe_write(&path, &u::render_unit(&spec), Some(validator), true, None),
+        )
+        .await?;
+        progress::step(format!("Starting {} …", spec.name));
+        let o = self
+            .system_exec(&s, "service.start", &spec.name, &u::start_command(&spec.name), t)
+            .await?;
+        Ok((o.stdout.lines().last().map(str::trim) == Some("active"), o.combined()))
+    }
+
+    /// Stop and remove a service Orbital created (its unit and env file).
+    pub async fn remove_service(&self, sid: &str, name: &str) -> Result<()> {
+        let s = self.session(sid).await?;
+        crate::shell::validate_unit(name)?;
+        let name = name.trim_end_matches(".service");
+        self.system_exec(
+            &s,
+            "service.remove",
+            name,
+            &crate::units::remove_command(name),
+            std::time::Duration::from_secs(60),
+        )
+        .await?
+        .check()?;
+        Ok(())
     }
 
     // ---------- scheduled backups ----------

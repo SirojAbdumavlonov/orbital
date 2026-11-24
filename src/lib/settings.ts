@@ -15,6 +15,10 @@ export const ACCENTS = [
 ] as const;
 export type Accent = (typeof ACCENTS)[number]["id"];
 
+/** When disk and memory (% used) and load (per core) count as a warning or an alarm (Settings → Monitoring). */
+export interface Thresholds { diskWarn: number; diskBad: number; memWarn: number; memBad: number; loadWarn: number; loadBad: number }
+export const DEFAULT_THRESHOLDS: Thresholds = { diskWarn: 85, diskBad: 95, memWarn: 90, memBad: 95, loadWarn: 1.2, loadBad: 2 };
+
 export interface Settings {
   theme: ThemePref;
   accent: Accent;
@@ -39,6 +43,8 @@ export interface Settings {
   restoreSession: boolean;
   /** Notify when a connected server needs attention (and when it's fine again). */
   healthAlerts: boolean;
+  /** When disk, memory and load count as a warning or an alarm. */
+  thresholds: Thresholds;
 }
 
 const DEFAULTS: Settings = {
@@ -57,13 +63,15 @@ const DEFAULTS: Settings = {
   terminalTmux: false,
   restoreSession: true,
   healthAlerts: true,
+  thresholds: DEFAULT_THRESHOLDS,
 };
 
 const KEY = "orbital.settings";
 
 function load(): Settings {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? "{}") };
+    const v = JSON.parse(localStorage.getItem(KEY) ?? "{}");
+    return { ...DEFAULTS, ...v, thresholds: { ...DEFAULT_THRESHOLDS, ...(v.thresholds ?? {}) } };
   } catch {
     return DEFAULTS;
   }

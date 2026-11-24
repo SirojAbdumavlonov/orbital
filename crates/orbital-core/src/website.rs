@@ -74,6 +74,9 @@ pub struct WebsitePlan {
     /// that are gone: turning that site off (its link only) repairs it.
     pub default_off_fixes: bool,
     pub default_missing: Vec<String>,
+    /// Enabled files that break nginx (missing certificate, dangling link),
+    /// each with whether it can be turned off by its link.
+    pub broken_sites: Vec<BrokenSite>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -244,25 +247,104 @@ pub fn probe_script(domain: &str, root: Option<&str>) -> String {
 /// never edits or deletes the file it points at; it can only remove this link.
 pub const DEFAULT_LINK: &str = "/etc/nginx/sites-enabled/default";
 
-/// Turn nginx's default site off by removing its sites-enabled link (the file
-/// in sites-available stays exactly as it is), then nginx -t; if nginx still
-/// fails, the link is put back and the script fails with nginx's message.
-pub const DEFAULT_OFF_SCRIPT: &str = r#"set -u
-L=/etc/nginx/sites-enabled/default
+/// Turn an enabled site off by removing its link in sites-enabled (the file
+/// it points at stays exactly as it is), then nginx -t; if nginx still fails,
+/// the link is put back and the script fails with nginx's message. Prints
+/// `@@site_off <target>`. Only links directly in sites-enabled are accepted.
+pub fn site_off_script(link: &str) -> Result<String> {
+    let name = link.strip_prefix("/etc/nginx/sites-enabled/").unwrap_or("");
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) || name.starts_with('.') {
+        return Err(Error::InvalidInput(format!("{link} isn't a site link in /etc/nginx/sites-enabled")));
+    }
+    Ok(format!(
+        r#"set -u
+L={l}
 if [ ! -L "$L" ]; then
-  if [ -e "$L" ]; then echo "$L is a file, not a link; Orbital leaves nginx's default site alone" >&2; exit 3; fi
-  echo "nginx's default site is already off"; exit 0
+  if [ -e "$L" ]; then echo "$L is a file, not a link; Orbital doesn't remove it (edit it instead)" >&2; exit 3; fi
+  echo "that site is already off"; exit 0
 fi
 T=$(readlink -- "$L")
 rm -f -- "$L"
 if out=$(nginx -t 2>&1); then
-  echo "$out"; echo "@@default_off $T"
+  echo "$out"; echo "@@site_off $T"
 else
   ln -s -- "$T" "$L"
   echo "$out" >&2
-  echo "nginx -t still fails without the default site, so it was turned back on; the problem is elsewhere" >&2
+  echo "nginx -t still fails without this site, so it was turned back on; the problem is elsewhere" >&2
   exit 4
-fi"#;
+fi"#,
+        l = quote(link)
+    ))
+}
+
+/// Enabled nginx files that break `nginx -t` because something they need is
+/// gone: a certificate under /etc/letsencrypt that was deleted, or a link in
+/// sites-enabled whose file was removed. Read-only; nothing interpolated.
+pub const BROKEN_SCRIPT: &str = r#"for f in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+  if [ -L "$f" ] && [ ! -e "$f" ]; then echo "@@dangling $f"; continue; fi
+  [ -f "$f" ] || continue
+  for c in $(grep -hoE '/etc/letsencrypt/live/[^;[:space:]]+' "$f" 2>/dev/null | sort -u); do
+    [ -e "$c" ] || echo "@@missing $f $c"
+  done
+  [ -L "$f" ] && echo "@@link $f"
+done
+true"#;
+
+/// An enabled nginx file that breaks the configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrokenSite {
+    /// As nginx includes it (sites-enabled/… or conf.d/…).
+    pub file: String,
+    /// It's a link in sites-enabled, so it can be turned off without touching the file.
+    pub link: bool,
+    /// Certificates it points at that don't exist.
+    pub missing: Vec<String>,
+    /// A link whose file is gone.
+    pub dangling: bool,
+    /// nginx's own default site.
+    pub stock: bool,
+}
+
+pub fn parse_broken(out: &str) -> Vec<BrokenSite> {
+    let mut v: Vec<BrokenSite> = Vec::new();
+    let mut links: Vec<&str> = Vec::new();
+    let entry = |v: &mut Vec<BrokenSite>, f: &str| -> usize {
+        if let Some(i) = v.iter().position(|b| b.file == f) {
+            return i;
+        }
+        v.push(BrokenSite {
+            file: f.to_string(),
+            link: false,
+            missing: vec![],
+            dangling: false,
+            stock: crate::certbot::is_nginx_default_file(f),
+        });
+        v.len() - 1
+    };
+    for line in out.lines().map(str::trim) {
+        if let Some(f) = line.strip_prefix("@@dangling ") {
+            let i = entry(&mut v, f);
+            v[i].dangling = true;
+            v[i].link = true;
+        } else if let Some(rest) = line.strip_prefix("@@missing ") {
+            if let Some((f, c)) = rest.rsplit_once(' ') {
+                let i = entry(&mut v, f);
+                if !v[i].missing.iter().any(|x| x == c) {
+                    v[i].missing.push(c.to_string());
+                }
+            }
+        } else if let Some(f) = line.strip_prefix("@@link ") {
+            links.push(f);
+        }
+    }
+    for b in &mut v {
+        if links.contains(&b.file.as_str()) {
+            b.link = true;
+        }
+    }
+    v
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Probe {
@@ -349,6 +431,7 @@ pub fn plan(input: &WebsiteInput, probe: &Probe, cfg: &NginxConfig) -> Result<We
         content: render(input),
         default_off_fixes: !cfg.test_ok && probe.default_link && !probe.default_missing.is_empty(),
         default_missing: probe.default_missing.clone(),
+        broken_sites: Vec::new(),
         blockers,
     })
 }
@@ -371,7 +454,17 @@ impl SshSession {
         };
         let (o, _) = self.exec_inspect(&probe_script(&v.domain, root)).await?;
         let cfg = self.nginx_config().await?;
-        plan(&v, &parse_probe(&o.stdout), &cfg)
+        let mut p = plan(&v, &parse_probe(&o.stdout), &cfg)?;
+        if !cfg.test_ok {
+            p.broken_sites = self.nginx_broken_sites().await?;
+        }
+        Ok(p)
+    }
+
+    /// Enabled files that break nginx's configuration (see `BROKEN_SCRIPT`).
+    pub async fn nginx_broken_sites(&self) -> Result<Vec<BrokenSite>> {
+        let (o, _) = self.exec_inspect(BROKEN_SCRIPT).await?;
+        Ok(parse_broken(&o.stdout))
     }
 
     /// Write a new server block and make it live, as root. With a `link`
@@ -730,12 +823,40 @@ mod tests {
         }
         assert!(validate_site_file("/etc/nginx/sites-available/default.example.com").is_ok());
         // The turn-off script only removes the link, never the file it points at, and puts it back when nginx still fails.
-        assert!(!DEFAULT_OFF_SCRIPT.contains("sites-available"));
-        assert!(DEFAULT_OFF_SCRIPT.contains("rm -f -- \"$L\"") && DEFAULT_OFF_SCRIPT.contains("ln -s -- \"$T\" \"$L\""));
+        let off = site_off_script(DEFAULT_LINK).unwrap();
+        assert!(!off.contains("sites-available"));
+        assert!(off.contains("rm -f -- \"$L\"") && off.contains("ln -s -- \"$T\" \"$L\""));
+        assert!(site_off_script("/etc/nginx/sites-enabled/stats.example.com").is_ok());
+        for bad in [
+            "/etc/nginx/sites-available/x",
+            "/etc/nginx/sites-enabled/../x",
+            "/etc/nginx/sites-enabled/a b",
+            "/etc/nginx/sites-enabled/",
+            "/etc/nginx/sites-enabled/.hidden",
+        ] {
+            assert!(site_off_script(bad).is_err(), "{bad}");
+        }
+        let o = std::process::Command::new("sh").arg("-n").arg("-c").arg(&off).output().unwrap();
+        assert!(o.status.success());
+    }
+
+    #[test]
+    fn finds_sites_that_break_nginx() {
+        let out = "@@missing /etc/nginx/sites-enabled/stats.example.com /etc/letsencrypt/live/stats.example.com/fullchain.pem\n@@missing /etc/nginx/sites-enabled/stats.example.com /etc/letsencrypt/live/stats.example.com/privkey.pem\n@@link /etc/nginx/sites-enabled/stats.example.com\n@@link /etc/nginx/sites-enabled/shop\n@@dangling /etc/nginx/sites-enabled/old\n@@missing /etc/nginx/conf.d/api.conf /etc/letsencrypt/live/api.example.com/fullchain.pem\n@@missing /etc/nginx/sites-enabled/default /etc/letsencrypt/live/x/fullchain.pem\n@@link /etc/nginx/sites-enabled/default\n";
+        let b = parse_broken(out);
+        assert_eq!(b.len(), 4, "{b:?}");
+        assert!(b[0].link && b[0].missing.len() == 2 && !b[0].stock);
+        assert!(b[1].dangling && b[1].link && b[1].file.ends_with("/old"));
+        assert!(!b[2].link, "conf.d files aren't links: they can't be turned off this way");
+        assert!(b[3].stock && b[3].link);
+        assert!(
+            parse_broken("@@link /etc/nginx/sites-enabled/shop\n").is_empty(),
+            "healthy sites aren't listed"
+        );
         let o = std::process::Command::new("sh")
             .arg("-n")
             .arg("-c")
-            .arg(DEFAULT_OFF_SCRIPT)
+            .arg(BROKEN_SCRIPT)
             .output()
             .unwrap();
         assert!(o.status.success());

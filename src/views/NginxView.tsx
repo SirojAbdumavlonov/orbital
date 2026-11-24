@@ -3,11 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import { DrawerClose, Modal } from "../components/ui";
 import { SiteTestPanel } from "../components/SiteTest";
 import { runJob } from "../lib/jobs";
-import { api, asApiError, Certificate, NginxConfig, NginxSite } from "../lib/api";
+import { api, asApiError, BrokenSite, Certificate, NginxConfig, NginxSite } from "../lib/api";
 import { parentPath } from "../lib/format";
 import { SessionState, useStore } from "../store";
 import { useKept } from "../lib/kept";
 import { RoutesPanel } from "../components/NginxRoutes";
+import { BrokenSitesFix } from "../components/BrokenSites";
 
 const siteKey = (x: NginxSite) => `${x.file}:${x.line}`;
 const siteName = (x: NginxSite) => x.serverNames.join(", ") || "Default (any name)";
@@ -72,6 +73,12 @@ export function NginxView({ s }: { s: SessionState }) {
     return (cfg?.sites ?? []).filter((x) => !needle || [siteName(x), x.file, serves(x), x.listens.join(" ")].join(" ").toLowerCase().includes(needle));
   }, [cfg, q]);
   const cur = cfg?.sites.find((x) => siteKey(x) === sel) ?? null;
+  // When nginx is broken, find the enabled site that breaks it (a deleted certificate, a removed file).
+  const [broken, setBroken] = useState<BrokenSite[]>([]);
+  useEffect(() => {
+    if (!cfg || cfg.testOk) return setBroken([]);
+    api.nginxBrokenSites(sid).then(setBroken, () => setBroken([]));
+  }, [cfg?.testOk, cfg?.testOutput, sid]);
   const mainFile = cfg?.files[0]?.path ?? "/etc/nginx/nginx.conf";
 
   return (
@@ -93,6 +100,7 @@ export function NginxView({ s }: { s: SessionState }) {
           <div className="alert">
             <b>nginx can't load its configuration, so the sites can't be listed.</b> Fix the problem below, then refresh.
             <pre className="output" style={{ marginTop: 8 }}>{cfg.testOutput || "nginx -T produced no output."}</pre>
+            <BrokenSitesFix sid={sid} sites={broken} onFixed={() => void load()} />
           </div>
           <div><button className="btn" onClick={() => showFolder(sid, "/etc/nginx")}><FolderOpen size={13} /> Open /etc/nginx in Files</button></div>
         </div>

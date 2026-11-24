@@ -238,6 +238,11 @@ let statsState: { available: boolean; enabled: boolean | null } = { available: t
 
 const demoInstalled = new Set<string>();
 let defaultSiteOff = false;
+/** Demo Compose stacks. */
+const demoStacks: any[] = [
+  { name: "observability", status: "running(2)", files: ["/srv/obs/docker-compose.yml"], running: true, ours: false },
+  { name: "shop", status: "running(3)", files: ["/opt/stacks/shop/compose.yaml"], running: true, ours: true },
+];
 /** Demo scheduled backups. */
 let backupJobs: any[] = [
   { job: { id: "shop-uploads", name: "Shop uploads", source: { kind: "folder", path: "/srv/shop/uploads" }, schedule: { every: "day", weekday: 0, hour: 3, minute: 30 }, keep: 7 }, scheduled: true, lastRun: Math.floor(Date.now() / 1000) - 6 * 3600, lastError: null,
@@ -827,7 +832,7 @@ export function install() {
           }, (t += 300));
         });
       }
-      case "read_file": return { path: args.path, content: args.path.endsWith("nginx.conf") ? NGINX : args.path.endsWith("docker-compose.yml") ? COMPOSE : "# demo file\n", size: 1482, mtime: now() - 9000, modeOctal: 0o644, writable: !args.path.startsWith("/etc") };
+      case "read_file": return { path: args.path, content: args.path.endsWith("nginx.conf") ? (String(args.sessionId).startsWith("s-p2") ? NGINX.replace("worker_connections 2048", "worker_connections 4096").replace("worker_processes auto;", "worker_processes 4;") : NGINX) : args.path.endsWith("docker-compose.yml") ? COMPOSE : "# demo file\n", size: 1482, mtime: now() - 9000, modeOctal: 0o644, writable: !args.path.startsWith("/etc") };
       case "validator_for": return args.path.startsWith("/etc/nginx/") ? { name: "nginx", command: "nginx -t", stage: "postInstall" } : null;
       case "list_backups": return args.path.endsWith("nginx.conf") ? [`${args.path}.orbital-bak-20261117081205`, `${args.path}.orbital-bak-20261114190033`, `${args.path}.orbital-bak-20261102101500`] : [];
       case "read_backup": {
@@ -851,10 +856,34 @@ export function install() {
         return {
           ...plan,
           blockers: broken ? [`nginx's configuration already has errors; fix them first:\n[emerg] cannot load certificate "${missing}": BIO_new_file() failed (No such file or directory)\nnginx: configuration file /etc/nginx/nginx.conf test failed`, ...(plan.blockers ?? [])] : plan.blockers ?? [],
-          defaultOffFixes: broken,
-          defaultMissing: broken ? [missing] : [],
+          defaultOffFixes: false,
+          defaultMissing: [],
+          brokenSites: broken ? [{ file: "/etc/nginx/sites-enabled/old.example.com", link: true, missing: [missing], dangling: false, stock: false }] : [],
         };
       }
+      case "stacks": return demoStacks.map((x) => ({ ...x }));
+      case "create_stack": {
+        await progress(args.progress, [[0, "step", `Creating /opt/stacks/${args.name}/compose.yaml …`], [500, "step", "Checking it with docker compose config …"], ...(args.deploy ? [[900, "line", ` Container ${args.name}-web-1  Started`]] as [number, "line", string][] : [])]);
+        if (!/services:/.test(args.content)) throw { kind: "ValidationFailed", message: "validation failed", data: { validator: "docker compose config", output: "yaml: line 1: did not find expected key" } };
+        demoStacks.push({ name: args.name, status: args.deploy ? "running(1)" : "not deployed", files: [`/opt/stacks/${args.name}/compose.yaml`], running: !!args.deploy, ours: true });
+        return args.deploy ? { stdout: ` Container ${args.name}-web-1  Started\n`, stderr: "", exitCode: 0, durationMs: 1400 } : null;
+      }
+      case "stack_action": {
+        const st = demoStacks.find((x) => x.name === args.name)!;
+        if (args.action === "logs") return { stdout: `${args.name}-web-1  | 2026/11/24 10:02:11 [notice] 1#1: start worker processes\n${args.name}-web-1  | 172.18.0.1 - - "GET / HTTP/1.1" 200 615\n`, stderr: "", exitCode: 0, durationMs: 200 };
+        await progress(args.progress, [[0, "step", `docker compose ${args.action} for ${args.name} …`], [1200, "line", ` Container ${args.name}-web-1  ${args.action === "down" ? "Removed" : "Started"}`]]);
+        st.running = args.action !== "down";
+        st.status = st.running ? "running(1)" : "exited(0)";
+        return { stdout: "", stderr: "", exitCode: 0, durationMs: 1200 };
+      }
+      case "create_service":
+        await progress(args.progress, [[0, "step", `Checking that ${args.spec.name}.service is free …`], [400, "step", "Writing its environment (root only) …"], [500, "step", `Writing /etc/systemd/system/${args.spec.name}.service and checking it with systemd-analyze …`], [700, "step", `Starting ${args.spec.name} …`]]);
+        if (["nginx", "ssh", "cron"].includes(args.spec.name)) throw { kind: "InvalidInput", message: `Invalid input: a service named ${args.spec.name}.service already exists (/lib/systemd/system/${args.spec.name}.service) and wasn't created by Orbital; choose another name` };
+        services.push({ unit: `${args.spec.name}.service`, load: "loaded", active: "active", sub: "running", description: args.spec.description || args.spec.name, unitFileState: "enabled" } as any);
+        return [true, "Created symlink /etc/systemd/system/multi-user.target.wants/" + args.spec.name + ".service\nactive"];
+      case "add_swap":
+        await progress(args.progress, [[0, "step", `Adding ${args.mb} MB of swap …`], [900, "line", `Creating a ${args.mb} MB /swapfile …`]]);
+        return args.mb * 1024 * 1024;
       case "backup_jobs": return backupJobs.map((b) => ({ ...b, files: [...b.files] }));
       case "save_backup_job": {
         await progress(args.progress, [[0, "step", `Writing the backup job ${args.job.name} …`], [600, "line", ""]]);
@@ -903,6 +932,11 @@ export function install() {
         }
         return { file: args.file.replace("/sites-enabled/", "/sites-available/"), before, after, applied: !!args.apply, backupPath: args.apply ? `${args.file}.orbital-bak-1` : null, reloaded: !!args.apply, reloadOutput: "" };
       }
+      case "nginx_broken_sites": return defaultSiteOff ? [] : [{ file: "/etc/nginx/sites-enabled/old.example.com", link: true, missing: ["/etc/letsencrypt/live/old.example.com/fullchain.pem"], dangling: false, stock: false }];
+      case "disable_site":
+        await progress(args.progress, [[0, "step", `Turning ${args.link.split("/").pop()} off (its link only) and testing nginx …`], [700, "line", "nginx: configuration file /etc/nginx/nginx.conf test is successful"], [500, "step", "Reloading nginx …"]]);
+        defaultSiteOff = true;
+        return args.link.replace("/sites-enabled/", "/sites-available/");
       case "disable_default_site":
         await progress(args.progress, [[0, "step", "Turning nginx's default site off (its link only) and testing nginx …"], [700, "line", "nginx: configuration file /etc/nginx/nginx.conf test is successful"], [500, "step", "Reloading nginx …"]]);
         defaultSiteOff = true;

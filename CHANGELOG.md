@@ -4,6 +4,20 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **New service** (Services → New service): turn a command into a systemd service that starts at boot and restarts when it stops, with its folder, user and environment. The unit is checked by `systemd-analyze verify` before it's kept; environment variables go into a root-only file (fine for passwords and tokens), never into the unit or the activity log. A name the system already uses is refused, so nothing is overwritten.
+- **Compose stacks** (a tab on every server with Docker): every Compose project on the server, wherever it was deployed from, plus new ones made here in /opt/stacks/<name>. A new stack's file is checked by `docker compose config` before it's saved. Deploy, pull and redeploy, restart, stop and read the logs, with live output; edit the file in the editor.
+- **Add swap** (Monitor, on servers without swap): a swap file of a suggested size, on now and after reboots, with low swappiness. Nothing changes when swap is already on or the disk hasn't room.
+- **Updates on Home**: each connected server's card says how many updates are waiting (security ones counted) and whether it needs a reboot; click it for the Updates tab. Checked when a server connects and every hour.
+- **Last 24 hours** (Monitor tab): CPU, memory and the fullest disk, one point a minute, recorded while Orbital is connected and kept on this computer; gaps show when it wasn't. Each server's card on Home shows its CPU trend for the last two hours.
+- **Compare a file across servers** (editor → the compare button): the open file next to the same path, or any path, on another connected server, side by side. Spot configuration drift between servers before it bites.
+- **Notes** (a tab on every server): what runs where, how to deploy, who to call, saved as you type on this computer. Servers with notes show a note mark on Home.
+- **Allow an SSH key on several servers at once** (SSH keys → Allow a key → "Also allow it on"): the same key on other connected servers, each with its own checks and activity-log entry, and a summary of where it worked.
+- **When to warn** (Settings → Monitoring): choose the disk, memory and load levels that turn a server orange or red (and alert).
+
+### Fixed
+- **nginx broken by any site whose certificate (or file) was deleted** ("cannot load certificate … No such file or directory"). New website and the Nginx tab now name the file that breaks nginx and why, and offer **Turn this site off**: only its link in sites-enabled is removed, the site's file is kept (turn it back on or create the site again later), and if nginx still fails the link is put back. Files in conf.d, which have no link, open in the editor instead. This replaces the default-site-only button.
+
 ## 1.4.7 (2026-11-22)
 
 ### Added
