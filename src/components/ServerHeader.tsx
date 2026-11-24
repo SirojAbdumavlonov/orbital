@@ -1,4 +1,4 @@
-import { Archive, Bot, Layers, NotebookPen, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound, Radar, Download } from "lucide-react";
+import { Archive, Bot, FileSearch, Layers, LogIn, NotebookPen, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound, Radar, Download } from "lucide-react";
 import { Activity, Boxes, Cable, Clock, Cpu, Database, FolderTree, Gauge, Globe, ListChecks, LockKeyhole, Network, PanelRightClose, PanelRightOpen, Plus, RefreshCw, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, asApiError, DetectedTool, InstallOption } from "../lib/api";
@@ -23,6 +23,7 @@ const TABS: { id: Tab; label: string; icon: typeof Gauge }[] = [
 
 const CATEGORY_ICON: Record<string, typeof Gauge> = {
   "Web server": Globe, "Load balancer": Network, Containers: Boxes, Database, Runtime: Cpu, Access: ShieldCheck, Scheduling: Clock, Certificates: LockKeyhole,
+  "Process manager": ListChecks, System: Clock, Network: Cable, Monitoring: Activity,
 };
 export const toolIcon = (t?: DetectedTool) => (t && CATEGORY_ICON[t.category]) || Boxes;
 
@@ -36,6 +37,8 @@ const BUILTIN: Record<string, { name: string; hint: string; icon: typeof Gauge }
   logs: { name: "Logs", hint: "Follow log files, services and containers live", icon: ScrollText },
   tunnels: { name: "Port forwarding", hint: "Use a server port (or a container on 127.0.0.1) at localhost here", icon: ArrowLeftRight },
   ports: { name: "Open ports", hint: "What listens where, and who can reach it", icon: Cable },
+  logins: { name: "Logins", hint: "Who is signed in, recent sign-ins and failed SSH attempts (ban attackers)", icon: LogIn },
+  logsearch: { name: "Search logs", hint: "Find a word or error in the journal or /var/log over the last hours or days", icon: FileSearch },
   stacks: { name: "Compose stacks", hint: "Docker Compose projects: create, deploy, pull and redeploy, logs", icon: Layers },
   notes: { name: "Notes", hint: "Your notes about this server: what runs where, how to deploy, who to call", icon: NotebookPen },
   backups: { name: "Backups", hint: "Back up folders and databases on a schedule, keep the last few, restore", icon: Archive },

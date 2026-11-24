@@ -3,7 +3,7 @@ import { isSsh, SessionState, useStore } from "../store";
 import { Profile } from "../lib/api";
 import { useHealthMute, useSessionHealth } from "../lib/health";
 import { useHistory } from "../lib/metricHistory";
-import { updatesText, useFleet } from "../lib/fleet";
+import { certText, updatesText, useFleet } from "../lib/fleet";
 import { noteTitle, readNote, useNotes } from "../lib/notes";
 import { Sparkline } from "./ui";
 import { duration, relativeTime } from "../lib/format";
@@ -60,6 +60,7 @@ function ServerCard({ p, s }: { p: Profile; s?: SessionState }) {
   const level = s ? h.level : "off";
   const fleet = useFleet((f) => f.updates[p.id]);
   const upd = updatesText(fleet);
+  const cert = certText(useFleet((f) => f.certs[p.id]));
   const hist = useHistory((x) => x.byProfile[p.id]) ?? [];
   const trend = hist.slice(-120).map((x) => x.cpu ?? 0);
   return (
@@ -106,6 +107,16 @@ function ServerCard({ p, s }: { p: Profile; s?: SessionState }) {
           onClick={(e) => { e.stopPropagation(); useStore.getState().setActive(s.info.id); useStore.getState().openTool(s.info.id, "updates"); }}
           onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); useStore.getState().setActive(s.info.id); useStore.getState().openTool(s.info.id, "updates"); } }}
         >{upd}</span>
+      )}
+      {s && cert && (
+        <span
+          role="button"
+          tabIndex={0}
+          className="server-card-updates warn"
+          title="Open HTTPS certificates"
+          onClick={(e) => { e.stopPropagation(); useStore.getState().setActive(s.info.id); useStore.getState().openTool(s.info.id, "certbot"); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); useStore.getState().setActive(s.info.id); useStore.getState().openTool(s.info.id, "certbot"); } }}
+        >{cert}</span>
       )}
       {s && (h.level === "warn" || h.level === "bad") && (
         <div className={`server-card-reasons ${h.level}`}>{h.reasons.slice(0, 3).map((r) => <span key={r}>{r}</span>)}</div>

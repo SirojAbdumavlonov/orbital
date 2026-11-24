@@ -239,6 +239,18 @@ let statsState: { available: boolean; enabled: boolean | null } = { available: t
 const demoInstalled = new Set<string>();
 let defaultSiteOff = false;
 /** Demo Compose stacks. */
+const DEMO_APPS = [
+  { id: "uptime-kuma", name: "Uptime Kuma", category: "Monitoring", hint: "Status pages and uptime checks with alerts to Telegram, Slack, email and more", port: 3001, firstSteps: "Create the admin account on the first page.", memoryMb: 150, images: ["louislam/uptime-kuma:1"] },
+  { id: "portainer", name: "Portainer", category: "Containers", hint: "A web UI for this server's Docker: containers, images, volumes, stacks", port: 9000, firstSteps: "Create the admin user within 5 minutes of starting (after that Portainer locks setup until it's restarted).", memoryMb: 100, images: ["portainer/portainer-ce:lts"] },
+  { id: "vaultwarden", name: "Vaultwarden", category: "Security", hint: "Password manager that works with the Bitwarden apps and browser extensions", port: 8081, firstSteps: "Create your account, then turn sign-ups off on the /admin page. Phones and extensions need HTTPS: publish it with New website.", memoryMb: 60, images: ["vaultwarden/server:latest"] },
+  { id: "gitea", name: "Gitea", category: "Developer tools", hint: "Your own Git hosting: repositories, issues, pull requests and CI", port: 3002, firstSteps: "Keep SQLite on the setup page and create the admin account there.", memoryMb: 200, images: ["gitea/gitea:latest"] },
+  { id: "n8n", name: "n8n", category: "Automation", hint: "Workflow automation: connect APIs, webhooks and AI without writing a service", port: 5678, firstSteps: "Create the owner account on the first page. Webhooks from outside need it published with New website.", memoryMb: 300, images: ["docker.n8n.io/n8nio/n8n:latest"] },
+  { id: "grafana", name: "Grafana", category: "Monitoring", hint: "Dashboards for Prometheus, databases and logs", port: 3003, firstSteps: "Sign in as admin with the password below.", memoryMb: 150, images: ["grafana/grafana-oss:latest"] },
+  { id: "wordpress", name: "WordPress", category: "Websites", hint: "Blog or website with its own MariaDB database", port: 8082, firstSteps: "Publish it with New website first: WordPress remembers the address it was set up on.", memoryMb: 400, images: ["wordpress:latest", "mariadb:11"] },
+  { id: "nextcloud", name: "Nextcloud", category: "Files", hint: "Files, calendar and contacts in your own cloud, with a MariaDB database", port: 8084, firstSteps: "Sign in as admin. Setup takes a minute on the first start. For a domain, add it to trusted_domains in config/config.php.", memoryMb: 512, images: ["nextcloud:latest", "mariadb:11"] },
+  { id: "metabase", name: "Metabase", category: "Analytics", hint: "Charts and dashboards over your PostgreSQL or MySQL data, no SQL needed", port: 3004, firstSteps: "Create the admin account. Databases on this server are at host.docker.internal.", memoryMb: 1024, images: ["metabase/metabase:latest"] },
+  { id: "adminer", name: "Adminer", category: "Databases", hint: "One-page database browser for MySQL, PostgreSQL and SQLite", port: 8083, firstSteps: "Sign in with a database user. Databases on this server are at host.docker.internal; keep it private (no New website).", memoryMb: 30, images: ["adminer:latest"] },
+];
 const demoStacks: any[] = [
   { name: "observability", status: "running(2)", files: ["/srv/obs/docker-compose.yml"], running: true, ours: false },
   { name: "shop", status: "running(3)", files: ["/opt/stacks/shop/compose.yaml"], running: true, ours: true },
@@ -862,11 +874,41 @@ export function install() {
         };
       }
       case "stacks": return demoStacks.map((x) => ({ ...x }));
+      case "logins": return {
+        now: [{ user: "deploy", tty: "pts/0", from: "203.0.113.5", when: "2026-11-25 09:12" }],
+        recent: [
+          { user: "deploy", tty: "pts/0", from: "203.0.113.5", when: "Tue Nov 25 09:12   still logged in" },
+          { user: "ops", tty: "pts/1", from: "198.51.100.7", when: "Mon Nov 24 18:01 - 18:40  (00:39)" },
+        ],
+        failed: 1284, source: "journal",
+        topAddresses: [{ key: "203.0.113.99", count: 812 }, { key: "198.51.100.200", count: 301 }, { key: "203.0.113.150", count: 96 }],
+        topUsers: [{ key: "root", count: 640 }, { key: "admin", count: 210 }, { key: "ubuntu", count: 98 }],
+      };
+      case "search_logs": {
+        await new Promise((r) => setTimeout(r, 600));
+        const t = String(args.term);
+        const lines = args.source === "journal"
+          ? [`2026-11-25T08:59:58+0000 prod-web-01 nginx[812]: 2026/11/25 08:59:58 [error] upstream ${t} while reading response header`, `2026-11-25T09:00:01+0000 prod-web-01 shop-api[2210]: request 7f3a ${t} after 30000 ms`]
+          : [`/var/log/nginx/error.log:2026/11/25 08:59:58 [error] 812#812: *1 upstream ${t} while connecting to upstream`];
+        return { hits: lines.map((l) => (args.source === "journal" ? { file: "", line: l } : { file: l.split(":")[0], line: l.slice(l.indexOf(":") + 1) })), truncated: false, total: lines.length };
+      }
       case "create_stack": {
         await progress(args.progress, [[0, "step", `Creating /opt/stacks/${args.name}/compose.yaml …`], [500, "step", "Checking it with docker compose config …"], ...(args.deploy ? [[900, "line", ` Container ${args.name}-web-1  Started`]] as [number, "line", string][] : [])]);
         if (!/services:/.test(args.content)) throw { kind: "ValidationFailed", message: "validation failed", data: { validator: "docker compose config", output: "yaml: line 1: did not find expected key" } };
         demoStacks.push({ name: args.name, status: args.deploy ? "running(1)" : "not deployed", files: [`/opt/stacks/${args.name}/compose.yaml`], running: !!args.deploy, ours: true });
         return args.deploy ? { stdout: ` Container ${args.name}-web-1  Started\n`, stderr: "", exitCode: 0, durationMs: 1400 } : null;
+      }
+      case "app_options": return DEMO_APPS;
+      case "install_app": {
+        const app = DEMO_APPS.find((a) => a.id === args.app)!;
+        await progress(args.progress, [[0, "step", `Checking the server for ${app.name} …`]]);
+        if (args.port === 9000) throw { kind: "InvalidInput", message: "Invalid input: port 9000 is already in use on this server; pick another" };
+        if (app.memoryMb >= 1024 && !args.force) throw { kind: "PreflightFailed", message: "preflight failed", data: { check: "memory", output: `${app.name} wants about ${app.memoryMb} MB of memory and this server has 740 MB free` } };
+        await progress(args.progress, [[300, "step", `Creating /opt/stacks/${args.name}/compose.yaml …`], [300, "step", "Checking it with docker compose config …"], [300, "step", "Writing generated passwords to .env (0600) …"], [400, "step", `docker compose pull + up for ${args.name} …`], ...app.images.map((i) => [700, "line", ` ${i} Pulled`] as [number, "line", string]), [600, "line", ` Container ${args.name}-${app.id}-1  Started`]]);
+        demoStacks.push({ name: args.name, status: `running(${app.images.length})`, files: [`/opt/stacks/${args.name}/compose.yaml`], running: true, ours: true });
+        const pw = () => Array.from({ length: 32 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"[Math.floor(Math.random() * 57)]).join("");
+        const shown = ({ grafana: [{ label: "Password for admin", value: pw() }], nextcloud: [{ label: "Password for admin", value: pw() }], vaultwarden: [{ label: "Admin page token (at /admin)", value: pw() }] } as Record<string, { label: string; value: string }[]>)[app.id] ?? [];
+        return { name: args.name, app: app.id, port: args.port, started: true, output: "", shown, firstSteps: app.firstSteps };
       }
       case "stack_action": {
         const st = demoStacks.find((x) => x.name === args.name)!;
@@ -1344,6 +1386,15 @@ export function install() {
         { id: "ufw", name: "UFW firewall", category: "Access", hint: "A simple firewall; installed off, turn it on from its tab with a lock-out check", apt: ["ufw"], dnf: ["ufw"] },
         { id: "haproxy", name: "HAProxy", category: "Load balancer", hint: "Load balancer; backends, servers and their state", apt: ["haproxy"], dnf: ["haproxy"] },
         { id: "apache", name: "Apache", category: "Web server", hint: "Apache web server; sites, virtual hosts and modules", apt: ["apache2"], dnf: ["httpd"] },
+        { id: "caddy", name: "Caddy", category: "Web server", hint: "Web server with automatic HTTPS; one Caddyfile for every site", apt: ["caddy"], dnf: ["caddy"] },
+        { id: "php-fpm", name: "PHP-FPM", category: "Runtime", hint: "Runs PHP apps (WordPress, Laravel) behind nginx or Apache", apt: ["php-fpm", "php-mysql", "php-curl", "php-xml", "php-mbstring", "php-zip", "php-gd"], dnf: ["php-fpm", "php-mysqlnd", "php-xml", "php-mbstring", "php-gd"] },
+        { id: "nodejs", name: "Node.js", category: "Runtime", hint: "JavaScript runtime and npm, for Node apps and Deploy builds", apt: ["nodejs", "npm"], dnf: ["nodejs", "npm"] },
+        { id: "memcached", name: "Memcached", category: "Database", hint: "Simple in-memory cache for PHP and Python apps; listens on 127.0.0.1", apt: ["memcached"], dnf: ["memcached"] },
+        { id: "supervisor", name: "Supervisor", category: "Process manager", hint: "Keeps workers and queue consumers running; programs in /etc/supervisor/conf.d", apt: ["supervisor"], dnf: ["supervisor"] },
+        { id: "chrony", name: "Time sync (chrony)", category: "System", hint: "Keeps the clock right (certificates, logs and 2FA codes depend on it)", apt: ["chrony"], dnf: ["chrony"] },
+        { id: "auto-updates", name: "Automatic security updates", category: "System", hint: "Installs security updates every day on its own (unattended-upgrades or dnf-automatic)", apt: ["unattended-upgrades"], dnf: ["dnf-automatic"] },
+        { id: "wireguard", name: "WireGuard", category: "Network", hint: "Fast VPN; tools installed, write /etc/wireguard/wg0.conf, then start wg-quick@wg0", apt: ["wireguard-tools"], dnf: ["wireguard-tools"] },
+        { id: "node-exporter", name: "Prometheus node exporter", category: "Monitoring", hint: "Server metrics for Prometheus on port 9100; keep that port closed except to Prometheus", apt: ["prometheus-node-exporter"], dnf: ["golang-github-prometheus-node-exporter"] },
       ];
       case "install_software": {
         if (args.id === "apache" && !args.force) throw { kind: "PreflightFailed", message: "port 80", data: { check: "port 80 is already in use", output: "Another program listens on port 80, so this web server would fail to start:\nLISTEN 0 511 0.0.0.0:80 users:((\"nginx\",pid=812))" } };

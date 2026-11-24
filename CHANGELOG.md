@@ -4,7 +4,16 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Apps** (Compose stacks → Apps): install Uptime Kuma, Portainer, Vaultwarden, Gitea, n8n, Grafana, WordPress, Nextcloud, Metabase or Adminer in one click. Each one runs as a Compose stack that only the server itself can reach (127.0.0.1). Open opens it in your browser through SSH, and Publish with a domain sets up New website with HTTPS. Passwords are generated for you and shown once. They live only in a private `.env` file on the server, never in Orbital or its activity log. The name, the port and free memory are checked first.
+- **More software to install** (the "+" menu): Caddy, PHP-FPM, Node.js, Memcached, Supervisor, chrony time sync, automatic security updates, WireGuard and the Prometheus node exporter, from the server's own package repositories. Each one gets its own tab.
+- **Docker comes with Compose**: installing Docker from the "+" menu now also installs the Compose plugin when the system packages it.
+- **Logins** (a tab on every server): who is signed in now, recent sign-ins, and failed SSH attempts over the last 24 hours with the busiest addresses and the user names they try. With Fail2ban, ban an address in one click.
+- **Search logs** (a tab on every server): find a word or an error across the system journal or the files in /var/log, over the last hour to 7 days, with the matches highlighted and files one click away.
+- **Certificates on Home**: a server's card says when one of its HTTPS certificates expires within three weeks (or has expired); click it for the certificates tab.
+
 ### Fixed
+- **PHP-FPM on Debian and Ubuntu wasn't found**: Orbital only looked for its unit under one name. Versioned names such as php8.2-fpm are now found too.
 - **New service with a folder failed** ("WorkingDirectory= path is not absolute"): the folder was written in quotes, which systemd takes literally. Nothing was left behind (the unit check refused it and it was rolled back); now it works.
 
 ## 1.5.0 (2026-11-24)

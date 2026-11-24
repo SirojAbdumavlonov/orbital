@@ -2883,6 +2883,29 @@ impl Engine {
         }
     }
 
+    // ---------- sign-ins and log search (read-only) ----------
+
+    /// Who is signed in, recent sign-ins and failed SSH attempts (24 h).
+    pub async fn logins(&self, sid: &str) -> Result<crate::logins::LoginsReport> {
+        let s = self.session(sid).await?;
+        let (o, _) = s.exec_inspect(crate::logins::SCRIPT).await?;
+        Ok(crate::logins::parse(&o.stdout))
+    }
+
+    /// A fixed-string, case-insensitive search through the journal or /var/log.
+    pub async fn search_logs(
+        &self,
+        sid: &str,
+        term: &str,
+        hours: u32,
+        source: crate::logsearch::LogSource,
+    ) -> Result<crate::logsearch::LogSearch> {
+        let s = self.session(sid).await?;
+        let cmd = crate::logsearch::command(term, hours, source)?;
+        let (o, _) = s.exec_inspect(&cmd).await?;
+        Ok(crate::logsearch::parse(&o.stdout, source))
+    }
+
     // ---------- Docker Compose stacks ----------
 
     /// Compose projects on the server and Orbital's undeployed stacks. Read-only.
@@ -2959,7 +2982,9 @@ impl Engine {
         }
         progress::step(format!("docker compose {} for {name} …", verb.replace('_', " + ")));
         let action_name = format!("stack.{verb}");
-        match progress::with_output(s.docker(&args)).await {
+        // Pulling images can take minutes.
+        let limit = std::time::Duration::from_secs(if matches!(action, A::Up | A::PullUp) { 1800 } else { 300 });
+        match progress::with_output(s.docker_for(&args, limit)).await {
             Ok((cmd, out)) => {
                 self.record_exec(&s, Category::Docker, &action_name, name, &cmd, &out);
                 Ok(out)
@@ -2969,6 +2994,60 @@ impl Engine {
                 Err(e)
             }
         }
+    }
+
+    // ---------- Apps (ready-made stacks) ----------
+
+    /// Install an app from [`crate::apps::APPS`] as stack `name` on `port`
+    /// (127.0.0.1): checks first, writes the compose file through safe save,
+    /// generated secrets to a 0600 `.env` over stdin, then pulls and starts it.
+    /// Returns what the user needs to sign in; Orbital keeps none of it.
+    pub async fn install_app(&self, sid: &str, app: &str, name: &str, port: u16, force: bool) -> Result<crate::apps::Installed> {
+        use crate::apps as ap;
+        let s = self.session(sid).await?;
+        let spec = ap::find(app).map_err(|e| self.refused_as(&s, Category::Docker, "app.install", app, e))?;
+        let script = ap::preflight_script(name, port).map_err(|e| self.refused_as(&s, Category::Docker, "app.install", name, e))?;
+        progress::step(format!("Checking the server for {} …", spec.name));
+        let (o, _) = s.exec_inspect(&script).await?;
+        let pre = ap::parse_preflight(&o.stdout);
+        if let Some((why, overridable)) = ap::blocker(spec, name, port, &pre) {
+            if !(overridable && force) {
+                let e = if overridable {
+                    Error::PreflightFailed {
+                        check: "memory".into(),
+                        output: why,
+                    }
+                } else {
+                    Error::InvalidInput(why)
+                };
+                return Err(self.refused_as(&s, Category::Docker, "app.install", name, e));
+            }
+        }
+        let content = ap::compose(spec, name, port)?;
+        self.create_stack(sid, name, &content, false).await?;
+        let (env, shown) = ap::env_file(spec);
+        progress::step("Writing generated passwords to .env (0600) …");
+        self.system_exec_with(
+            &s,
+            "app.env",
+            name,
+            &ap::write_env_command(name)?,
+            Some(env.as_bytes()),
+            std::time::Duration::from_secs(30),
+        )
+        .await?
+        .check()?;
+        let file = crate::stacks::stack_file(name);
+        let out = self.stack_action(sid, name, &file, crate::stacks::StackAction::PullUp).await?;
+        Ok(ap::Installed {
+            name: name.into(),
+            app: spec.id.into(),
+            port,
+            started: out.ok(),
+            output: out.stdout,
+            shown: shown.into_iter().map(|(label, value)| ap::Shown { label, value }).collect(),
+            first_steps: spec.first_steps.into(),
+        })
     }
 
     // ---------- swap ----------

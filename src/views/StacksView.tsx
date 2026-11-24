@@ -1,9 +1,13 @@
-import { FileText, Layers, Play, Plus, RefreshCw, RotateCw, ScrollText, Square } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, Copy, ExternalLink, FileText, Globe, LayoutGrid, Layers, Play, Plus, RefreshCw, RotateCw, ScrollText, Square } from "lucide-react";
+import { ReactNode, useEffect, useState } from "react";
 import { confirm, Modal } from "../components/ui";
-import { api, asApiError, Stack, StackAction } from "../lib/api";
+import { api, AppInstalled, AppOption, asApiError, Stack, StackAction } from "../lib/api";
 import { runJob, useRunningJob } from "../lib/jobs";
+import { useKept } from "../lib/kept";
+import { openLocalPort } from "../lib/links";
+import { withSafetyOverride } from "../lib/remote";
 import { SessionState, useStore } from "../store";
+import { forward } from "./TunnelsView";
 
 // Docker Compose stacks: every Compose project on the server (deployed from
 // anywhere) plus Orbital's own in /opt/stacks. Create one from a template
@@ -26,6 +30,7 @@ export function StacksView({ s }: { s: SessionState }) {
   const [creating, setCreating] = useState(false);
   const [logs, setLogs] = useState<{ name: string; text: string } | null>(null);
   const { openFile } = useStore();
+  const [mode, setMode] = useKept<"stacks" | "apps">(`${sid}:stacks:mode`, "stacks");
   const hasDocker = !!s.info.dockerVersion || !!s.tools?.some((t) => t.id === "docker");
   const load = () => api.stacks(sid).then((l) => { setList(l); setError(null); }, (e) => setError(asApiError(e).message));
   useEffect(() => { if (hasDocker) void load(); }, [sid, hasDocker]);
@@ -61,9 +66,19 @@ export function StacksView({ s }: { s: SessionState }) {
   if (!hasDocker) {
     return <div className="empty"><div><Layers size={28} /><h3>Docker isn't on this server</h3><p>Install it from the + next to the server's tabs, then create stacks here.</p></div></div>;
   }
+  const modes = (
+    <div className="segmented" role="tablist">
+      <button className={mode === "stacks" ? "on" : ""} onClick={() => setMode("stacks")}><Layers size={13} /> Stacks <span className="faint">{list?.length ?? ""}</span></button>
+      <button className={mode === "apps" ? "on" : ""} onClick={() => setMode("apps")}><LayoutGrid size={13} /> Apps</button>
+    </div>
+  );
+  if (mode === "apps") {
+    return <AppsGallery s={s} stacks={list ?? []} modes={modes} onChanged={() => void load()} onShowStacks={() => setMode("stacks")} />;
+  }
   return (
     <div className="view">
       <div className="toolbar view-toolbar">
+        {modes}
         <span className="faint" style={{ fontSize: 12.5 }}>Compose projects on this server. New ones go to <span className="mono">/opt/stacks/&lt;name&gt;</span>.</span>
         <span className="spacer" />
         <button className="btn primary" onClick={() => setCreating(true)}><Plus size={13} /> New stack</button>
@@ -71,7 +86,7 @@ export function StacksView({ s }: { s: SessionState }) {
       </div>
       <div className="scroll">
         {error && <div className="alert" style={{ margin: 16 }}>{error}</div>}
-        {list && list.length === 0 && <div className="empty"><div><Layers size={28} /><h3>No Compose stacks yet</h3><p>Create one from a template, or deploy a compose file you already have on the server from its folder in Files.</p></div></div>}
+        {list && list.length === 0 && <div className="empty"><div><Layers size={28} /><h3>No Compose stacks yet</h3><p>Install a ready-made app from <button className="link-btn" onClick={() => setMode("apps")}>Apps</button>, create one from a template, or deploy a compose file you already have on the server.</p></div></div>}
         <div className="backup-list">
           {list?.map((st) => <StackRow key={st.name} sid={sid} st={st} onAct={(a) => act(st, a)} onEdit={() => st.files[0] && openFile(sid, st.files[0])} />)}
         </div>
@@ -149,6 +164,165 @@ function NewStackDialog({ sid, taken, onClose, onCreated }: { sid: string; taken
         </label>
         <label className="check"><input type="checkbox" checked={deploy} onChange={(e) => setDeploy(e.target.checked)} /> Deploy it now (docker compose up -d)</label>
         {problem && <div className="alert" style={{ whiteSpace: "pre-wrap" }}>{problem}</div>}
+      </div>
+    </Modal>
+  );
+}
+
+// ---------- Apps: ready-made stacks (apps.rs) ----------
+
+/** The port each installed app was given (kept for this session, for Open). */
+const portsKey = (sid: string) => `${sid}:apps:ports`;
+
+function AppsGallery({ s, stacks, modes, onChanged, onShowStacks }: { s: SessionState; stacks: Stack[]; modes: ReactNode; onChanged: () => void; onShowStacks: () => void }) {
+  const sid = s.info.id;
+  const [apps, setApps] = useState<AppOption[] | null>(null);
+  const [query, setQuery] = useKept(`${sid}:apps:query`, "");
+  const [installing, setInstalling] = useState<AppOption | null>(null);
+  const [done, setDone] = useState<AppInstalled | null>(null);
+  const [ports, setPorts] = useKept<Record<string, number>>(portsKey(sid), {});
+  useEffect(() => { void api.appOptions().then(setApps); }, []);
+  const q = query.trim().toLowerCase();
+  const shown = (apps ?? []).filter((a) => !q || `${a.name} ${a.category} ${a.hint}`.toLowerCase().includes(q));
+  const stackOf = (a: AppOption) => stacks.find((x) => x.name === a.id || x.name.startsWith(`${a.id}-`));
+  return (
+    <div className="view">
+      <div className="toolbar view-toolbar">
+        {modes}
+        <span className="faint" style={{ fontSize: 12.5 }}>Self-hosted apps as Compose stacks, private to the server (127.0.0.1) until you publish them.</span>
+        <span className="spacer" />
+        <input className="input" style={{ width: 200 }} placeholder="Search apps" value={query} onChange={(e) => setQuery(e.target.value)} />
+      </div>
+      <div className="scroll">
+        <div className="app-grid">
+          {shown.map((a) => {
+            const st = stackOf(a);
+            const port = st ? ports[st.name] ?? a.port : a.port;
+            return (
+              <div key={a.id} className="app-card">
+                <div className="app-card-head">
+                  <b>{a.name}</b>
+                  <span className="badge">{a.category}</span>
+                </div>
+                <p>{a.hint}</p>
+                <span className="faint app-card-meta">~{a.memoryMb >= 1024 ? `${(a.memoryMb / 1024).toFixed(0)} GB` : `${a.memoryMb} MB`} memory · <span className="mono">{a.images.join(", ")}</span></span>
+                <div className="app-card-actions">
+                  {st ? (
+                    <>
+                      <span className={`dot ${st.running ? "live" : ""}`} /> <span className="faint">{st.running ? "Running" : st.status}</span>
+                      <span className="spacer" />
+                      {st.running && <button className="btn" title={`Forward port ${port} to this computer and open it`} onClick={() => void openApp(s, port)}><ExternalLink size={13} /> Open</button>}
+                      <button className="btn" onClick={onShowStacks}><Layers size={13} /> Manage</button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="spacer" />
+                      <button className="btn primary" onClick={() => setInstalling(a)}><Plus size={13} /> Install</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {apps && shown.length === 0 && <div className="empty"><div><LayoutGrid size={28} /><h3>No app matches</h3><p>Anything with a compose file can still go in through New stack.</p></div></div>}
+      </div>
+      {installing && (
+        <InstallAppDialog s={s} app={installing} taken={stacks.map((x) => x.name)} onClose={() => setInstalling(null)}
+          onInstalled={(r) => { setInstalling(null); setPorts((p) => ({ ...p, [r.name]: r.port })); setDone(r); onChanged(); }} />
+      )}
+      {done && <InstalledDialog s={s} r={done} onClose={() => setDone(null)} />}
+    </div>
+  );
+}
+
+/** Forward the app's port over SSH and open it in the browser. */
+async function openApp(s: SessionState, port: number) {
+  const t = await forward(s, port);
+  if (t) void openLocalPort(t.localPort);
+}
+
+function InstallAppDialog({ s, app, taken, onClose, onInstalled }: { s: SessionState; app: AppOption; taken: string[]; onClose: () => void; onInstalled: (r: AppInstalled) => void }) {
+  const sid = s.info.id;
+  const firstFree = (base: string) => { let n = base, i = 2; while (taken.includes(n)) n = `${base}-${i++}`; return n; };
+  const [name, setName] = useState(firstFree(app.id));
+  const [port, setPort] = useState(String(app.port));
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const clean = name.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  const portN = Number(port);
+  const portOk = Number.isInteger(portN) && portN >= 1024 && portN <= 65535;
+  const go = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const r = await withSafetyOverride(
+        (force) => runJob((p) => api.installApp(sid, app.id, clean, portN, force, p), {
+          key: `app:${sid}:${clean}`, title: `Installing ${app.name}`, sid,
+          done: (x) => (x.started ? `${app.name} is running` : { failed: `${app.name} was set up, but docker compose up failed` }),
+        }),
+        `${app.name} may not fit in this server's memory`,
+      );
+      if (r) onInstalled(r);
+    } catch (e) {
+      setProblem(asApiError(e).message.replace(/^Invalid input: /, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title={`Install ${app.name}`} subtitle={app.hint} keepOnOutsideClick onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !clean || taken.includes(clean) || !portOk} onClick={go}>{busy ? "Installing…" : "Install"}</button></>}>
+      <div className="route-form">
+        <label className="field">
+          <span>Stack name</span>
+          <input className="input mono" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+          <span className="hint">{clean ? (taken.includes(clean) ? `${clean} already exists` : `/opt/stacks/${clean}`) : "Lowercase letters, digits, - and _"}</span>
+        </label>
+        <label className="field">
+          <span>Port on the server</span>
+          <input className="input mono" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))} inputMode="numeric" />
+          <span className="hint">{portOk ? `Listens on 127.0.0.1:${portN} only; nothing is open to the internet.` : "1024 to 65535"}</span>
+        </label>
+        <ul className="app-steps">
+          <li>Checks Docker Compose, the name, the port and free memory (~{app.memoryMb} MB).</li>
+          <li>Writes <span className="mono">compose.yaml</span>, and generated passwords to <span className="mono">.env</span> (readable by you and root only). Orbital keeps no copy.</li>
+          <li>Pulls <span className="mono">{app.images.join(", ")}</span> and starts it. The first pull can take a few minutes.</li>
+        </ul>
+        {problem && <div className="alert" style={{ whiteSpace: "pre-wrap" }}>{problem}</div>}
+      </div>
+    </Modal>
+  );
+}
+
+function InstalledDialog({ s, r, onClose }: { s: SessionState; r: AppInstalled; onClose: () => void }) {
+  const setNewWebsite = useStore((x) => x.setNewWebsite);
+  const [copied, setCopied] = useState<string | null>(null);
+  const hasNginx = !!s.tools?.some((t) => t.id === "nginx");
+  const copy = (v: string, label: string) => { void navigator.clipboard?.writeText(v).catch(() => {}); setCopied(label); };
+  return (
+    <Modal title={r.started ? `${r.name} is running` : `${r.name} didn't start`} subtitle={r.started ? `On the server at 127.0.0.1:${r.port}.` : "The files are in place; Compose's output is below. Fix and Deploy it from Stacks."} keepOnOutsideClick onClose={onClose}
+      footer={<>
+        <button className="btn" onClick={onClose}>Close</button>
+        {r.started && hasNginx && <button className="btn" onClick={() => { onClose(); setNewWebsite(s.info.id, r.port); }}><Globe size={13} /> Publish with a domain…</button>}
+        {r.started && <button className="btn primary" onClick={() => void openApp(s, r.port)}><ExternalLink size={13} /> Open</button>}
+      </>}>
+      <div className="route-form">
+        {r.shown.length > 0 && (
+          <div className="app-secrets">
+            <span className="faint">Save these now: Orbital doesn't keep them. They're also in <span className="mono">/opt/stacks/{r.name}/.env</span>.</span>
+            {r.shown.map((x) => (
+              <div key={x.label} className="app-secret">
+                <span>{x.label}</span>
+                <code className="mono">{x.value}</code>
+                <button className="icon-btn" aria-label={`Copy ${x.label}`} onClick={() => copy(x.value, x.label)}>{copied === x.label ? <Check size={14} /> : <Copy size={14} />}</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {r.firstSteps && <p className="app-first">{r.firstSteps}</p>}
+        {!r.started && <pre className="output stack-logs">{r.output}</pre>}
+        {r.started && !hasNginx && <p className="faint">To reach it from a domain with HTTPS, install nginx from the + menu, then use New website with port {r.port}.</p>}
       </div>
     </Modal>
   );

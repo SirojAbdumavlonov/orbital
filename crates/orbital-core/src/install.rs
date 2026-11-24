@@ -25,7 +25,8 @@ pub const INSTALLABLE: &[Installable] = &[
         hint: "Run apps in containers; manage them, their logs and Compose files here",
         apt: &["docker.io"],
         dnf: &["moby-engine"],
-        after: "",
+        // Compose (the Stacks tab and Apps) is a separate package; try the usual names.
+        after: COMPOSE_AFTER,
         services: &["docker"],
         web: false,
     },
@@ -110,7 +111,95 @@ pub const INSTALLABLE: &[Installable] = &[
         services: &["apache2", "httpd"],
         web: true,
     },
+    Installable {
+        id: "caddy",
+        hint: "Web server with automatic HTTPS; one Caddyfile for every site",
+        apt: &["caddy"],
+        dnf: &["caddy"],
+        after: "",
+        services: &["caddy"],
+        web: true,
+    },
+    Installable {
+        id: "php-fpm",
+        hint: "Runs PHP apps (WordPress, Laravel) behind nginx or Apache",
+        apt: &["php-fpm", "php-mysql", "php-curl", "php-xml", "php-mbstring", "php-zip", "php-gd"],
+        dnf: &["php-fpm", "php-mysqlnd", "php-xml", "php-mbstring", "php-gd"],
+        // Debian names the unit after the version (php8.2-fpm); start whichever came.
+        after: "for u in $(systemctl list-unit-files 'php*-fpm.service' --no-legend 2>/dev/null | awk '{print $1}'); do systemctl enable --now \"$u\" && break; done",
+        services: &[],
+        web: false,
+    },
+    Installable {
+        id: "nodejs",
+        hint: "JavaScript runtime and npm, for Node apps and Deploy builds",
+        apt: &["nodejs", "npm"],
+        dnf: &["nodejs", "npm"],
+        after: "",
+        services: &[],
+        web: false,
+    },
+    Installable {
+        id: "memcached",
+        hint: "Simple in-memory cache for PHP and Python apps; listens on 127.0.0.1",
+        apt: &["memcached"],
+        dnf: &["memcached"],
+        after: "",
+        services: &["memcached"],
+        web: false,
+    },
+    Installable {
+        id: "supervisor",
+        hint: "Keeps workers and queue consumers running; programs in /etc/supervisor/conf.d",
+        apt: &["supervisor"],
+        dnf: &["supervisor"],
+        after: "",
+        services: &["supervisor", "supervisord"],
+        web: false,
+    },
+    Installable {
+        id: "chrony",
+        hint: "Keeps the clock right (certificates, logs and 2FA codes depend on it)",
+        apt: &["chrony"],
+        dnf: &["chrony"],
+        after: "",
+        services: &["chrony", "chronyd"],
+        web: false,
+    },
+    Installable {
+        id: "auto-updates",
+        hint: "Installs security updates every day on its own (unattended-upgrades or dnf-automatic)",
+        apt: &["unattended-upgrades"],
+        dnf: &["dnf-automatic"],
+        after: AUTO_UPDATES_AFTER,
+        services: &["unattended-upgrades"],
+        web: false,
+    },
+    Installable {
+        id: "wireguard",
+        hint: "Fast VPN; tools installed, write /etc/wireguard/wg0.conf, then start wg-quick@wg0",
+        apt: &["wireguard-tools"],
+        dnf: &["wireguard-tools"],
+        after: "",
+        services: &[],
+        web: false,
+    },
+    Installable {
+        id: "node-exporter",
+        hint: "Server metrics for Prometheus on port 9100; keep that port closed except to Prometheus",
+        apt: &["prometheus-node-exporter"],
+        dnf: &["golang-github-prometheus-node-exporter"],
+        after: "",
+        services: &["prometheus-node-exporter", "node_exporter"],
+        web: false,
+    },
 ];
+
+/// After Docker: the Compose plugin, under whichever name this system packages it.
+const COMPOSE_AFTER: &str = "if ! docker compose version >/dev/null 2>&1; then\n  if command -v apt-get >/dev/null 2>&1; then apt-get install -y -q docker-compose-v2 || apt-get install -y -q docker-compose-plugin || true;\n  else dnf install -y docker-compose || dnf install -y docker-compose-plugin || true; fi\nfi";
+
+/// Daily security updates on: apt's periodic settings, or dnf-automatic's timer.
+const AUTO_UPDATES_AFTER: &str = "if [ -d /etc/apt/apt.conf.d ] && command -v unattended-upgrade >/dev/null 2>&1; then\n  printf 'APT::Periodic::Update-Package-Lists \"1\";\\nAPT::Periodic::Unattended-Upgrade \"1\";\\n' > /etc/apt/apt.conf.d/20auto-upgrades\nfi\nif systemctl list-unit-files dnf-automatic-install.timer >/dev/null 2>&1; then systemctl enable --now dnf-automatic-install.timer || true; fi";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -209,6 +298,15 @@ mod tests {
             "ufw is installed off"
         );
         assert!(find("mongodb").is_err() && find("x; reboot").is_err());
+        let d = script(find("docker").unwrap());
+        assert!(d.contains("docker-compose-v2") && d.contains("docker compose version"), "{d}");
+        let a = script(find("auto-updates").unwrap());
+        assert!(a.contains("20auto-upgrades") && a.contains("dnf-automatic-install.timer"), "{a}");
+        assert!(script(find("php-fpm").unwrap()).contains("php*-fpm.service"));
+        assert!(
+            script(find("wireguard").unwrap()).lines().all(|l| !l.contains("enable --now")),
+            "WireGuard waits for its config"
+        );
         assert!(needs_port80(find("apache").unwrap()) && !needs_port80(find("redis").unwrap()));
     }
 

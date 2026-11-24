@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { useEffect } from "react";
-import { api, UpdatesReport } from "./api";
+import { api, Certificate, UpdatesReport } from "./api";
 import { isSsh, useStore } from "../store";
 
 // Pending updates on every connected server, for the Home cards: checked when
@@ -28,7 +28,23 @@ export function updatesText(u: FleetUpdates | undefined): string | null {
   return parts.join(" · ");
 }
 
-export const useFleet = create<{ updates: Record<string, FleetUpdates> }>(() => ({ updates: {} }));
+/** Certificates that expire within three weeks, or already have, soonest first. */
+export function expiring(certs: Certificate[], days = 21): { name: string; daysLeft: number }[] {
+  return certs
+    .filter((c) => c.daysLeft !== null && c.daysLeft <= days)
+    .map((c) => ({ name: c.domains[0] ?? c.name, daysLeft: c.daysLeft as number }))
+    .sort((a, b) => a.daysLeft - b.daysLeft);
+}
+
+/** "HTTPS for shop.example.com expires in 9 days (+1 more)", or null. */
+export function certText(list: { name: string; daysLeft: number }[] | undefined): string | null {
+  if (!list || !list.length) return null;
+  const c = list[0];
+  const when = c.daysLeft < 0 ? `expired ${-c.daysLeft} day${c.daysLeft === -1 ? "" : "s"} ago` : c.daysLeft === 0 ? "expires today" : `expires in ${c.daysLeft} day${c.daysLeft === 1 ? "" : "s"}`;
+  return `HTTPS for ${c.name} ${when}${list.length > 1 ? ` (+${list.length - 1} more)` : ""}`;
+}
+
+export const useFleet = create<{ updates: Record<string, FleetUpdates>; certs: Record<string, { name: string; daysLeft: number }[]> }>(() => ({ updates: {}, certs: {} }));
 
 const EVERY_MS = 60 * 60 * 1000;
 
@@ -48,6 +64,13 @@ export function useFleetUpdates() {
           useFleet.setState((f) => ({ updates: { ...f.updates, [s.profile.id]: u } }));
         } catch {
           // No package manager, or not reachable now: try again in an hour.
+        }
+        // Certificates (certbot), wherever certbot is installed.
+        if (s.tools?.some((t) => t.id === "certbot")) {
+          try {
+            const c = expiring((await api.certbotStatus(s.info.id)).certificates);
+            useFleet.setState((f) => ({ certs: { ...f.certs, [s.profile.id]: c } }));
+          } catch { /* certbot busy or unreadable: next hour */ }
         }
       }
     };

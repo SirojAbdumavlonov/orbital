@@ -215,10 +215,15 @@ pub(crate) fn is_socket_denied(o: &ExecOutput) -> bool {
 impl SshSession {
     /// Run a docker command, retrying with sudo if the daemon socket is not accessible.
     pub async fn docker(&self, args: &str) -> Result<(String, ExecOutput)> {
+        self.docker_for(args, std::time::Duration::from_secs(120)).await
+    }
+
+    /// [`docker`](Self::docker) with its own time limit (image pulls).
+    pub async fn docker_for(&self, args: &str, timeout: std::time::Duration) -> Result<(String, ExecOutput)> {
         let cmd = format!("docker {args}");
-        let o = self.exec(&cmd).await?;
+        let o = self.exec_with_input(&cmd, None, timeout).await?;
         if is_socket_denied(&o) && self.elevation_needed() {
-            let o2 = self.exec_privileged(&cmd).await?;
+            let o2 = self.exec_privileged_with(&cmd, None, timeout).await?;
             return Ok((self.privileged_command(&cmd), o2));
         }
         Ok((cmd, o))

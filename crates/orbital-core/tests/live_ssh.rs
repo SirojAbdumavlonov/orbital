@@ -2661,3 +2661,129 @@ async fn compose_stack_is_checked_deployed_and_stopped() {
         .await
         .unwrap();
 }
+
+/// An app from the catalogue: a taken port, an unknown app and a bad name are
+/// refused before anything is written; the install writes compose.yaml, the
+/// generated token only to a 0600 .env (not the file, not the audit log), and
+/// starts it on 127.0.0.1 only.
+/// Needs Docker with Compose v2 (CI's runner has it): ORBITAL_IT_USERS=1.
+#[tokio::test]
+async fn app_installs_privately_with_secrets_only_in_env() {
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_USERS").is_err() || std::env::var("ORBITAL_IT_NO_PASSWORD").is_ok() {
+        eprintln!("skipped: set ORBITAL_IT_USERS=1 on a disposable machine with Docker");
+        return;
+    }
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    if !engine
+        .run_command(&s.id, "docker compose version >/dev/null 2>&1 && echo yes", true)
+        .await
+        .unwrap()
+        .stdout
+        .contains("yes")
+    {
+        eprintln!("skipped: no docker compose here");
+        return;
+    }
+    let name = format!("orbital-app-{}", std::process::id());
+    // The test's own sshd port is taken.
+    let taken = engine.install_app(&s.id, "vaultwarden", &name, e.port.max(1024), false).await;
+    if e.port >= 1024 {
+        assert!(matches!(&taken, Err(Error::InvalidInput(m)) if m.contains("in use")), "{taken:?}");
+    }
+    assert!(engine.install_app(&s.id, "x; reboot", &name, 18083, false).await.is_err());
+    assert!(engine.install_app(&s.id, "vaultwarden", "Bad Name", 18083, false).await.is_err());
+    let none = engine
+        .run_command(&s.id, &format!("test -e /opt/stacks/{name} && echo kept"), true)
+        .await
+        .unwrap();
+    assert!(none.stdout.trim().is_empty(), "nothing written before the checks pass");
+
+    // Vaultwarden: a generated admin token, shown once, only in .env.
+    let r = engine.install_app(&s.id, "vaultwarden", &name, 18083, false).await.unwrap();
+    assert!(r.started, "{}", r.output);
+    assert_eq!(r.shown.len(), 1);
+    let token = r.shown[0].value.clone();
+    assert_eq!(token.len(), 32);
+    let check = engine
+        .run_command(
+            &s.id,
+            &format!("stat -c '%a' /opt/stacks/{name}/.env; cat /opt/stacks/{name}/.env; grep -c ADMIN_TOKEN /opt/stacks/{name}/compose.yaml; ss -Hltn | awk '{{print $4}}' | grep ':18083$'"),
+            true,
+        )
+        .await
+        .unwrap()
+        .stdout;
+    assert!(check.starts_with("600"), "{check}");
+    assert!(check.contains(&format!("ADMIN_TOKEN={token}")), "the token is in .env");
+    assert!(check.contains("127.0.0.1:18083") && !check.contains("0.0.0.0:18083"), "{check}");
+    let compose = engine
+        .run_command(&s.id, &format!("cat /opt/stacks/{name}/compose.yaml"), true)
+        .await
+        .unwrap()
+        .stdout;
+    assert!(compose.contains("${ADMIN_TOKEN}") && !compose.contains(&token));
+    let log = engine.audit_query(&AuditFilter::default()).unwrap();
+    assert!(
+        log.iter().all(|a| !format!("{a:?}").contains(&token)),
+        "the token isn't in the audit log"
+    );
+    let list = engine.stacks(&s.id).await.unwrap();
+    assert!(list.iter().any(|x| x.name == name && x.running && x.ours));
+    // Twice is refused.
+    assert!(engine.install_app(&s.id, "vaultwarden", &name, 18084, false).await.is_err());
+    let file = orbital_core::stacks::stack_file(&name);
+    let down = engine
+        .stack_action(&s.id, &name, &file, orbital_core::stacks::StackAction::Down)
+        .await
+        .unwrap();
+    assert!(down.ok(), "{}", down.combined());
+    engine
+        .run_command(&s.id, &format!("rm -rf /opt/stacks/{name}"), true)
+        .await
+        .unwrap();
+}
+
+/// Logins and log search read a real server: the test's own SSH sign-in is
+/// among the recent ones, and a search finds a line written to the journal.
+#[tokio::test]
+async fn logins_and_log_search_read_the_server() {
+    use orbital_core::logsearch::LogSource;
+    let Some(e) = env() else { return };
+    let Some(key) = e.key.clone() else { return };
+    let engine = engine();
+    let p = engine.create_profile(profile(&e, AuthMethod::Key, Some(key))).unwrap();
+    let a = connect(&engine, &p.id, None).await;
+    let r = engine.logins(&a.id).await.unwrap();
+    assert!(r.top_addresses.len() <= 10 && r.top_users.len() <= 10);
+    let marker = format!("orbital-it-search-{}", std::process::id());
+    engine
+        .run_command(&a.id, &format!("logger -t orbital-it {marker} || true"), false)
+        .await
+        .unwrap();
+    let has_journal = engine
+        .run_command(&a.id, "command -v journalctl >/dev/null && echo yes", false)
+        .await
+        .unwrap()
+        .stdout
+        .contains("yes");
+    if has_journal {
+        let mut found = false;
+        for _ in 0..10 {
+            let hits = engine.search_logs(&a.id, &marker, 1, LogSource::Journal).await.unwrap();
+            if hits.hits.iter().any(|h| h.line.contains(&marker)) {
+                found = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        assert!(found, "the journal line is found");
+    }
+    assert!(engine.search_logs(&a.id, "x", 1, LogSource::Files).await.is_err(), "too short");
+    let files = engine
+        .search_logs(&a.id, "orbital-unlikely-term-zz", 1, LogSource::Files)
+        .await
+        .unwrap();
+    assert!(files.hits.is_empty() && !files.truncated);
+}

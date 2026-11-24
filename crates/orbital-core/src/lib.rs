@@ -4,6 +4,7 @@
 //! unit- and integration-tested headless (see `tests/`).
 
 pub mod agent;
+pub mod apps;
 pub mod audit;
 pub mod backups;
 pub mod certbot;
@@ -23,7 +24,9 @@ pub mod firewall;
 pub mod history;
 pub mod install;
 pub mod known_hosts;
+pub mod logins;
 pub mod logs;
+pub mod logsearch;
 pub mod metrics;
 pub mod migrate;
 pub mod netcheck;

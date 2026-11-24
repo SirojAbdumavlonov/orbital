@@ -531,9 +531,19 @@ export interface MovePlan { name: string; image: string; imageId: string; repoDi
 export interface MoveOptions { ports?: PortMap[]; args?: string[]; envSet?: Record<string, string>; envRemove?: string[] }
 export interface MovePreview { plan: MovePlan; clashes: { noDocker: boolean; name: boolean; ports: number[]; paths: string[] }; target: string }
 
+// ---------- sign-ins and log search ----------
+export interface LoginSession { user: string; tty: string; from: string; when: string }
+export interface Count { key: string; count: number }
+export interface LoginsReport { now: LoginSession[]; recent: LoginSession[]; failed: number; topAddresses: Count[]; topUsers: Count[]; source: string }
+export type SearchSource = "journal" | "files";
+export interface LogSearch { hits: { file: string; line: string }[]; truncated: boolean; total: number }
+
 // ---------- Docker Compose stacks ----------
 export interface Stack { name: string; status: string; files: string[]; running: boolean; ours: boolean }
 export type StackAction = "up" | "pullUp" | "restart" | "down" | "logs";
+/** A ready-made app (apps.rs): installed as a stack on 127.0.0.1:port. */
+export interface AppOption { id: string; name: string; category: string; hint: string; port: number; firstSteps: string; memoryMb: number; images: string[] }
+export interface AppInstalled { name: string; app: string; port: number; started: boolean; output: string; shown: { label: string; value: string }[]; firstSteps: string }
 
 // ---------- services made by Orbital ----------
 export type RestartPolicy = "always" | "onFailure" | "no";
@@ -1321,9 +1331,15 @@ export const api = {
   systemInfo: (sessionId: string) => invoke<SystemInfo>("system_info", { sessionId }),
   metrics: (sessionId: string) => invoke<Metrics>("metrics", { sessionId }),
   stacks: (sessionId: string) => invoke<Stack[]>("stacks", { sessionId }),
+  logins: (sessionId: string) => invoke<LoginsReport>("logins", { sessionId }),
+  searchLogs: (sessionId: string, term: string, hours: number, source: SearchSource) => invoke<LogSearch>("search_logs", { sessionId, term, hours, source }),
   /** A new stack in /opt/stacks/<name>/compose.yaml (checked by docker compose config); deployed with `deploy`. */
   createStack: (sessionId: string, name: string, content: string, deploy: boolean, onProgress?: OnProgress) =>
     invoke<ExecOutput | null>("create_stack", { sessionId, name, content, deploy, progress: progressChannel(onProgress) }),
+  appOptions: () => invoke<AppOption[]>("app_options"),
+  /** Install a ready-made app as stack `name` on 127.0.0.1:`port`; generated passwords come back once in `shown`. */
+  installApp: (sessionId: string, app: string, name: string, port: number, force: boolean, onProgress?: OnProgress) =>
+    invoke<AppInstalled>("install_app", { sessionId, app, name, port, force, progress: progressChannel(onProgress) }),
   stackAction: (sessionId: string, name: string, file: string, action: StackAction, onProgress?: OnProgress) =>
     invoke<ExecOutput>("stack_action", { sessionId, name, file, action, progress: progressChannel(onProgress) }),
   /** Add a swap file of this many MB (refused when swap is already on or the disk is short). Returns the swap size in bytes. */

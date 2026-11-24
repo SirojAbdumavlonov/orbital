@@ -148,9 +148,10 @@ export function NewWebsiteDialog({ sid }: { sid: string }) {
   useEffect(() => { if (allLive) finish(1); }, [allLive]);
 
   // ----- step 3: nginx site -----
-  const [kind, setKind] = useState<SiteKind["kind"]>("static");
+  const appPort = useStore.getState().newWebsitePort;
+  const [kind, setKind] = useState<SiteKind["kind"]>(appPort ? "proxy" : "static");
   const [root, setRoot] = useState("");
-  const [port, setPort] = useState("3000");
+  const [port, setPort] = useState(String(appPort ?? 3000));
   const [plan, setPlan] = useState<WebsitePlan | null>(null);
   const [planRev, setPlanRev] = useState(0);
   const [planError, setPlanError] = useState<string | null>(null);

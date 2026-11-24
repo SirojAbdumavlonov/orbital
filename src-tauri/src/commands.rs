@@ -263,6 +263,22 @@ pub async fn nginx_route_change(
 }
 
 #[tauri::command]
+pub async fn logins(engine: Eng<'_>, session_id: String) -> R<orbital_core::logins::LoginsReport> {
+    engine.logins(&session_id).await
+}
+
+#[tauri::command]
+pub async fn search_logs(
+    engine: Eng<'_>,
+    session_id: String,
+    term: String,
+    hours: u32,
+    source: orbital_core::logsearch::LogSource,
+) -> R<orbital_core::logsearch::LogSearch> {
+    engine.search_logs(&session_id, &term, hours, source).await
+}
+
+#[tauri::command]
 pub async fn stacks(engine: Eng<'_>, session_id: String) -> R<Vec<orbital_core::stacks::Stack>> {
     engine.stacks(&session_id).await
 }
@@ -280,6 +296,29 @@ pub async fn create_stack(
         progress.id(),
         sink(progress),
         engine.create_stack(&session_id, &name, &content, deploy),
+    )
+    .await
+}
+
+#[tauri::command]
+pub fn app_options() -> Vec<orbital_core::apps::AppOption> {
+    orbital_core::apps::options()
+}
+
+#[tauri::command]
+pub async fn install_app(
+    engine: Eng<'_>,
+    session_id: String,
+    app: String,
+    name: String,
+    port: u16,
+    force: bool,
+    progress: Channel<ProgressEvent>,
+) -> R<orbital_core::apps::Installed> {
+    progress::run_job(
+        progress.id(),
+        sink(progress),
+        engine.install_app(&session_id, &app, &name, port, force),
     )
     .await
 }

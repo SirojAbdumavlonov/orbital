@@ -1145,3 +1145,33 @@ kbd { font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border: 1px
 .stack-yaml { font-size: 12.5px; line-height: 1.5; }
 .backup-job-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--slate-4); flex: none; }
 .backup-job-head .dot.live { background: var(--ok); }
+
+/* Logins and log search */
+.logins { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 16px; }
+.logins .panel h4 { display: flex; align-items: center; gap: 6px; justify-content: flex-start; }
+.logins .panel h4 > span:last-child { margin-left: auto; }
+.logins-recent { grid-column: 1 / -1; }
+.logins-cols { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; }
+.logins-sub { font-size: 11.5px; margin: 4px 0; }
+@media (max-width: 1000px) { .logins { grid-template-columns: 1fr; } }
+.log-hits { padding: 4px 16px 16px; font-size: 12px; line-height: 1.55; }
+.log-hit { display: flex; gap: 10px; padding: 2px 0; border-bottom: 1px solid var(--row-line); white-space: pre-wrap; word-break: break-word; }
+.log-hit mark { background: var(--mark); color: var(--ink); border-radius: 2px; }
+.log-file { flex: none; border: 0; background: none; padding: 0; color: var(--ink-3); cursor: pointer; font: inherit; }
+.log-file:hover { color: var(--amber); }
+
+/* Apps gallery (Stacks → Apps) */
+.app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; padding: 16px; }
+.app-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--slate-4); border-radius: var(--radius-m); background: var(--slate-2); min-width: 0; }
+.app-card-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.app-card-head b { font-size: 14px; font-weight: 500; color: var(--ink); }
+.app-card p { margin: 0; font-size: 12.5px; color: var(--ink-2); line-height: 1.45; flex: 1; }
+.app-card-meta { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-card-actions { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.app-card-actions .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--slate-4); flex: none; }
+.app-card-actions .dot.live { background: var(--ok); }
+.app-steps { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--ink-2); display: flex; flex-direction: column; gap: 4px; }
+.app-secrets { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--slate-4); border-radius: var(--radius-m); background: var(--slate-3); font-size: 12.5px; }
+.app-secret { display: grid; grid-template-columns: minmax(120px, auto) 1fr auto; align-items: center; gap: 10px; }
+.app-secret code { overflow: hidden; text-overflow: ellipsis; user-select: all; color: var(--ink); }
+.app-first { margin: 0; font-size: 13px; color: var(--ink); }

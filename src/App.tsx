@@ -33,6 +33,8 @@ import { HelpView } from "./views/HelpView";
 import { BackupsView } from "./views/BackupsView";
 import { NotesView } from "./views/NotesView";
 import { StacksView } from "./views/StacksView";
+import { LoginsView } from "./views/LoginsView";
+import { LogSearchView } from "./views/LogSearchView";
 import { FeedbackView } from "./views/FeedbackView";
 import { ChangesView, useWhatsNewAnnounce, WhatsNewDialog } from "./components/WhatsNew";
 import { isMac, isSidebarKey, mod } from "./lib/platform";
@@ -105,6 +107,8 @@ const TOOL_VIEWS: Record<string, (p: { s: SessionState }) => JSX.Element> = {
   backups: BackupsView,
   notes: NotesView,
   stacks: StacksView,
+  logins: LoginsView,
+  logsearch: LogSearchView,
 };
 
 function ToolTab({ s, id }: { s: SessionState; id: string }) {
