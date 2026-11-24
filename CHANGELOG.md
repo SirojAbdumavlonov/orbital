@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.5.0 (2026-11-24)
+
 ### Added
 - **New service** (Services → New service): turn a command into a systemd service that starts at boot and restarts when it stops, with its folder, user and environment. The unit is checked by `systemd-analyze verify` before it's kept; environment variables go into a root-only file (fine for passwords and tokens), never into the unit or the activity log. A name the system already uses is refused, so nothing is overwritten.
 - **Compose stacks** (a tab on every server with Docker): every Compose project on the server, wherever it was deployed from, plus new ones made here in /opt/stacks/<name>. A new stack's file is checked by `docker compose config` before it's saved. Deploy, pull and redeploy, restart, stop and read the logs, with live output; edit the file in the editor.
