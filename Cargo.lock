@@ -3678,7 +3678,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orbital"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -3704,7 +3704,7 @@ dependencies = [
 
 [[package]]
 name = "orbital-core"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "base64 0.22.1",
  "block2",
