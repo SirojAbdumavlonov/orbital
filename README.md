@@ -64,6 +64,10 @@ After that Orbital updates itself, without any warning: it checks for a new vers
 | **Databases** | PostgreSQL, MySQL/MariaDB and MongoDB: every database with its size, tables and connections, and a one-click backup to your computer (made on the server, downloaded, removed from the server). Redis: memory, keys, clients and hit rate, with snapshot and flush. Works for databases running in Docker containers too. |
 | **Apache and HAProxy** | Apache's virtual hosts, sites to enable or disable (checked with configtest first) and modules. HAProxy's frontends and backends with live server health, and draining or maintenance for a server. |
 | **SSH keys** | Who can sign in to an account with a key, and which of those keys are on your computer; allow and remove keys with a lock-out check; make new Ed25519 keys on your computer and install them in one click. |
+| **SQL console** | Query PostgreSQL and MySQL/MariaDB on the server or in a container, read-only by default, with results as a table. |
+| **SSH hardening and security audit** | One-click sshd fixes with lock-out checks, and a read-only scan for root accounts, setuid programs, world-writable files, exposed databases and loose key files. |
+| **Kernel tuning** | Recommended sysctl settings with current values, applied through one file that's rolled back if the kernel refuses it. |
+| **Terminal recordings** | Record what terminals show (not what you type), replay it with speed and seek, save as asciinema .cast. |
 | **Snippets** | Saved commands with blanks to fill in, run as root or not on one server or many at once, with each server's output side by side and every run in the activity log. |
 | **Cron** | Every scheduled job on the server in plain words ("every weekday at 09:00"), when it runs next and when it last ran. Add, edit, pause and delete jobs, or run one now and see its output. Systemd timers and the daily/weekly scripts too. |
 | **Users** | Add server accounts with every option (password and/or SSH keys, sudo and other groups, shell, home, UID, expiry), change their groups, password and keys, lock or delete them. Orbital won't lock you out of your own account. |

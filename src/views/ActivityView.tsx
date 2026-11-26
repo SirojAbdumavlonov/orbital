@@ -1,5 +1,5 @@
 import { save } from "@tauri-apps/plugin-dialog";
-import { Download, RefreshCw, Search, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Download, RefreshCw, Search, ShieldAlert, ShieldCheck, Video } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import { api, asApiError, AuditCategory, AuditEvent } from "../lib/api";
 import { useStore } from "../store";
@@ -45,6 +45,7 @@ export function ActivityView({ profileId }: { profileId?: string }) {
         {verify && (verify.ok
           ? <span className="badge ok" title="Every entry's SHA-256 chain was re-computed and matches"><ShieldCheck size={12} /> {verify.checked} entries verified</span>
           : <span className="badge bad"><ShieldAlert size={12} /> Log altered at entry #{verify.firstBrokenSeq}</span>)}
+        <button className="btn" title="Replay what recorded terminals showed" onClick={() => useStore.getState().setGlobalView("recordings")}><Video size={13} /> Terminal recordings</button>
         <button className="btn" onClick={() => api.auditVerify().then(setVerify)}>Verify</button>
         <button className="btn" onClick={() => exportLog("csv")}><Download size={13} /> CSV</button>
         <button className="btn" onClick={() => exportLog("json")}><Download size={13} /> JSON</button>

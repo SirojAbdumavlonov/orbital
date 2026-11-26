@@ -4,6 +4,14 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **SQL console**: run a query against any PostgreSQL or MySQL/MariaDB database, on the server or in one of its containers, from the Query button in the database tab. Results come back as a table you can copy into a spreadsheet; read-only by default, so the database itself refuses changes until you allow them. ⌘↵ runs it, and recent queries are kept per database. The activity log records each query's kind, size and fingerprint, never its text.
+- **One-click SSH hardening**: the SSH server tab's Harden button fixes root login, password login, attempts per connection, X11 forwarding and the login time in one step. The settings go into Orbital's own file in sshd_config.d, checked with sshd -t before sshd reloads (open connections stay); changes that would lock this connection out need you to type "lock me out", and one click removes the file again.
+- **Security audit** (a tab on every server): a read-only scan for extra root accounts, empty passwords, readable password files, unusual setuid programs, world-writable files and folders, databases listening on every address, passwordless sudo, docker group members and SSH key files others can change, worst first.
+- **Kernel tuning** (a tab on every server): the sysctl settings that matter for a server (network and kernel hardening, swappiness, connection queue, file watches, Redis's overcommit), with the value now and the recommended one. Apply them in one step through Orbital's own file in /etc/sysctl.d; if the kernel refuses a value, the previous file is put back. Add any other sysctl key too.
+- **Terminal recordings**: turn on "Record terminals" (Settings, or Activity log → Terminal recordings) and every new terminal's output is saved on this computer, never your keystrokes. Play recordings back at 1–8× with a seek bar and long pauses shortened, save them as asciinema .cast files, or delete them; recorded terminals show a REC badge, and each recording is in the activity log.
+
+
 ## 1.6.0 (2026-11-24)
 
 ### Added

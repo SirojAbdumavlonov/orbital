@@ -26,14 +26,14 @@
 - [x] **Fail2ban**: jails, banned addresses, ban and unban
 - [x] **SSH server review**: effective `sshd -T` settings checked against hardening advice, who is logged in
 - [x] **Open ports**: what listens where, which program and service, reachable from outside or not, firewall verdict, Docker bypass warning
-- [ ] One-click hardening fixes for sshd (a drop-in file through safe save), and authorized_keys management
+- [x] One-click hardening fixes for sshd (a drop-in file through safe save), and authorized_keys management
 - [ ] firewalld (RHEL family) alongside ufw
 - [ ] Dedicated tabs for more tools (PostgreSQL databases and roles, cron jobs); they share the generic tab for now
 - [ ] Transfer queue with progress and resume; folder download
 - [ ] Port forwarding (local and remote) and an "open in browser" button for exposed ports
 - [ ] Docker Compose projects as first-class objects: up, down, pull, logs across services
 - [ ] Log viewer with follow (`journalctl -f`, `docker logs -f`, `tail -F`) and search
-- [ ] Optional terminal session recording (asciinema format), linked from the audit log
+- [x] Optional terminal session recording (asciinema format), linked from the audit log
 - [ ] Signed audit-log anchors (export hash heads to a remote, append-only store)
 - [ ] Team edition: shared server catalogue, central audit log, SSO, role-based permissions
 - [ ] Windows and Linux builds (Tauri already supports both)

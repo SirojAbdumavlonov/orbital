@@ -41,6 +41,8 @@ export interface Settings {
   terminalTmux: boolean;
   /** At launch, reopen the servers that were open, on the same tab and folder. */
   restoreSession: boolean;
+  /** New terminals are recorded (output only) to a .cast file on this computer. */
+  recordTerminals: boolean;
   /** Notify when a connected server needs attention (and when it's fine again). */
   healthAlerts: boolean;
   /** When disk, memory and load count as a warning or an alarm. */
@@ -62,6 +64,7 @@ const DEFAULTS: Settings = {
   terminalSuggestions: true,
   terminalTmux: false,
   restoreSession: true,
+  recordTerminals: false,
   healthAlerts: true,
   thresholds: DEFAULT_THRESHOLDS,
 };

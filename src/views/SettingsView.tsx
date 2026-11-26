@@ -137,6 +137,9 @@ export function SettingsView() {
           </Row>
 
           <h3 className="settings-title">Terminal</h3>
+          <Row title="Record terminals" hint="Saves what each new terminal shows (never what you type) to a recording on this computer, to replay later under Activity log → Terminal recordings. Passwords you type aren't shown by the server, so they aren't recorded; anything a command prints is.">
+            <input type="checkbox" className="switch" checked={st.recordTerminals} onChange={(e) => st.set({ recordTerminals: e.target.checked })} />
+          </Row>
           <Row title="Open as root when sudo is set up" hint="New terminals start a root shell (sudo -i) on servers whose settings allow sudo, typing a saved sudo password for you. The other kind is one click away in the Terminal tab.">
             <input type="checkbox" className="switch" checked={st.terminalAsRoot} onChange={(e) => st.set({ terminalAsRoot: e.target.checked })} />
           </Row>

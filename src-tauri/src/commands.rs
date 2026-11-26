@@ -933,19 +933,26 @@ pub async fn open_terminal(
     cwd: Option<String>,
     as_root: bool,
     launch: Option<orbital_core::terminal::Launch>,
+    record: Option<bool>,
     on_event: Channel<TermMessage>,
 ) -> R<String> {
-    engine
-        .open_terminal(&session_id, cols, rows, cwd, as_root, launch.unwrap_or_default(), move |ev| {
-            let msg = match ev {
-                TermEvent::Data(d) => TermMessage::Data {
-                    data: base64::engine::general_purpose::STANDARD.encode(d),
-                },
-                TermEvent::Exit(code) => TermMessage::Exit { code },
-            };
-            let _ = on_event.send(msg);
-        })
-        .await
+    let sink = move |ev| {
+        let msg = match ev {
+            TermEvent::Data(d) => TermMessage::Data {
+                data: base64::engine::general_purpose::STANDARD.encode(d),
+            },
+            TermEvent::Exit(code) => TermMessage::Exit { code },
+        };
+        let _ = on_event.send(msg);
+    };
+    let launch = launch.unwrap_or_default();
+    if record.unwrap_or(false) {
+        engine
+            .open_recorded_terminal(&session_id, cols, rows, cwd, as_root, launch, sink)
+            .await
+    } else {
+        engine.open_terminal(&session_id, cols, rows, cwd, as_root, launch, sink).await
+    }
 }
 
 #[tauri::command]
@@ -1426,4 +1433,75 @@ pub async fn download_folder(
         engine.download_folder(&session_id, &remote_path, &PathBuf::from(local_path)),
     )
     .await
+}
+
+// ---------- kernel tuning, SSH hardening, security audit, SQL console, recordings ----------
+
+#[tauri::command]
+pub async fn kernel_report(engine: Eng<'_>, session_id: String) -> R<orbital_core::kernel::KernelReport> {
+    engine.kernel_report(&session_id).await
+}
+
+#[tauri::command]
+pub async fn kernel_apply(
+    engine: Eng<'_>,
+    session_id: String,
+    values: std::collections::BTreeMap<String, String>,
+    progress: Channel<ProgressEvent>,
+) -> R<orbital_core::kernel::KernelReport> {
+    progress::run_job(progress.id(), sink(progress), engine.kernel_apply(&session_id, &values)).await
+}
+
+#[tauri::command]
+pub async fn harden_state(engine: Eng<'_>, session_id: String) -> R<orbital_core::harden::HardenState> {
+    engine.harden_state(&session_id).await
+}
+
+#[tauri::command]
+pub async fn harden_ssh(
+    engine: Eng<'_>,
+    session_id: String,
+    choices: std::collections::BTreeMap<String, String>,
+    force: bool,
+) -> R<orbital_core::harden::HardenResult> {
+    engine.harden_ssh(&session_id, &choices, force).await
+}
+
+#[tauri::command]
+pub async fn security_audit(
+    engine: Eng<'_>,
+    session_id: String,
+    progress: Channel<ProgressEvent>,
+) -> R<orbital_core::secaudit::AuditReport> {
+    progress::run_job(progress.id(), sink(progress), engine.security_audit(&session_id)).await
+}
+
+#[tauri::command]
+pub async fn sql_query(
+    engine: Eng<'_>,
+    session_id: String,
+    kind: DbKind,
+    container: Option<String>,
+    db: String,
+    query: String,
+    read_only: bool,
+) -> R<orbital_core::sqlconsole::SqlResult> {
+    engine
+        .sql_query(&session_id, kind, container.as_deref(), &db, &query, read_only)
+        .await
+}
+
+#[tauri::command]
+pub fn recordings(engine: Eng) -> R<Vec<orbital_core::recording::RecordingInfo>> {
+    engine.recordings()
+}
+
+#[tauri::command]
+pub fn read_recording(engine: Eng, name: String) -> R<String> {
+    engine.read_recording(&name)
+}
+
+#[tauri::command]
+pub fn delete_recording(engine: Eng, name: String) -> R<()> {
+    engine.delete_recording(&name)
 }

@@ -985,6 +985,26 @@ export interface SshdReport {
   sessions: { user: string; tty: string; since: string; from: string | null }[];
 }
 
+// ---------- kernel tuning, SSH hardening, security audit, SQL console, recordings ----------
+
+export interface KernelSetting {
+  key: string; group: string; title: string; why: string; recommended: string;
+  cmp: "eq" | "atLeast" | "atMost"; onlyWith: string | null;
+  /** What the kernel uses now; null when this kernel doesn't have it. */
+  current: string | null;
+  /** The value in Orbital's file, if it sets this key. */
+  ours: string | null;
+  ok: boolean;
+}
+export interface KernelReport { settings: KernelSetting[]; custom: Record<string, string>; customCurrent: Record<string, string>; fileExists: boolean; file: string }
+export interface HardenState { includesDropins: boolean; current: Record<string, string>; dropin: string }
+export interface HardenResult { state: HardenState; notInEffect: [string, string][] }
+export type AuditLevel = "bad" | "warn" | "info" | "ok";
+export interface AuditFinding { id: string; level: AuditLevel; title: string; detail: string; items: string[] }
+export interface AuditReport { findings: AuditFinding[]; partial: boolean }
+export interface SqlResult { columns: string[]; rows: (string | null)[][]; text: string | null; error: string | null; truncated: boolean; durationMs: number }
+export interface RecordingInfo { name: string; title: string; started: number; seconds: number; bytes: number; width: number; height: number }
+
 // ---------- snippets ----------
 
 export interface Snippet { id: string; name: string; command: string; description: string | null; sudo: boolean; params: string[]; createdAt: string; updatedAt: string }
@@ -1385,10 +1405,10 @@ export const api = {
   runCommand: (sessionId: string, command: string, privileged: boolean) =>
     invoke<ExecOutput>("run_command", { sessionId, command, privileged }),
 
-  openTerminal: (sessionId: string, cols: number, rows: number, cwd: string | null, asRoot: boolean, onEvent: (m: TermMessage) => void, launch: TermLaunch = { kind: "shell" }) => {
+  openTerminal: (sessionId: string, cols: number, rows: number, cwd: string | null, asRoot: boolean, onEvent: (m: TermMessage) => void, launch: TermLaunch = { kind: "shell" }, record = false) => {
     const ch = new Channel<TermMessage>();
     ch.onmessage = onEvent;
-    return invoke<string>("open_terminal", { sessionId, cols, rows, cwd, asRoot, launch, onEvent: ch });
+    return invoke<string>("open_terminal", { sessionId, cols, rows, cwd, asRoot, launch, record, onEvent: ch });
   },
   /** tmux sessions on the server, to reattach (root's for root terminals). */
   tmuxSessions: (sessionId: string, root: boolean) => invoke<TmuxSession[]>("tmux_sessions", { sessionId, root }),
@@ -1396,6 +1416,19 @@ export const api = {
   terminalResize: (terminalId: string, cols: number, rows: number) => invoke<void>("terminal_resize", { terminalId, cols, rows }),
   terminalClose: (terminalId: string) => invoke<void>("terminal_close", { terminalId }),
 
+  kernelReport: (sessionId: string) => invoke<KernelReport>("kernel_report", { sessionId }),
+  /** Write Orbital's sysctl file with exactly these values (empty removes it) and load it; a job. */
+  kernelApply: (sessionId: string, values: Record<string, string>, onProgress?: OnProgress) =>
+    invoke<KernelReport>("kernel_apply", { sessionId, values, progress: progressChannel(onProgress) }),
+  hardenState: (sessionId: string) => invoke<HardenState>("harden_state", { sessionId }),
+  /** Write Orbital's sshd drop-in with exactly these settings (empty removes it), test and reload sshd. */
+  hardenSsh: (sessionId: string, choices: Record<string, string>, force: boolean) => invoke<HardenResult>("harden_ssh", { sessionId, choices, force }),
+  securityAudit: (sessionId: string, onProgress?: OnProgress) => invoke<AuditReport>("security_audit", { sessionId, progress: progressChannel(onProgress) }),
+  sqlQuery: (sessionId: string, kind: DbKind, container: string | null, db: string, query: string, readOnly: boolean) =>
+    invoke<SqlResult>("sql_query", { sessionId, kind, container, db, query, readOnly }),
+  recordings: () => invoke<RecordingInfo[]>("recordings"),
+  readRecording: (name: string) => invoke<string>("read_recording", { name }),
+  deleteRecording: (name: string) => invoke<void>("delete_recording", { name }),
   snippets: () => invoke<Snippet[]>("snippets"),
   saveSnippet: (id: string | null, input: SnippetInput) => invoke<Snippet>("save_snippet", { id, input }),
   deleteSnippet: (id: string) => invoke<void>("delete_snippet", { id }),

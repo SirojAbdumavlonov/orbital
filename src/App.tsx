@@ -57,7 +57,10 @@ import { DatabaseView, RedisView } from "./views/DatabaseView";
 import { ApacheView, HaproxyView } from "./views/WebServerViews";
 import { UsersView } from "./views/UsersView";
 import { SshKeysView } from "./views/SshKeysView";
+import { SecurityAuditView } from "./views/SecurityAuditView";
+import { KernelView } from "./views/KernelView";
 import { SnippetsView } from "./views/SnippetsView";
+import { RecordingsView } from "./views/RecordingsView";
 import { CronView } from "./views/CronView";
 import { DeployView } from "./views/DeployView";
 import { LogsView } from "./views/LogsView";
@@ -67,6 +70,7 @@ import { ServicesView } from "./views/ServicesView";
 import { TerminalView } from "./views/TerminalView";
 
 const GLOBAL_TITLES = {
+  recordings: ["Terminal recordings", "What terminals showed, saved on this computer: play back, save, delete"],
   activity: ["Activity log", "Every change across all servers, hash-chained so tampering is detectable"],
   snippets: ["Snippets", "Saved commands, run on one server or many at once"],
   uptime: ["Uptime", "Websites and ports checked from this computer, with a notification when one goes down"],
@@ -99,6 +103,8 @@ const TOOL_VIEWS: Record<string, (p: { s: SessionState }) => JSX.Element> = {
   haproxy: HaproxyView,
   users: UsersView,
   sshkeys: SshKeysView,
+  secaudit: SecurityAuditView,
+  kernel: KernelView,
   cron: CronView,
   deploy: DeployView,
   logs: LogsView,
@@ -250,7 +256,7 @@ export default function App() {
               <button className="btn" style={{ marginLeft: "auto" }} onClick={() => setGlobalView(null)}>Close</button>
             </div>
           </header>
-          {globalView === "activity" ? <ActivityView /> : globalView === "uptime" ? <UptimeView /> : globalView === "snippets" ? <SnippetsView /> : globalView === "settings" ? <SettingsView /> : globalView === "domains" ? <DomainsView /> : globalView === "changes" ? <ChangesView /> : globalView === "help" ? <HelpView /> : globalView === "feedback" ? <FeedbackView /> : <KnownHostsView />}
+          {globalView === "activity" ? <ActivityView /> : globalView === "uptime" ? <UptimeView /> : globalView === "snippets" ? <SnippetsView /> : globalView === "settings" ? <SettingsView /> : globalView === "domains" ? <DomainsView /> : globalView === "changes" ? <ChangesView /> : globalView === "help" ? <HelpView /> : globalView === "recordings" ? <RecordingsView /> : globalView === "feedback" ? <FeedbackView /> : <KnownHostsView />}
         </div>
       )}
       {order.map((id) => <Workspace key={id} s={sessions[id]} visible={!!showWorkspace && id === active} />)}

@@ -760,6 +760,51 @@ const uptimeRun = (c: MockCheck, up = true, error?: string) => {
 
 const connCount: Record<string, number> = {};
 
+// ---- kernel tuning, SSH hardening, security audit, SQL console, recordings ----
+const KERNEL_KNOWN: [string, string, string, string, "eq" | "atLeast" | "atMost", string, string | null, string][] = [
+  ["net.ipv4.tcp_syncookies", "Network security", "SYN flood protection", "1", "eq", "Keeps the server answering when it's flooded with half-open connections.", null, "1"],
+  ["net.ipv4.conf.all.accept_redirects", "Network security", "Ignore ICMP redirects (IPv4)", "0", "eq", "Redirects let another machine on the network reroute this server's traffic. Servers don't need them.", null, "1"],
+  ["net.ipv4.conf.all.send_redirects", "Network security", "Don't send redirects", "0", "eq", "Only routers should send them. Leave it on if this server routes traffic for others (a VPN gateway).", null, "1"],
+  ["net.ipv4.conf.all.log_martians", "Network security", "Log impossible addresses", "1", "eq", "Packets with addresses that can't be real are logged, which shows spoofing attempts.", null, "0"],
+  ["kernel.dmesg_restrict", "Kernel hardening", "Kernel log for root only", "1", "eq", "The kernel log can reveal addresses that help exploits; ordinary users don't need it.", null, "1"],
+  ["fs.protected_symlinks", "Kernel hardening", "Protected symbolic links", "1", "eq", "Links in shared folders like /tmp are followed only when it's safe.", null, "1"],
+  ["fs.suid_dumpable", "Kernel hardening", "No core dumps from setuid programs", "0", "eq", "A crash dump of a privileged program can contain passwords or keys.", null, "2"],
+  ["vm.swappiness", "Performance", "Swap only when memory runs out", "10", "atMost", "The default (60) swaps early. Servers stay faster when they keep programs in memory.", null, "60"],
+  ["net.core.somaxconn", "Performance", "Connection queue", "4096", "atLeast", "How many new connections may wait for a busy web server or database before they're refused.", null, "4096"],
+  ["fs.inotify.max_user_watches", "Performance", "File watches", "524288", "atLeast", "Programs that watch files (Node.js, IDE servers, log shippers) fail with \"no space left\" when this runs out.", null, "8192"],
+  ["vm.overcommit_memory", "Performance", "Memory overcommit for Redis", "1", "eq", "Redis needs it to save snapshots reliably (it warns about it in its log).", "redis", "0"],
+];
+let kernelFile: Record<string, string> = { "net.ipv4.ip_local_port_range": "10000 65000" };
+const kernelNow: Record<string, string> = Object.fromEntries(KERNEL_KNOWN.map((k) => [k[0], k[7]]));
+kernelNow["net.ipv4.ip_local_port_range"] = "10000 65000";
+const meets = (c: string, r: string, cmp: string) => cmp === "eq" ? c === r : cmp === "atLeast" ? +c >= +r : +c <= +r;
+const kernelReport = () => ({
+  settings: KERNEL_KNOWN.map(([key, group, title, recommended, cmp, why, onlyWith]) => ({ key, group, title, why, recommended, cmp, onlyWith, current: kernelNow[key], ours: kernelFile[key] ?? null, ok: meets(kernelNow[key], recommended, cmp) })),
+  custom: Object.fromEntries(Object.entries(kernelFile).filter(([k]) => !KERNEL_KNOWN.some((x) => x[0] === k))),
+  customCurrent: { "net.ipv4.ip_local_port_range": kernelNow["net.ipv4.ip_local_port_range"] },
+  fileExists: Object.keys(kernelFile).length > 0, file: "/etc/sysctl.d/90-orbital.conf",
+});
+let hardenFile: Record<string, string> = {};
+const AUDIT = {
+  partial: false,
+  findings: [
+    { id: "exposed-db", level: "bad", title: "Databases listening on every address", detail: "Unless a firewall blocks them (see Open ports), these can be reached from the internet, and bots scan for them constantly. Bind them to 127.0.0.1 or allow only your addresses.", items: ["Redis on port 6379"] },
+    { id: "world-writable", level: "bad", title: "World-writable system files", detail: "Any user (or a hacked web app) can change these files. Remove write access for others (chmod o-w).", items: ["/srv/shop/public/uploads/.htaccess", "/etc/cron.d/backup-tmp"] },
+    { id: "suid", level: "warn", title: "Unusual setuid or setgid programs", detail: "These run with their owner's rights (often root). Some come with installed software; anything you don't recognise deserves a look.", items: ["/usr/local/bin/backup-helper"] },
+    { id: "authorized-keys", level: "warn", title: "authorized_keys others can change", detail: "Anyone who can write these files can add their own key and sign in as that user. sshd may also ignore them. chmod 600 them.", items: ["/home/anna/.ssh/authorized_keys (664)"] },
+    { id: "nopasswd", level: "info", title: "sudo without a password", detail: "These rules let users or programs become root without typing a password. Fine for automation accounts; for people, a stolen SSH key then means root.", items: ["deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart shop-api"] },
+    { id: "docker-group", level: "info", title: "Members of the docker group", detail: "Anyone in the docker group can become root (by starting a container that mounts /). Keep it to admins.", items: ["deploy"] },
+    { id: "uid0", level: "ok", title: "Only root has root's user ID", detail: "No other account has UID 0.", items: [] },
+    { id: "empty-passwords", level: "ok", title: "No accounts with an empty password", detail: "Every account has a password or is locked.", items: [] },
+  ],
+};
+const DEMO_CAST = [
+  JSON.stringify({ version: 2, width: 100, height: 26, timestamp: Math.floor(Date.now() / 1000) - 7200, title: "deploy@203.0.113.10: ~" }),
+  ...[["0.3", "\u001b[32mdeploy@prod-web-01\u001b[0m:~$ "], ["1.2", "s"], ["1.3", "u"], ["1.4", "d"], ["1.5", "o"], ["1.7", " systemctl status nginx"], ["2.4", "\r\n● nginx.service - A high performance web server and a reverse proxy server\r\n     Loaded: loaded (/lib/systemd/system/nginx.service; enabled)\r\n     Active: \u001b[32mactive (running)\u001b[0m since Mon 2026-11-23 09:12:41 UTC; 2 days ago\r\n   Main PID: 812 (nginx)\r\n      Tasks: 5 (limit: 9389)\r\n\r\n"], ["3.5", "\u001b[32mdeploy@prod-web-01\u001b[0m:~$ "], ["5.0", "df -h /"], ["5.6", "\r\nFilesystem      Size  Used Avail Use% Mounted on\r\n/dev/sda1        75G   31G   41G  44% /\r\n"], ["6.2", "\u001b[32mdeploy@prod-web-01\u001b[0m:~$ "], ["8.0", "exit\r\nlogout\r\n"]].map(([t, d]) => `[${t}, "o", ${JSON.stringify(d)}]`),
+].join("\n");
+let demoRecordings = [{ name: "20261126T081500-1a2b3c4d.cast", title: "deploy@203.0.113.10: ~", started: Math.floor(Date.now() / 1000) - 7200, seconds: 8, bytes: DEMO_CAST.length, width: 100, height: 26 }];
+const SQL_TABLES = { columns: ["id", "email", "plan", "created_at", "last_login"], rows: [["1", "anna@example.com", "pro", "2026-01-14 09:12:00", "2026-11-25 18:02:11"], ["2", "ben@example.com", "free", "2026-02-02 11:40:00", null], ["3", "carla@example.com", "team", "2026-03-19 16:05:00", "2026-11-26 07:44:50"], ["4", "dev+test@example.com", "free", "2026-06-30 08:00:00", "2026-07-01 08:01:02"]] };
+
 export function install() {
   mockIPC(async (cmd, args: any) => {
     // Demo: `window.__dropConnection("s-p1")` makes that server's connection "lost" until reconnected.
@@ -1110,6 +1155,37 @@ export function install() {
       }
       case "system_info": return { hostname: "prod-web-01", fqdn: "prod-web-01.example.com", os: "Ubuntu 24.04.1 LTS", kernel: "6.8.0-45-generic", arch: "x86_64", virtualization: "kvm", vendor: "Hetzner", product: "vServer", cpuThreads: 8, bootTime: "2026-10-06 09:14:02", timezone: "Asia/Tashkent", addresses: [{ interface: "eth0", address: "203.0.113.10/32" }, { interface: "eth0", address: "2001:db8::1/64" }, { interface: "docker0", address: "172.17.0.1/16" }], gateway: "172.31.1.1", dns: ["185.12.64.1", "185.12.64.2"], usersLoggedIn: 2, processes: 214, failedUnits: [], updates: 12, securityUpdates: 3, rebootRequired: true, packageManager: "apt", securityModule: "AppArmor, on" };
       case "sshd_report": return sshd;
+      case "harden_state": return { includesDropins: true, current: { ...hardenFile }, dropin: "/etc/ssh/sshd_config.d/10-orbital-hardening.conf" };
+      case "harden_ssh": {
+        await new Promise((r) => setTimeout(r, 700));
+        const p = profiles.find((x) => "s-" + x.id === args.sessionId);
+        if (!args.force && (args.choices.PasswordAuthentication === "no" || args.choices.KbdInteractiveAuthentication === "no") && p?.authMethod === "password")
+          throw { kind: "PreflightFailed", message: "preflight", data: { check: "your access", output: "This connection signs in with a password. With password login off, Orbital (and you) couldn't sign in again. Allow a key in the SSH keys tab and switch this server's profile to it first." } };
+        hardenFile = { ...args.choices };
+        return { state: { includesDropins: true, current: { ...hardenFile }, dropin: "/etc/ssh/sshd_config.d/10-orbital-hardening.conf" }, notInEffect: [] };
+      }
+      case "kernel_report": await new Promise((r) => setTimeout(r, 300)); return kernelReport();
+      case "kernel_apply": {
+        const ch = args.progress; ch?.onmessage?.({ type: "line", text: "sysctl -p /etc/sysctl.d/90-orbital.conf" });
+        await new Promise((r) => setTimeout(r, 900));
+        kernelFile = { ...args.values };
+        for (const [k, v] of Object.entries(kernelFile)) kernelNow[k] = v as string;
+        return kernelReport();
+      }
+      case "security_audit": await new Promise((r) => setTimeout(r, 1500)); return JSON.parse(JSON.stringify(AUDIT));
+      case "sql_query": {
+        await new Promise((r) => setTimeout(r, 400));
+        const q: string = args.query.toLowerCase();
+        if (/^\s*(insert|update|delete|create|drop|alter)/.test(q) && args.readOnly) return { columns: [], rows: [], text: null, error: args.kind === "postgres" ? "ERROR:  cannot execute " + q.trim().split(/\s+/)[0].toUpperCase() + " in a read-only transaction" : "ERROR 1792 (25006): Cannot execute statement in a READ ONLY transaction.", truncated: false, durationMs: 3 };
+        if (/^\s*(insert|update|delete)/.test(q)) return { columns: [], rows: [], text: args.kind === "postgres" ? "" : "", error: null, truncated: false, durationMs: 8 };
+        if (q.includes("information_schema.tables") || q.startsWith("show tables")) return { columns: [args.kind === "postgres" ? "table_name" : `Tables_in_${args.db}`], rows: [["orders"], ["products"], ["sessions"], ["users"]], text: null, error: null, truncated: false, durationMs: 6 };
+        if (q.includes("from users")) return { ...SQL_TABLES, text: null, error: null, truncated: false, durationMs: 11 };
+        if (q.includes("syntax")) return { columns: [], rows: [], text: null, error: "ERROR:  syntax error at or near \"syntax\"", truncated: false, durationMs: 2 };
+        return { columns: ["?column?"], rows: [["1"]], text: null, error: null, truncated: false, durationMs: 2 };
+      }
+      case "recordings": return demoRecordings.map((r) => ({ ...r }));
+      case "read_recording": return DEMO_CAST;
+      case "delete_recording": demoRecordings = demoRecordings.filter((r) => r.name !== args.name); return null;
       case "ufw_status": return ufw();
       case "ufw_add": {
         const r = args.rule;

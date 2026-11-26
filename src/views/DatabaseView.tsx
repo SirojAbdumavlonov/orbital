@@ -1,5 +1,5 @@
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { Camera, Database, Download, Eraser, Loader2, RefreshCw, Server } from "lucide-react";
+import { Camera, Database, Download, Eraser, Loader2, RefreshCw, Server, TerminalSquare } from "lucide-react";
 import { ReactNode, useState } from "react";
 import { confirm, LiveNumber, Modal } from "../components/ui";
 import { api, asApiError, BackupFormat, DbInfo, DbKind, RedisAction } from "../lib/api";
@@ -10,6 +10,7 @@ import { useRemote } from "../lib/remote";
 import { SessionState, useStore } from "../store";
 import { ToolView } from "./ToolView";
 import { usePlace } from "../components/PlacePicker";
+import { SqlConsole } from "../components/SqlConsole";
 import { useKept } from "../lib/kept";
 
 const KIND: Record<string, DbKind> = { postgresql: "postgres", mysql: "mysql", mongodb: "mongo" };
@@ -96,6 +97,7 @@ export function DatabaseView({ s, toolId }: { s: SessionState; toolId: string })
   const { data, error, loading, reload } = useRemote(() => api.listDatabases(s.info.id, kind, place), [s.info.id, kind, place]);
   const [showSystem, setShowSystem] = useState(false);
   const [backup, setBackup] = useState<DbInfo | null>(null);
+  const [querying, setQuerying] = useState<string | null>(null);
   const list = (data?.databases ?? []).filter((d) => showSystem || !d.system);
   const total = (data?.databases ?? []).reduce((n, d) => n + (d.sizeBytes ?? 0), 0);
   const isSql = kind !== "mongo";
@@ -133,7 +135,10 @@ export function DatabaseView({ s, toolId }: { s: SessionState; toolId: string })
                   <td className="num">{d.sizeBytes != null ? bytes(d.sizeBytes) : "—"}</td>
                   {hasTables && <td className="num muted">{d.tables ?? "—"}</td>}
                   {kind !== "mongo" && <td className="num muted">{d.connections ?? "—"}</td>}
-                  <td style={{ textAlign: "right" }}>{!place && <button className="btn" onClick={() => setBackup(d)}><Download size={13} /> Back up</button>}</td>
+                  <td style={{ textAlign: "right" }} className="nowrap">
+                    {isSql && <button className="btn" title="Run SQL against this database (read-only unless you allow changes)" onClick={() => setQuerying(d.name)}><TerminalSquare size={13} /> Query</button>}{" "}
+                    {!place && <button className="btn" onClick={() => setBackup(d)}><Download size={13} /> Back up</button>}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -143,6 +148,7 @@ export function DatabaseView({ s, toolId }: { s: SessionState; toolId: string })
         </div>
       )}
       {backup && <BackupDialog s={s} kind={kind} db={backup} onClose={() => setBackup(null)} />}
+      {querying && <SqlConsole s={s} kind={kind} container={place} db={querying} onClose={() => setQuerying(null)} />}
     </WithServicePane>
   );
 }

@@ -2787,3 +2787,176 @@ async fn logins_and_log_search_read_the_server() {
         .unwrap();
     assert!(files.hits.is_empty() && !files.truncated);
 }
+
+/// Kernel tuning: a value is written to Orbital's sysctl file and loaded,
+/// an unknown key is refused before anything is written, and removing every
+/// value removes the file. Needs password sudo (the CI sshd has it).
+#[tokio::test]
+async fn kernel_tuning_writes_loads_and_removes_its_file() {
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_NO_PASSWORD").is_ok() {
+        return;
+    }
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    let before = engine.kernel_report(&s.id).await.unwrap();
+    let cur = before
+        .settings
+        .iter()
+        .find(|x| x.key == "vm.swappiness")
+        .and_then(|x| x.current.clone());
+    let Some(cur) = cur else {
+        eprintln!("skipped: no vm.swappiness here");
+        return;
+    };
+    // Write the value it already has: nothing about the machine changes.
+    let v = [("vm.swappiness".to_string(), cur.clone())].into_iter().collect();
+    let r = engine.kernel_apply(&s.id, &v).await.unwrap();
+    assert!(r.file_exists);
+    assert_eq!(
+        r.settings.iter().find(|x| x.key == "vm.swappiness").unwrap().ours.as_deref(),
+        Some(cur.as_str())
+    );
+    let bad = [("vm.no_such_knob".to_string(), "1".to_string())].into_iter().collect();
+    assert!(matches!(engine.kernel_apply(&s.id, &bad).await, Err(Error::InvalidInput(_))));
+    let still = engine.kernel_report(&s.id).await.unwrap();
+    assert!(still.file_exists, "the refused key left the file as it was");
+    let gone = engine.kernel_apply(&s.id, &Default::default()).await.unwrap();
+    assert!(!gone.file_exists);
+    engine.disconnect(&s.id).await.unwrap();
+}
+
+/// SSH hardening: turning password login off from a password connection is
+/// refused; a harmless setting is written, tested and removed again.
+#[tokio::test]
+async fn ssh_hardening_refuses_lockout_and_writes_its_dropin() {
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_NO_PASSWORD").is_ok() {
+        return;
+    }
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    let state = engine.harden_state(&s.id).await.unwrap();
+    let pw_off = [("PasswordAuthentication".to_string(), "no".to_string())].into_iter().collect();
+    let r = engine.harden_ssh(&s.id, &pw_off, false).await;
+    assert!(matches!(r, Err(Error::PreflightFailed { .. })), "{r:?}");
+    let odd = [("PasswordAuthentication".to_string(), "yes".to_string())].into_iter().collect();
+    assert!(matches!(engine.harden_ssh(&s.id, &odd, true).await, Err(Error::InvalidInput(_))));
+    if !state.includes_dropins {
+        eprintln!("skipped: this sshd_config has no Include of sshd_config.d");
+        return;
+    }
+    let x11 = [("X11Forwarding".to_string(), "no".to_string())].into_iter().collect();
+    let done = engine.harden_ssh(&s.id, &x11, false).await.unwrap();
+    assert_eq!(done.state.current.get("X11Forwarding").map(String::as_str), Some("no"));
+    let removed = engine.harden_ssh(&s.id, &Default::default(), false).await.unwrap();
+    assert!(removed.state.current.is_empty());
+    let audit = engine.audit_query(&AuditFilter::default()).unwrap();
+    assert!(audit.iter().any(|ev| ev.action == "sshd.harden" && ev.outcome == Outcome::Denied));
+    engine.disconnect(&s.id).await.unwrap();
+}
+
+/// The security audit runs on a real system and reports at least the account checks.
+#[tokio::test]
+async fn security_audit_runs() {
+    let Some(e) = env() else { return };
+    let Some(input) = key_profile(&e) else { return };
+    let engine = engine();
+    let p = engine.create_profile(input).unwrap();
+    let s = connect(&engine, &p.id, None).await;
+    let r = engine.security_audit(&s.id).await.unwrap();
+    assert!(r.findings.iter().any(|f| f.id == "uid0"), "{r:?}");
+    assert!(r.findings.iter().any(|f| f.id == "suid"));
+    engine.disconnect(&s.id).await.unwrap();
+}
+
+/// SQL console: bad input is refused before anything runs; where psql is
+/// installed, a query returns rows and read-only mode refuses a write.
+#[tokio::test]
+async fn sql_console_refuses_bad_input_and_runs_queries() {
+    use orbital_core::databases::DbKind;
+    let Some(e) = env() else { return };
+    let Some(input) = key_profile(&e) else { return };
+    let engine = engine();
+    let p = engine.create_profile(input).unwrap();
+    let s = connect(&engine, &p.id, None).await;
+    assert!(matches!(
+        engine.sql_query(&s.id, DbKind::Postgres, None, "x; id", "select 1", true).await,
+        Err(Error::InvalidInput(_))
+    ));
+    assert!(matches!(
+        engine.sql_query(&s.id, DbKind::Postgres, None, "postgres", "  ", true).await,
+        Err(Error::InvalidInput(_))
+    ));
+    assert!(matches!(
+        engine
+            .sql_query(&s.id, DbKind::Postgres, Some("bad name!"), "postgres", "select 1", true)
+            .await,
+        Err(Error::InvalidInput(_))
+    ));
+    match engine
+        .sql_query(&s.id, DbKind::Postgres, None, "postgres", "select 1 as one, 'a,b' as two", true)
+        .await
+    {
+        Err(Error::NotFound(_)) => eprintln!("psql isn't installed: only the refusals ran"),
+        Ok(r) if r.error.is_none() => {
+            assert_eq!(r.columns, ["one", "two"]);
+            assert_eq!(r.rows[0], [Some("1".to_string()), Some("a,b".to_string())]);
+            let w = engine
+                .sql_query(
+                    &s.id,
+                    DbKind::Postgres,
+                    None,
+                    "postgres",
+                    "create table orbital_it_ro (x int)",
+                    true,
+                )
+                .await
+                .unwrap();
+            assert!(w.error.unwrap_or_default().contains("read-only"));
+        }
+        other => eprintln!("postgres answered something else (not running?): {other:?}"),
+    }
+    let audit = engine.audit_query(&AuditFilter::default()).unwrap();
+    assert!(
+        !serde_json::to_string(&audit).unwrap().contains("'a,b'"),
+        "the query text isn't logged"
+    );
+    engine.disconnect(&s.id).await.unwrap();
+}
+
+/// A recorded terminal writes a .cast file with the output, listed and readable.
+#[tokio::test]
+async fn terminal_recording_writes_a_cast_file() {
+    let Some(e) = env() else { return };
+    let Some(input) = key_profile(&e) else { return };
+    let dir = tempfile::tempdir().unwrap();
+    orbital_core::recording::set_dir(dir.path().to_path_buf());
+    let engine = engine();
+    let p = engine.create_profile(input).unwrap();
+    let s = connect(&engine, &p.id, None).await;
+    let tid = engine
+        .open_recorded_terminal(&s.id, 100, 30, Some("/tmp".into()), false, Default::default(), |_| {})
+        .await
+        .unwrap();
+    engine.terminal_write(&tid, b"echo ORBITAL_$((40+2))\n").await.unwrap();
+    engine.terminal_resize(&tid, 120, 40).await.unwrap();
+    let mut found = false;
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let list = engine.recordings().unwrap();
+        if let Some(r) = list.first() {
+            if engine.read_recording(&r.name).unwrap().contains("ORBITAL_42") {
+                found = true;
+                break;
+            }
+        }
+    }
+    engine.terminal_close(&tid).await.unwrap();
+    assert!(found, "the output reached the recording");
+    let r = &engine.recordings().unwrap()[0];
+    assert!(engine.read_recording(&r.name).unwrap().contains("\"120x40\""));
+    engine.delete_recording(&r.name).unwrap();
+    assert!(engine.recordings().unwrap().is_empty());
+    engine.disconnect(&s.id).await.unwrap();
+}

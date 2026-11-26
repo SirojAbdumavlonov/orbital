@@ -50,6 +50,9 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 
+#[path = "engine_advanced.rs"]
+mod advanced;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
@@ -3771,10 +3774,12 @@ impl Engine {
     }
 
     pub async fn terminal_resize(&self, tid: &str, cols: u32, rows: u32) -> Result<()> {
+        crate::recording::resized(tid, cols, rows);
         self.terminal(tid).await?.resize(cols, rows).await
     }
 
     pub async fn terminal_close(&self, tid: &str) -> Result<()> {
+        crate::recording::finish(tid);
         if let Some((sid, t)) = self.terminals.lock().await.remove(tid) {
             t.close().await;
             if let Ok(s) = self.session(&sid).await {

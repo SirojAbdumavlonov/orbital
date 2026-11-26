@@ -235,6 +235,7 @@ function TerminalPane({ sid, tab, visible, label, area }: { sid: string; tab: Te
   const fitRef = useRef<FitAddon>();
   const termRef = useRef<Terminal>();
   const tidRef = useRef<string>();
+  const [recording, setRecording] = useState(false);
   const toast = useStore((x) => x.toast);
   const theme = useResolvedTheme();
   const fontSize = useSettings((x) => x.terminalFontSize);
@@ -312,14 +313,16 @@ function TerminalPane({ sid, tab, visible, label, area }: { sid: string; tab: Te
     try { fit.fit(); } catch { /* hidden */ }
 
     let disposed = false;
+    const recordThis = useSettings.getState().recordTerminals;
     api
       .openTerminal(sid, term.cols || 100, term.rows || 30, tab.cwd, tab.root, (m) => {
         if (m.type === "data") term.write(decode(m.data));
         else term.write(`\r\n\x1b[2m[session ended${m.code != null ? ` with code ${m.code}` : ""}]\x1b[0m\r\n`);
-      }, tab.launch)
+      }, tab.launch, recordThis)
       .then((tid) => {
         if (disposed) return api.terminalClose(tid);
         tidRef.current = tid;
+        setRecording(recordThis);
         registerTerminal({ id: paneId, tid, label });
         term.focus();
       })
@@ -394,6 +397,7 @@ function TerminalPane({ sid, tab, visible, label, area }: { sid: string; tab: Te
           {broadcasting && <span className="term-broadcast-tag"><Radio size={11} /> typing also goes to {others} other terminal{others === 1 ? "" : "s"}</span>}
         </div>
       )}
+      {recording && <button className="term-rec" title="This terminal is being recorded (output only). Recordings are under Activity log → Terminal recordings." onClick={() => useStore.getState().setGlobalView("recordings")}>● REC</button>}
       <div className="term-xterm" ref={host} />
       {suggestOn && (
         <div className="term-suggest" aria-label="Suggested commands">

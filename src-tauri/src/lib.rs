@@ -199,6 +199,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             watch_mouse_buttons(app.handle().clone());
             let dir = data_dir(app)?;
+            orbital_core::recording::set_dir(dir.join("recordings"));
             tracing::info!("data folder: {}", dir.display());
             // Only the installed app takes over data from earlier folders; a
             // development build starts with its own, empty one.
@@ -358,6 +359,15 @@ pub fn run() {
             commands::container_action,
             commands::run_command,
             commands::open_terminal,
+            commands::kernel_report,
+            commands::kernel_apply,
+            commands::harden_state,
+            commands::harden_ssh,
+            commands::security_audit,
+            commands::sql_query,
+            commands::recordings,
+            commands::read_recording,
+            commands::delete_recording,
             commands::open_tunnel,
             commands::close_tunnel,
             commands::list_tunnels,

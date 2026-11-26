@@ -45,6 +45,8 @@ const BUILTIN: Record<string, { name: string; hint: string; icon: typeof Gauge }
   network: { name: "Network check", hint: "Can the server reach a host, port or URL? Ping, DNS, port, HTTP, traceroute", icon: Radar },
   users: { name: "Users", hint: "Accounts, groups, sudo and SSH keys", icon: UsersIcon },
   sshkeys: { name: "SSH keys", hint: "Who can sign in with a key; make and install keys", icon: KeyRound },
+  secaudit: { name: "Security audit", hint: "Scan for root accounts, setuid programs, open files, exposed databases", icon: ShieldCheck },
+  kernel: { name: "Kernel tuning", hint: "sysctl settings with recommendations for servers; apply in one step", icon: Cpu },
 };
 const tabName = (id: string, t?: DetectedTool) => t?.name ?? BUILTIN[id]?.name ?? (id === "docker" ? "Docker" : id);
 
