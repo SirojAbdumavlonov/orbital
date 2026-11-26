@@ -13,7 +13,7 @@ export const isSsh = (s: { info: { protocol?: string } }) => (s.info.protocol ??
 export type Tab = "files" | "services" | "monitor" | "terminal" | "activity" | `tool:${string}`;
 
 /** Tabs offered on every server, whatever software it runs. */
-export const ALWAYS_TOOLS = ["checkup", "notes", "logins", "logsearch", "stacks", "agent", "updates", "cleanup", "backups", "deploy", "logs", "tunnels", "ports", "network", "users", "sshkeys", "secaudit", "kernel"];
+export const ALWAYS_TOOLS = ["checkup", "notes", "logins", "logsearch", "stacks", "agent", "updates", "cleanup", "backups", "deploy", "logs", "tunnels", "ports", "network", "users", "sshkeys", "secaudit", "kernel", "processes", "disks", "packages"];
 
 export interface OpenFile {
   path: string;
@@ -66,7 +66,7 @@ export interface SessionState {
 export type Loc = { sid: string; tab: Tab; cwd?: string } | { global: NonNullable<State["globalView"]> } | null;
 
 /** Software with its own tab view (the rest get the generic one). */
-export const DEDICATED_TOOLS = ["checkup", "agent", "updates", "cleanup", "docker", "nginx", "ufw", "fail2ban", "certbot", "sshd", "ports", "postgresql", "mysql", "mongodb", "redis", "apache", "haproxy", "users", "cron", "deploy", "logs", "tunnels", "network", "sshkeys", "backups", "notes", "stacks", "logins", "logsearch", "secaudit", "kernel"];
+export const DEDICATED_TOOLS = ["checkup", "agent", "updates", "cleanup", "docker", "nginx", "ufw", "fail2ban", "certbot", "sshd", "ports", "postgresql", "mysql", "mongodb", "redis", "apache", "haproxy", "users", "cron", "deploy", "logs", "tunnels", "network", "sshkeys", "backups", "notes", "stacks", "logins", "logsearch", "secaudit", "kernel", "processes", "disks", "packages"];
 
 /** Profile fields that only take effect on a new connection. */
 const CONNECTION_FIELDS = ["host", "port", "username", "authMethod", "keyPath", "sudoMode", "initialPath", "jumpProfileId"] as const;
@@ -102,7 +102,7 @@ interface State {
   editing: Profile | "new" | null;
   /** The "Import from ~/.ssh/config" dialog is open. */
   importingSsh: boolean;
-  globalView: "activity" | "knownHosts" | "settings" | "domains" | "uptime" | "snippets" | "changes" | "help" | "feedback" | "recordings" | null;
+  globalView: "activity" | "knownHosts" | "settings" | "domains" | "uptime" | "snippets" | "changes" | "help" | "feedback" | "recordings" | "tls" | null;
   /** Back and forward history, like a browser. */
   navBack: Loc[];
   navFwd: Loc[];

@@ -68,6 +68,8 @@ After that Orbital updates itself, without any warning: it checks for a new vers
 | **SSH hardening and security audit** | One-click sshd fixes with lock-out checks, and a read-only scan for root accounts, setuid programs, world-writable files, exposed databases and loose key files. |
 | **Kernel tuning** | Recommended sysctl settings with current values, applied through one file that's rolled back if the kernel refuses it. |
 | **Terminal recordings** | Record what terminals show (not what you type), replay it with speed and seek, save as asciinema .cast. |
+| **Processes, disks and packages** | A process tree with signals and priority; disks, filesystems, inodes, fstab and SMART health; installed packages, repository search, install and remove with a dry run first. |
+| **Certificate check and timers** | Check any TLS server's certificate from your computer; schedule jobs as systemd timers with the next run shown as you type. |
 | **Snippets** | Saved commands with blanks to fill in, run as root or not on one server or many at once, with each server's output side by side and every run in the activity log. |
 | **Cron** | Every scheduled job on the server in plain words ("every weekday at 09:00"), when it runs next and when it last ran. Add, edit, pause and delete jobs, or run one now and see its output. Systemd timers and the daily/weekly scripts too. |
 | **Users** | Add server accounts with every option (password and/or SSH keys, sudo and other groups, shell, home, UID, expiry), change their groups, password and keys, lock or delete them. Orbital won't lock you out of your own account. |

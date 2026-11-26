@@ -2960,3 +2960,108 @@ async fn terminal_recording_writes_a_cast_file() {
     assert!(engine.recordings().unwrap().is_empty());
     engine.disconnect(&s.id).await.unwrap();
 }
+
+/// Processes: the list has sshd and a process we start; its priority can be
+/// lowered and it can be stopped; PID 1 is refused.
+#[tokio::test]
+async fn processes_list_renice_and_signal() {
+    use orbital_core::procs::Signal;
+    let Some(e) = env() else { return };
+    let Some(input) = key_profile(&e) else { return };
+    let engine = engine();
+    let p = engine.create_profile(input).unwrap();
+    let s = connect(&engine, &p.id, None).await;
+    let started = engine
+        .run_command(&s.id, "nohup sleep 300 >/dev/null 2>&1 & echo $!", false)
+        .await
+        .unwrap();
+    let pid: u32 = started.stdout.trim().parse().unwrap();
+    let list = engine.processes(&s.id).await.unwrap();
+    assert!(list.iter().any(|x| x.name == "sshd" || x.name.starts_with("sshd")), "sshd listed");
+    assert!(list.iter().any(|x| x.pid == pid), "our sleep is listed");
+    let d = engine.process_detail(&s.id, pid).await.unwrap();
+    assert_eq!(d.pid, pid);
+    if cfg!(target_os = "linux") {
+        engine.renice_process(&s.id, pid, 10).await.unwrap();
+        assert_eq!(
+            engine.processes(&s.id).await.unwrap().iter().find(|x| x.pid == pid).unwrap().nice,
+            10
+        );
+    }
+    assert!(matches!(
+        engine.signal_process(&s.id, 1, Signal::Term).await,
+        Err(Error::InvalidInput(_))
+    ));
+    engine.signal_process(&s.id, pid, Signal::Term).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!engine.processes(&s.id).await.unwrap().iter().any(|x| x.pid == pid), "stopped");
+    engine.disconnect(&s.id).await.unwrap();
+}
+
+/// Disks, packages: read on a real system; removing sshd's package is refused.
+#[tokio::test]
+async fn disks_and_packages_read_and_guard() {
+    use orbital_core::packages::PkgAction;
+    let Some(e) = env() else { return };
+    let Some(input) = key_profile(&e) else { return };
+    let engine = engine();
+    let p = engine.create_profile(input).unwrap();
+    let s = connect(&engine, &p.id, None).await;
+    if cfg!(target_os = "linux") {
+        let d = engine.disk_report(&s.id).await.unwrap();
+        assert!(d.filesystems.iter().any(|f| f.mountpoint == "/"), "{d:?}");
+    }
+    match engine.installed_packages(&s.id).await {
+        Err(Error::NotFound(_)) => eprintln!("no apt/dnf here: package checks skipped"),
+        Ok(list) => {
+            assert!(list.iter().any(|x| x.name.contains("ssh")), "an ssh package is installed");
+            assert!(matches!(engine.search_packages(&s.id, "x; id").await, Err(Error::InvalidInput(_))));
+            let ssh = if list.iter().any(|x| x.name == "openssh-server") {
+                "openssh-server"
+            } else {
+                "openssh"
+            };
+            let r = engine.package_change(&s.id, ssh, PkgAction::Remove, false).await;
+            assert!(matches!(r, Err(Error::PreflightFailed { .. })), "{r:?}");
+        }
+        Err(other) => panic!("{other:?}"),
+    }
+    engine.disconnect(&s.id).await.unwrap();
+}
+
+/// Timers: a schedule is checked by systemd, a timer is created, started and removed.
+#[tokio::test]
+async fn systemd_timer_create_and_remove() {
+    use orbital_core::timers::TimerSpec;
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_NO_PASSWORD").is_ok() {
+        return;
+    }
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    if engine.check_schedule(&s.id, "daily").await.is_err() {
+        eprintln!("skipped: no systemd here");
+        return;
+    }
+    assert!(matches!(
+        engine.check_schedule(&s.id, "Fooday 25:99").await,
+        Err(Error::InvalidInput(_))
+    ));
+    let spec = TimerSpec {
+        name: "orbital-it-timer".into(),
+        description: "Orbital test".into(),
+        command: "echo orbital-timer".into(),
+        user: None,
+        schedule: "*-*-* 03:17:00".into(),
+        persistent: false,
+    };
+    engine.create_timer(&s.id, &spec).await.unwrap();
+    let listed = engine
+        .run_command(&s.id, "systemctl list-timers --all --no-pager | grep -c orbital-it-timer", false)
+        .await
+        .unwrap();
+    assert_eq!(listed.stdout.trim(), "1");
+    engine.remove_timer(&s.id, "orbital-it-timer").await.unwrap();
+    assert!(engine.remove_timer(&s.id, "ssh").await.is_err(), "only Orbital's timers");
+    engine.disconnect(&s.id).await.unwrap();
+}

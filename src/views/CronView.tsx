@@ -6,6 +6,7 @@ import { useRemote } from "../lib/remote";
 import { SessionState, useStore } from "../store";
 import { WithServicePane } from "./DatabaseView";
 import { useKept } from "../lib/kept";
+import { NewTimer } from "../components/NewTimer";
 
 /** "in 3 h", "in 12 min", "tomorrow 03:00" — relative to the server's clock. */
 function when(iso: string | null | undefined, nowIso: string | null): string {
@@ -156,6 +157,20 @@ export function CronView({ s }: { s: SessionState }) {
     }
   }
 
+  const [newTimer, setNewTimer] = useState(false);
+  async function removeTimer(unit: string) {
+    const name = unit.replace(/\.timer$/, "");
+    const ok = await confirm({ title: `Remove the timer ${name}?`, body: "It stops, and its .timer and .service files are deleted. Only timers Orbital created can be removed here.", confirmLabel: "Remove", danger: true });
+    if (!ok) return;
+    try {
+      await api.removeTimer(sid, name);
+      toast({ kind: "success", title: `${name} removed` });
+      reload();
+    } catch (e) {
+      toast({ kind: "error", title: "Not removed", body: asApiError(e).message });
+    }
+  }
+
   async function startTimer(unit: string, activates: string) {
     try {
       const rep = await api.serviceAction(sid, activates, "start");
@@ -180,6 +195,7 @@ export function CronView({ s }: { s: SessionState }) {
         <div className="search"><Search size={14} /><input className="input" placeholder="Find a command or user" value={q} onChange={(e) => setQ(e.target.value)} /></div>
         <span className="spacer" />
         {r?.serverNow && <span className="faint" title="Cron uses the server's clock">Server time {clock(r.serverNow).split(" ").pop()}{r.timezone ? ` · ${r.timezone}` : ""}</span>}
+        {r && s.info.hasSystemd && <button className="btn" title="A scheduled job as a systemd timer: output in the journal, missed runs caught up" onClick={() => setNewTimer(true)}><CalendarClock size={13} /> New timer</button>}
         {r && <button className="btn primary" onClick={() => setEditing("new")}><Plus size={13} /> Add job</button>}
         <button className="icon-btn" aria-label="Refresh" onClick={reload}><RefreshCw size={14} className={loading ? "spin" : ""} /></button>
       </div>
@@ -221,7 +237,10 @@ export function CronView({ s }: { s: SessionState }) {
                       <td className="mono faint nowrap">{t.calendar ?? "—"}</td>
                       <td className="faint nowrap" title={t.next ?? ""}>{stamp(t.next)}</td>
                       <td className="faint nowrap" title={t.last ?? ""}>{stamp(t.last)}</td>
-                      <td style={{ textAlign: "right" }}><button className="icon-btn" aria-label={`Run ${t.activates} now`} title={`Start ${t.activates} once now`} onClick={() => startTimer(t.unit, t.activates)}><Zap size={14} /></button></td>
+                      <td style={{ textAlign: "right" }} className="nowrap">
+                        <button className="icon-btn" aria-label={`Run ${t.activates} now`} title={`Start ${t.activates} once now`} onClick={() => startTimer(t.unit, t.activates)}><Zap size={14} /></button>
+                        <button className="icon-btn" aria-label={`Remove ${t.unit}`} title="Remove (only timers Orbital created)" onClick={() => void removeTimer(t.unit)}><Trash2 size={14} /></button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -281,6 +300,7 @@ export function CronView({ s }: { s: SessionState }) {
           <pre className="output" style={{ maxHeight: 420 }}>{[out.o.stdout, out.o.stderr].filter((x) => x.trim()).join("\n") || "The job printed nothing."}</pre>
         </Modal>
       )}
+      {newTimer && <NewTimer s={s} onClose={() => setNewTimer(false)} onDone={() => { setNewTimer(false); reload(); }} />}
     </WithServicePane>
   );
 }

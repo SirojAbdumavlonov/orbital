@@ -1505,3 +1505,92 @@ pub fn read_recording(engine: Eng, name: String) -> R<String> {
 pub fn delete_recording(engine: Eng, name: String) -> R<()> {
     engine.delete_recording(&name)
 }
+
+// ---------- processes, disks, packages, TLS inspector, timers ----------
+
+#[tauri::command]
+pub async fn processes(engine: Eng<'_>, session_id: String) -> R<Vec<orbital_core::procs::Proc>> {
+    engine.processes(&session_id).await
+}
+
+#[tauri::command]
+pub async fn process_detail(engine: Eng<'_>, session_id: String, pid: u32) -> R<orbital_core::procs::ProcDetail> {
+    engine.process_detail(&session_id, pid).await
+}
+
+#[tauri::command]
+pub async fn signal_process(engine: Eng<'_>, session_id: String, pid: u32, signal: orbital_core::procs::Signal) -> R<()> {
+    engine.signal_process(&session_id, pid, signal).await
+}
+
+#[tauri::command]
+pub async fn renice_process(engine: Eng<'_>, session_id: String, pid: u32, nice: i32) -> R<()> {
+    engine.renice_process(&session_id, pid, nice).await
+}
+
+#[tauri::command]
+pub async fn disk_report(engine: Eng<'_>, session_id: String) -> R<orbital_core::disks::DiskReport> {
+    engine.disk_report(&session_id).await
+}
+
+#[tauri::command]
+pub async fn installed_packages(engine: Eng<'_>, session_id: String) -> R<Vec<orbital_core::packages::Package>> {
+    engine.installed_packages(&session_id).await
+}
+
+#[tauri::command]
+pub async fn search_packages(engine: Eng<'_>, session_id: String, term: String) -> R<Vec<orbital_core::packages::Found>> {
+    engine.search_packages(&session_id, &term).await
+}
+
+#[tauri::command]
+pub async fn package_plan(
+    engine: Eng<'_>,
+    session_id: String,
+    name: String,
+    action: orbital_core::packages::PkgAction,
+) -> R<orbital_core::packages::PkgPlan> {
+    engine.package_plan(&session_id, &name, action).await
+}
+
+#[tauri::command]
+pub async fn package_change(
+    engine: Eng<'_>,
+    session_id: String,
+    name: String,
+    action: orbital_core::packages::PkgAction,
+    force: bool,
+    progress: Channel<ProgressEvent>,
+) -> R<ExecOutput> {
+    progress::run_job(
+        progress.id(),
+        sink(progress),
+        engine.package_change(&session_id, &name, action, force),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn tls_inspect(engine: Eng<'_>, host: String, port: u16) -> R<orbital_core::tlsinspect::TlsReport> {
+    engine.tls_inspect(&host, port).await
+}
+
+#[tauri::command]
+pub async fn check_schedule(engine: Eng<'_>, session_id: String, schedule: String) -> R<orbital_core::timers::ScheduleCheck> {
+    engine.check_schedule(&session_id, &schedule).await
+}
+
+#[tauri::command]
+pub async fn create_timer(
+    engine: Eng<'_>,
+    session_id: String,
+    spec: orbital_core::timers::TimerSpec,
+    progress: Channel<ProgressEvent>,
+) -> R<String> {
+    progress::run_job(progress.id(), sink(progress), engine.create_timer(&session_id, &spec)).await
+}
+
+#[tauri::command]
+pub async fn remove_timer(engine: Eng<'_>, session_id: String, name: String) -> R<()> {
+    engine.remove_timer(&session_id, &name).await
+}

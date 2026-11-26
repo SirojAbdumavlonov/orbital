@@ -4,6 +4,14 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Processes** (a tab on every server): every process as a ranked list or a tree of which started which, refreshed every 5 seconds, with CPU, memory, run time and priority. Pick one to see its threads, open files, listening ports, service and working folder, then stop, kill, pause, resume, reload (HUP) or change its priority; PID 1 and sshd are protected.
+- **Disks** (a tab on every server): disks and partitions with sizes, SSD or spinning and SMART health, every filesystem with space and inode use, and what /etc/fstab mounts at boot. Warnings for full disks, running out of inodes, failing disks and fstab entries that aren't mounted.
+- **Packages** (a tab on every server): everything installed (apt or dnf) with versions and sizes, a search of the repositories, and install or remove after a dry run lists every package that would change. Removing anything the server needs to boot or let you in (openssh-server, sudo, systemd, the kernel, …) asks you to type "lock me out".
+- **Certificate check** (⌘K → Certificate check): any HTTPS, mail or other TLS server's certificate, checked from this computer the way a browser would: trusted or why not, who issued it, which names it covers, days left, key, protocol and cipher, with the whole chain.
+- **New timer** (Cron tab): schedule a command as a systemd timer instead of a cron line, with presets (every 15 minutes, daily, weekdays …), systemd checking the schedule and showing the next run as you type, output in the journal and missed runs caught up after a reboot. Timers Orbital made can be removed from the list.
+
+
 ## 1.7.0 (2026-11-26)
 
 ### Added

@@ -287,3 +287,205 @@ impl Engine {
         Ok(())
     }
 }
+
+impl Engine {
+    // ---------- processes ----------
+
+    pub async fn processes(&self, sid: &str) -> Result<Vec<crate::procs::Proc>> {
+        let s = self.session(sid).await?;
+        let (o, _) = s.exec_inspect(crate::procs::LIST_SCRIPT).await?;
+        Ok(crate::procs::parse_list(&o.stdout))
+    }
+
+    pub async fn process_detail(&self, sid: &str, pid: u32) -> Result<crate::procs::ProcDetail> {
+        let s = self.session(sid).await?;
+        let (o, _) = s.exec_inspect(&crate::procs::detail_script(pid)).await?;
+        crate::procs::parse_detail(pid, &o.stdout)
+    }
+
+    /// The process's name, or NotFound when it has ended.
+    async fn process_name(&self, s: &SshSession, pid: u32) -> Result<String> {
+        let (o, _) = s.exec_inspect(&format!("ps -o comm= -p {pid}")).await?;
+        let name = o.stdout.trim().to_string();
+        if name.is_empty() {
+            return Err(Error::NotFound(format!("no process {pid} (it may have ended)")));
+        }
+        Ok(name)
+    }
+
+    /// Send a signal (as root when the profile allows). PID 1 and sshd are protected.
+    pub async fn signal_process(&self, sid: &str, pid: u32, signal: crate::procs::Signal) -> Result<()> {
+        let s = self.session(sid).await?;
+        let name = self.process_name(&s, pid).await?;
+        let target = format!("{name} (PID {pid}) {}", signal.name());
+        crate::procs::check_target(pid, &name, Some(signal))
+            .map_err(|e| self.refused_as(&s, Category::Command, "process.signal", &target, e))?;
+        self.system_exec(
+            &s,
+            "process.signal",
+            &target,
+            &crate::procs::signal_command(pid, signal),
+            APPLY_TIMEOUT,
+        )
+        .await?
+        .check()?;
+        Ok(())
+    }
+
+    /// Change a process's priority (nice -20 … 19).
+    pub async fn renice_process(&self, sid: &str, pid: u32, nice: i32) -> Result<()> {
+        let s = self.session(sid).await?;
+        let name = self.process_name(&s, pid).await?;
+        let target = format!("{name} (PID {pid}) nice {nice}");
+        crate::procs::check_target(pid, &name, None).map_err(|e| self.refused_as(&s, Category::Command, "process.renice", &target, e))?;
+        let cmd = crate::procs::renice_command(pid, nice)?;
+        self.system_exec(&s, "process.renice", &target, &cmd, APPLY_TIMEOUT)
+            .await?
+            .check()?;
+        Ok(())
+    }
+
+    // ---------- disks ----------
+
+    pub async fn disk_report(&self, sid: &str) -> Result<crate::disks::DiskReport> {
+        let s = self.session(sid).await?;
+        let (o, _) = s.exec_inspect(crate::disks::SCRIPT).await?;
+        Ok(crate::disks::parse(&o.stdout))
+    }
+
+    // ---------- packages ----------
+
+    pub async fn installed_packages(&self, sid: &str) -> Result<Vec<crate::packages::Package>> {
+        let s = self.session(sid).await?;
+        let pm = s.package_manager().await?;
+        let o = s.exec(crate::packages::list_command(pm)).await?;
+        Ok(crate::packages::parse_list(pm, &o.stdout))
+    }
+
+    pub async fn search_packages(&self, sid: &str, term: &str) -> Result<Vec<crate::packages::Found>> {
+        let s = self.session(sid).await?;
+        let pm = s.package_manager().await?;
+        let cmd = crate::packages::search_command(pm, term)?;
+        let o = s.exec(&cmd).await?;
+        let installed = crate::packages::parse_list(pm, &s.exec(crate::packages::list_command(pm)).await?.stdout);
+        Ok(crate::packages::parse_search(pm, &o.stdout, &installed))
+    }
+
+    /// A dry run of installing or removing one package.
+    pub async fn package_plan(&self, sid: &str, name: &str, action: crate::packages::PkgAction) -> Result<crate::packages::PkgPlan> {
+        let s = self.session(sid).await?;
+        let pm = s.package_manager().await?;
+        let (o, _) = s.exec_inspect(&crate::packages::plan_command(pm, name, action)?).await?;
+        Ok(crate::packages::parse_plan(pm, &o.stdout))
+    }
+
+    /// Install or remove one package. A removal that takes along something
+    /// the server needs to stay reachable is refused unless `force`.
+    pub async fn package_change(&self, sid: &str, name: &str, action: crate::packages::PkgAction, force: bool) -> Result<ExecOutput> {
+        use crate::packages::PkgAction;
+        let s = self.session(sid).await?;
+        let pm = s.package_manager().await?;
+        let verb = if action == PkgAction::Install {
+            "package.install"
+        } else {
+            "package.remove"
+        };
+        if action == PkgAction::Remove && !force {
+            progress::step("Checking what removing it would take along …");
+            let plan = self.package_plan(sid, name, action).await?;
+            if !plan.essential.is_empty() {
+                let e = Error::PreflightFailed {
+                    check: "your access".into(),
+                    output: format!(
+                        "Removing {name} would also remove {}, which the server needs to boot or to let you in over SSH.",
+                        plan.essential.join(", ")
+                    ),
+                };
+                self.record_error(&s, Category::Command, verb, name, None, &e);
+                return Err(e);
+            }
+        }
+        progress::step(if action == PkgAction::Install {
+            format!("Installing {name} …")
+        } else {
+            format!("Removing {name} …")
+        });
+        let cmd = crate::packages::run_command(pm, name, action)?;
+        let o = self.system_exec(&s, verb, name, &cmd, std::time::Duration::from_secs(900)).await?;
+        o.check()
+    }
+
+    // ---------- TLS inspector ----------
+
+    /// Look at a TLS server's certificate from this computer (nothing on a server changes).
+    pub async fn tls_inspect(&self, host: &str, port: u16) -> Result<crate::tlsinspect::TlsReport> {
+        crate::tlsinspect::inspect(host.trim(), port).await
+    }
+
+    // ---------- timers ----------
+
+    /// What systemd makes of a schedule, and when it would run next.
+    pub async fn check_schedule(&self, sid: &str, schedule: &str) -> Result<crate::timers::ScheduleCheck> {
+        let s = self.session(sid).await?;
+        let o = s.exec(&crate::timers::calendar_command(schedule)?).await?;
+        crate::timers::parse_calendar(&o.stdout, o.exit_code)
+    }
+
+    /// Create (or replace an Orbital-made) systemd timer and start it.
+    pub async fn create_timer(&self, sid: &str, spec: &crate::timers::TimerSpec) -> Result<String> {
+        use crate::timers as t;
+        let s = self.session(sid).await?;
+        let spec = t::validate(spec).map_err(|e| self.refused_as(&s, Category::Service, "timer.create", &spec.name, e))?;
+        progress::step("Checking the schedule …");
+        self.check_schedule(sid, &spec.schedule)
+            .await
+            .map_err(|e| self.refused_as(&s, Category::Service, "timer.create", &spec.name, e))?;
+        let (o, _) = s.exec_inspect(&t::existing_check(&spec.name)).await?;
+        if let Some(path) = o.stdout.lines().find_map(|l| l.strip_prefix("@@theirs ")) {
+            let e = Error::InvalidInput(format!("{path} already exists and wasn't created by Orbital; choose another name"));
+            return Err(self.refused_as(&s, Category::Service, "timer.create", &spec.name, e));
+        }
+        let verify = |path: String| crate::config_edit::Validator {
+            name: "systemd-analyze".into(),
+            command: format!("systemd-analyze verify {}", quote(&path)),
+            stage: crate::config_edit::ValidateStage::PostInstall,
+        };
+        progress::step(format!("Writing {}.service and {}.timer …", spec.name, spec.name));
+        self.audited(&s, Category::Service, "timer.create", Some(&spec.name), None, async {
+            s.safe_write(&t::service_path(&spec.name), &t::render_service(&spec), None, true, None)
+                .await?;
+            s.safe_write(
+                &t::timer_path(&spec.name),
+                &t::render_timer(&spec),
+                Some(verify(t::timer_path(&spec.name))),
+                true,
+                None,
+            )
+            .await
+        })
+        .await?;
+        progress::step("Starting the timer …");
+        let o = self
+            .system_exec(&s, "timer.enable", &spec.name, &t::enable_command(&spec.name), APPLY_TIMEOUT)
+            .await?
+            .check()?;
+        Ok(o.stdout.lines().last().unwrap_or("").trim().to_string())
+    }
+
+    pub async fn remove_timer(&self, sid: &str, name: &str) -> Result<()> {
+        let s = self.session(sid).await?;
+        let probe = crate::timers::TimerSpec {
+            name: name.into(),
+            description: String::new(),
+            command: "true".into(),
+            user: None,
+            schedule: "daily".into(),
+            persistent: false,
+        };
+        let name = crate::timers::validate(&probe)?.name;
+        self.system_exec(&s, "timer.remove", &name, &crate::timers::remove_command(&name), APPLY_TIMEOUT)
+            .await?
+            .check()?;
+        Ok(())
+    }
+}

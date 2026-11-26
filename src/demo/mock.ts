@@ -760,6 +760,58 @@ const uptimeRun = (c: MockCheck, up = true, error?: string) => {
 
 const connCount: Record<string, number> = {};
 
+// ---- processes, disks, packages, TLS, timers ----
+let demoProcs: any[] = [
+  [1, 0, "root", 0, "Ss", 0.0, 0.1, 12000, 3456000, "/sbin/init"], [2, 0, "root", 0, "S", 0, 0, 0, 3456000, "[kthreadd]"],
+  [412, 1, "root", 0, "Ss", 0.1, 0.4, 41000, 3456000, "/lib/systemd/systemd-journald"], [690, 1, "root", 0, "Ss", 0, 0.1, 8000, 3456000, "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups"],
+  [3301, 690, "root", 0, "Ss", 0, 0.1, 9000, 1800, "sshd: deploy [priv]"], [3320, 3301, "deploy", 0, "S", 0, 0.1, 6000, 1800, "sshd: deploy@pts/0"], [3321, 3320, "deploy", 0, "Ss", 0, 0.1, 5000, 1800, "-bash"],
+  [812, 1, "root", 0, "Ss", 0.0, 0.2, 14000, 172800, "nginx: master process /usr/sbin/nginx -g daemon on; master_process on;"],
+  [813, 812, "www-data", 0, "S", 1.8, 0.6, 52000, 172800, "nginx: worker process"], [814, 812, "www-data", 0, "S", 1.1, 0.6, 51000, 172800, "nginx: worker process"],
+  [1201, 1, "www-data", 0, "Ssl", 23.5, 4.8, 780000000 / 1024, 7200, "/usr/bin/node /srv/shop/api/server.js --port 8081"],
+  [1202, 1201, "www-data", 0, "Sl", 4.2, 1.1, 180000, 7200, "/usr/bin/node /srv/shop/api/worker.js"],
+  [1450, 1, "postgres", 0, "Ss", 2.1, 3.2, 520000, 345600, "/usr/lib/postgresql/16/bin/postgres -D /var/lib/postgresql/16/main"],
+  [1460, 1450, "postgres", 0, "Ss", 0.3, 0.4, 61000, 345600, "postgres: 16/main: checkpointer"], [1461, 1450, "postgres", 0, "Ss", 0.1, 0.2, 30000, 345600, "postgres: 16/main: walwriter"],
+  [1500, 1, "redis", 0, "Ssl", 0.6, 1.0, 160000, 345600, "/usr/bin/redis-server 127.0.0.1:6379"],
+  [2210, 1, "root", 10, "SNl", 61.0, 2.5, 410000, 900, "/usr/bin/python3 /opt/backup/compress.py --level 9"],
+].map(([pid, ppid, user, nice, state, cpu, mem, rssKb, el, args]: any[]) => ({ pid, ppid, user, nice, state, cpu, mem, rssBytes: Math.round(rssKb * 1024), elapsedSecs: el, args, name: String(args).startsWith("[") ? args : String(args).split(" ")[0].split("/").pop()!.replace(/:$/, "") }));
+const DISKS = {
+  devices: [
+    { name: "sda", kind: "disk", size: 80 * 2 ** 30, fstype: null, mountpoint: null, model: "QEMU HARDDISK", rotational: false, parent: null, healthy: null },
+    { name: "sda1", kind: "part", size: 79 * 2 ** 30, fstype: "ext4", mountpoint: "/", model: null, rotational: false, parent: "sda", healthy: null },
+    { name: "sda15", kind: "part", size: 106 * 2 ** 20, fstype: "vfat", mountpoint: "/boot/efi", model: null, rotational: false, parent: "sda", healthy: null },
+    { name: "sdb", kind: "disk", size: 200 * 2 ** 30, fstype: "ext4", mountpoint: "/var/lib/docker", model: "Volume", rotational: false, parent: null, healthy: true },
+  ],
+  filesystems: [
+    { source: "/dev/sda1", fstype: "ext4", mountpoint: "/", size: 79 * 2 ** 30, used: 31 * 2 ** 30, inodes: 5_000_000, inodesUsed: 640_000 },
+    { source: "/dev/sda15", fstype: "vfat", mountpoint: "/boot/efi", size: 106 * 2 ** 20, used: 6 * 2 ** 20, inodes: null, inodesUsed: null },
+    { source: "/dev/sdb", fstype: "ext4", mountpoint: "/var/lib/docker", size: 200 * 2 ** 30, used: 182 * 2 ** 30, inodes: 13_000_000, inodesUsed: 12_100_000 },
+  ],
+  fstab: [
+    { source: "UUID=4f2c…", mountpoint: "/", fstype: "ext4", options: "discard,errors=remount-ro", mounted: true },
+    { source: "/dev/sdb", mountpoint: "/var/lib/docker", fstype: "ext4", options: "defaults,nofail", mounted: true },
+    { source: "203.0.113.50:/backups", mountpoint: "/mnt/backups", fstype: "nfs", options: "defaults,_netdev", mounted: false },
+  ],
+  smartMissing: false,
+  warnings: ["/var/lib/docker is 91% full", "/var/lib/docker has used 93% of its inodes: it can't create new files even with space left (often millions of small cache or session files)", "203.0.113.50:/backups should be mounted at /mnt/backups (in /etc/fstab) but isn't"],
+};
+let demoPkgs: any[] = [
+  ["bash", "5.2.21-2ubuntu4", 1650, "GNU Bourne Again SHell"], ["certbot", "2.9.0-1", 120, "automatically configure HTTPS using Let's Encrypt"], ["curl", "8.5.0-2ubuntu10.5", 450, "command line tool for transferring data with URL syntax"],
+  ["docker-ce", "5:27.3.1-1~ubuntu.24.04", 102000, "Docker: the open-source application container engine"], ["fail2ban", "1.0.2-3ubuntu0.1", 2100, "ban hosts that cause multiple authentication errors"],
+  ["git", "1:2.43.0-1ubuntu7.1", 23000, "fast, scalable, distributed revision control system"], ["nginx", "1.24.0-2ubuntu7.1", 1300, "small, powerful, scalable web/proxy server"],
+  ["nodejs", "20.18.0-1nodesource1", 210000, "Node.js event-based server-side javascript engine"], ["openssh-server", "1:9.6p1-3ubuntu13.5", 2000, "secure shell (SSH) server"],
+  ["postgresql-16", "16.4-0ubuntu0.24.04.2", 52000, "The World's Most Advanced Open Source Relational Database"], ["redis-server", "5:7.0.15-1build2", 300, "Persistent key-value database with network interface"],
+  ["sudo", "1.9.15p5-3ubuntu5", 4300, "Provide limited super user privileges to specific users"], ["ufw", "0.36.2-6", 880, "program for managing a Netfilter firewall"], ["vim", "2:9.1.0016-1ubuntu7.3", 4000, "Vi IMproved - enhanced vi editor"],
+].map(([name, version, kb, summary]: any[]) => ({ name, version, size: kb * 1024, summary }));
+const REPO = [["htop", "interactive processes viewer"], ["btop", "Modern and colorful command line resource monitor"], ["ncdu", "ncurses disk usage viewer"], ["nethogs", "Net top tool grouping bandwidth per process"], ["smartmontools", "control and monitor storage systems using S.M.A.R.T."], ["iotop", "simple top-like I/O monitor"], ["glances", "CLI curses based monitoring tool"]];
+const demoTls = (host: string, port: number) => {
+  const now = Math.floor(Date.now() / 1000);
+  const self = host.includes("staging") || host.includes("internal");
+  const expiring = host.startsWith("grafana");
+  const leaf = { subject: `CN=${host}`, commonName: host, issuer: self ? `CN=${host}` : "C=US, O=Let's Encrypt, CN=R11", names: self ? [host] : [host, `www.${host.replace(/^www\./, "")}`], notBefore: now - 80 * 86400, notAfter: now + (expiring ? 9 : self ? 300 : 61) * 86400, daysLeft: expiring ? 9 : self ? 300 : 61, serial: "04:3a:9f:12:c8:77:1e:5b:0d:aa:91:3c:6f:02:8e:b4", key: self ? "RSA 2048" : "ECDSA P-256", selfSigned: self };
+  const chain = self ? [leaf] : [leaf, { subject: "C=US, O=Let's Encrypt, CN=R11", commonName: "R11", issuer: "C=US, O=Internet Security Research Group, CN=ISRG Root X1", names: [], notBefore: now - 300 * 86400, notAfter: now + 700 * 86400, daysLeft: 700, serial: "8a:7d:3e:13:d6:2f:30:ef:23:86:bd:29:07:6b:34:f8", key: "RSA 2048", selfSigned: false }];
+  return { host, port, address: "203.0.113.10", trusted: !self, problem: self ? "the server uses a certificate authority's own certificate (typical of a self-signed certificate)" : null, protocol: "TLS 1.3", cipher: "TLS13_AES_256_GCM_SHA384", chain };
+};
+
 // ---- kernel tuning, SSH hardening, security audit, SQL console, recordings ----
 const KERNEL_KNOWN: [string, string, string, string, "eq" | "atLeast" | "atMost", string, string | null, string][] = [
   ["net.ipv4.tcp_syncookies", "Network security", "SYN flood protection", "1", "eq", "Keeps the server answering when it's flooded with half-open connections.", null, "1"],
@@ -1155,6 +1207,53 @@ export function install() {
       }
       case "system_info": return { hostname: "prod-web-01", fqdn: "prod-web-01.example.com", os: "Ubuntu 24.04.1 LTS", kernel: "6.8.0-45-generic", arch: "x86_64", virtualization: "kvm", vendor: "Hetzner", product: "vServer", cpuThreads: 8, bootTime: "2026-10-06 09:14:02", timezone: "Asia/Tashkent", addresses: [{ interface: "eth0", address: "203.0.113.10/32" }, { interface: "eth0", address: "2001:db8::1/64" }, { interface: "docker0", address: "172.17.0.1/16" }], gateway: "172.31.1.1", dns: ["185.12.64.1", "185.12.64.2"], usersLoggedIn: 2, processes: 214, failedUnits: [], updates: 12, securityUpdates: 3, rebootRequired: true, packageManager: "apt", securityModule: "AppArmor, on" };
       case "sshd_report": return sshd;
+      case "processes": await new Promise((r) => setTimeout(r, 250)); return demoProcs.map((p) => ({ ...p, cpu: p.cpu > 1 ? Math.max(0.1, +(p.cpu * (0.8 + Math.random() * 0.4)).toFixed(1)) : p.cpu }));
+      case "process_detail": {
+        const p = demoProcs.find((x) => x.pid === args.pid);
+        if (!p) throw { kind: "NotFound", message: `process ${args.pid} has ended` };
+        const port = p.name === "node" && p.args.includes("server.js") ? ["127.0.0.1:8081"] : p.name === "nginx" && p.ppid === 1 ? ["0.0.0.0:80", "0.0.0.0:443"] : p.name === "postgres" && p.ppid === 1 ? ["127.0.0.1:5432"] : p.name === "redis-server" ? ["127.0.0.1:6379"] : [];
+        return { pid: p.pid, threads: p.state.includes("l") ? 11 : 1, swapBytes: p.name === "node" ? 12 * 2 ** 20 : 0, openFiles: p.name === "node" ? 214 : 12, cwd: p.name === "node" ? "/srv/shop/api" : "/", exe: p.args.startsWith("/") ? p.args.split(" ")[0] : null, unit: p.name === "node" ? "shop-api.service" : p.name === "postgres" ? "postgresql@16-main.service" : p.name === "nginx" ? "nginx.service" : null, listening: port, maxFiles: "1048576" };
+      }
+      case "signal_process": {
+        const p = demoProcs.find((x) => x.pid === args.pid);
+        if (!p) throw { kind: "NotFound", message: `no process ${args.pid}` };
+        if (p.pid === 1) throw { kind: "InvalidInput", message: "PID 1 is the system itself" };
+        if (p.name === "sshd" && args.signal !== "HUP") throw { kind: "InvalidInput", message: "sshd carries this connection; restart or reload ssh from Services instead" };
+        if (args.signal === "TERM" || args.signal === "KILL") { const gone = new Set([p.pid]); let grew = true; while (grew) { grew = false; for (const x of demoProcs) if (gone.has(x.ppid) && !gone.has(x.pid)) { gone.add(x.pid); grew = true; } } demoProcs = demoProcs.filter((x) => !gone.has(x.pid)); }
+        if (args.signal === "STOP") p.state = "T"; if (args.signal === "CONT") p.state = "S";
+        return null;
+      }
+      case "renice_process": { const p = demoProcs.find((x) => x.pid === args.pid); if (p) p.nice = args.nice; return null; }
+      case "disk_report": await new Promise((r) => setTimeout(r, 400)); return JSON.parse(JSON.stringify(DISKS));
+      case "installed_packages": await new Promise((r) => setTimeout(r, 400)); return demoPkgs.map((p) => ({ ...p }));
+      case "search_packages": { await new Promise((r) => setTimeout(r, 500)); const t = String(args.term).toLowerCase(); return REPO.filter(([n, d]) => n.includes(t) || d.toLowerCase().includes(t)).map(([name, summary]) => ({ name, summary, installed: demoPkgs.some((p) => p.name === name) })); }
+      case "package_plan": {
+        await new Promise((r) => setTimeout(r, 500));
+        if (args.action === "install") return { install: args.name === "htop" ? ["libnl-genl-3-200", "htop"] : [args.name], remove: [], text: "", essential: [] };
+        const remove = args.name === "openssh-server" ? ["openssh-server", "ssh"] : args.name === "sudo" ? ["sudo"] : [args.name];
+        return { install: [], remove, text: "", essential: remove.filter((n) => ["openssh-server", "ssh", "sudo"].includes(n)) };
+      }
+      case "package_change": {
+        if (args.action === "remove" && ["openssh-server", "sudo"].includes(args.name) && !args.force) throw { kind: "PreflightFailed", message: "preflight", data: { check: "your access", output: `Removing ${args.name} would also remove ${args.name === "sudo" ? "sudo" : "openssh-server, ssh"}, which the server needs to boot or to let you in over SSH.` } };
+        const ch = args.progress; for (const l of ["Reading package lists... Done", "Building dependency tree... Done", args.action === "install" ? `Setting up ${args.name} ...` : `Removing ${args.name} ...`]) { ch?.onmessage?.({ type: "line", text: l }); await new Promise((r) => setTimeout(r, 350)); }
+        if (args.action === "install") demoPkgs = [...demoPkgs, { name: args.name, version: "3.3.0-4build1", size: 400 * 1024, summary: REPO.find(([n]) => n === args.name)?.[1] ?? "" }].sort((a, b) => a.name.localeCompare(b.name));
+        else demoPkgs = demoPkgs.filter((p) => p.name !== args.name);
+        return { stdout: "", stderr: "", exitCode: 0, durationMs: 1100 };
+      }
+      case "tls_inspect": {
+        await new Promise((r) => setTimeout(r, 600));
+        if (args.host.includes("nothing")) throw { kind: "Other", message: `couldn't connect to ${args.host}:${args.port}: connection refused` };
+        return demoTls(args.host, args.port);
+      }
+      case "check_schedule": {
+        await new Promise((r) => setTimeout(r, 200));
+        const sc = String(args.schedule).trim();
+        if (/foo|25:|\bxx\b/i.test(sc)) throw { kind: "InvalidInput", message: `systemd doesn't understand this schedule: Failed to parse calendar specification '${sc}': Invalid argument` };
+        const norm: Record<string, string> = { hourly: "*-*-* *:00:00", daily: "*-*-* 00:00:00", weekly: "Mon *-*-* 00:00:00", monthly: "*-*-01 00:00:00", "*:0/15": "*-*-* *:00/15:00" };
+        return { normalized: norm[sc] ?? (sc.includes("-") ? sc : `*-*-* ${sc}`), next: "Fri 2026-11-27 03:00:00 UTC" };
+      }
+      case "create_timer": { const ch = args.progress; for (const l of ["Checking the schedule …", `Writing ${args.spec.name}.service and ${args.spec.name}.timer …`, "Starting the timer …"]) { ch?.onmessage?.({ type: "step", text: l }); await new Promise((r) => setTimeout(r, 300)); } return `Fri 2026-11-27 03:00:00 UTC 7h left - - ${args.spec.name}.timer ${args.spec.name}.service`; }
+      case "remove_timer": if (!String(args.name).startsWith("orbital") && args.name !== "nightly-report") throw { kind: "Remote", message: "only timers created by Orbital can be removed here" }; return null;
       case "harden_state": return { includesDropins: true, current: { ...hardenFile }, dropin: "/etc/ssh/sshd_config.d/10-orbital-hardening.conf" };
       case "harden_ssh": {
         await new Promise((r) => setTimeout(r, 700));

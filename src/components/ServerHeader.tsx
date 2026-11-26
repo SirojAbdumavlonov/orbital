@@ -1,4 +1,4 @@
-import { Archive, Bot, FileSearch, Layers, LogIn, NotebookPen, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound, Radar, Download } from "lucide-react";
+import { Archive, Bot, FileSearch, Layers, LogIn, NotebookPen, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound, Radar, Download, ListTree, PackageSearch } from "lucide-react";
 import { Activity, Boxes, Cable, Clock, Cpu, Database, FolderTree, Gauge, Globe, ListChecks, LockKeyhole, Network, PanelRightClose, PanelRightOpen, Plus, RefreshCw, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, asApiError, DetectedTool, InstallOption } from "../lib/api";
@@ -46,6 +46,9 @@ const BUILTIN: Record<string, { name: string; hint: string; icon: typeof Gauge }
   users: { name: "Users", hint: "Accounts, groups, sudo and SSH keys", icon: UsersIcon },
   sshkeys: { name: "SSH keys", hint: "Who can sign in with a key; make and install keys", icon: KeyRound },
   secaudit: { name: "Security audit", hint: "Scan for root accounts, setuid programs, open files, exposed databases", icon: ShieldCheck },
+  processes: { name: "Processes", hint: "Every process as a tree; stop, kill, pause, change priority", icon: ListTree },
+  disks: { name: "Disks", hint: "Devices, partitions, space and inodes, fstab, disk health (SMART)", icon: HardDrive },
+  packages: { name: "Packages", hint: "What's installed; search, install and remove software (apt/dnf)", icon: PackageSearch },
   kernel: { name: "Kernel tuning", hint: "sysctl settings with recommendations for servers; apply in one step", icon: Cpu },
 };
 const tabName = (id: string, t?: DetectedTool) => t?.name ?? BUILTIN[id]?.name ?? (id === "docker" ? "Docker" : id);

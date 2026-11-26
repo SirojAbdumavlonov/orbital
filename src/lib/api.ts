@@ -985,6 +985,24 @@ export interface SshdReport {
   sessions: { user: string; tty: string; since: string; from: string | null }[];
 }
 
+// ---------- processes, disks, packages, TLS inspector, timers ----------
+
+export interface Proc { pid: number; ppid: number; user: string; nice: number; state: string; cpu: number; mem: number; rssBytes: number; elapsedSecs: number; name: string; args: string }
+export interface ProcDetail { pid: number; threads: number | null; swapBytes: number | null; openFiles: number | null; cwd: string | null; exe: string | null; unit: string | null; listening: string[]; maxFiles: string | null }
+export type ProcSignal = "TERM" | "KILL" | "HUP" | "INT" | "STOP" | "CONT" | "USR1" | "USR2";
+export interface BlockDevice { name: string; kind: string; size: number; fstype: string | null; mountpoint: string | null; model: string | null; rotational: boolean; parent: string | null; healthy: boolean | null }
+export interface DiskFilesystem { source: string; fstype: string; mountpoint: string; size: number; used: number; inodes: number | null; inodesUsed: number | null }
+export interface FstabEntry { source: string; mountpoint: string; fstype: string; options: string; mounted: boolean }
+export interface DiskReport { devices: BlockDevice[]; filesystems: DiskFilesystem[]; fstab: FstabEntry[]; smartMissing: boolean; warnings: string[] }
+export interface Package { name: string; version: string; size: number | null; summary: string }
+export interface FoundPackage { name: string; summary: string; installed: boolean }
+export type PkgAction = "install" | "remove";
+export interface PkgPlan { install: string[]; remove: string[]; text: string; essential: string[] }
+export interface CertInfo { subject: string; commonName: string | null; issuer: string; names: string[]; notBefore: number; notAfter: number; daysLeft: number; serial: string; key: string; selfSigned: boolean }
+export interface TlsReport { host: string; port: number; address: string | null; trusted: boolean; problem: string | null; protocol: string | null; cipher: string | null; chain: CertInfo[] }
+export interface TimerSpec { name: string; description: string; command: string; user: string | null; schedule: string; persistent: boolean }
+export interface ScheduleCheck { normalized: string; next: string }
+
 // ---------- kernel tuning, SSH hardening, security audit, SQL console, recordings ----------
 
 export interface KernelSetting {
@@ -1416,6 +1434,21 @@ export const api = {
   terminalResize: (terminalId: string, cols: number, rows: number) => invoke<void>("terminal_resize", { terminalId, cols, rows }),
   terminalClose: (terminalId: string) => invoke<void>("terminal_close", { terminalId }),
 
+  processes: (sessionId: string) => invoke<Proc[]>("processes", { sessionId }),
+  processDetail: (sessionId: string, pid: number) => invoke<ProcDetail>("process_detail", { sessionId, pid }),
+  signalProcess: (sessionId: string, pid: number, signal: ProcSignal) => invoke<void>("signal_process", { sessionId, pid, signal }),
+  reniceProcess: (sessionId: string, pid: number, nice: number) => invoke<void>("renice_process", { sessionId, pid, nice }),
+  diskReport: (sessionId: string) => invoke<DiskReport>("disk_report", { sessionId }),
+  installedPackages: (sessionId: string) => invoke<Package[]>("installed_packages", { sessionId }),
+  searchPackages: (sessionId: string, term: string) => invoke<FoundPackage[]>("search_packages", { sessionId, term }),
+  packagePlan: (sessionId: string, name: string, action: PkgAction) => invoke<PkgPlan>("package_plan", { sessionId, name, action }),
+  /** Install or remove one package; a job. Removing what the server needs is refused unless forced. */
+  packageChange: (sessionId: string, name: string, action: PkgAction, force: boolean, onProgress?: OnProgress) =>
+    invoke<ExecOutput>("package_change", { sessionId, name, action, force, progress: progressChannel(onProgress) }),
+  tlsInspect: (host: string, port: number) => invoke<TlsReport>("tls_inspect", { host, port }),
+  checkSchedule: (sessionId: string, schedule: string) => invoke<ScheduleCheck>("check_schedule", { sessionId, schedule }),
+  createTimer: (sessionId: string, spec: TimerSpec, onProgress?: OnProgress) => invoke<string>("create_timer", { sessionId, spec, progress: progressChannel(onProgress) }),
+  removeTimer: (sessionId: string, name: string) => invoke<void>("remove_timer", { sessionId, name }),
   kernelReport: (sessionId: string) => invoke<KernelReport>("kernel_report", { sessionId }),
   /** Write Orbital's sysctl file with exactly these values (empty removes it) and load it; a job. */
   kernelApply: (sessionId: string, values: Record<string, string>, onProgress?: OnProgress) =>
