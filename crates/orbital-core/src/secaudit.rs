@@ -39,9 +39,25 @@ pub const SCRIPT: &str = r#"export LC_ALL=C
 echo @@uid0; awk -F: '$3 == 0 && $1 != "root" { print $1 }' /etc/passwd 2>/dev/null
 echo @@shadow; if [ -r /etc/shadow ]; then awk -F: '$2 == "" { print $1 }' /etc/shadow; else echo @@unreadable; fi
 echo @@perms; stat -c '%a %U %n' /etc/shadow /etc/gshadow /etc/passwd /etc/sudoers 2>/dev/null
-echo @@suid; find /usr /bin /sbin /opt /srv /home /var /tmp -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | head -n 300
-echo @@wwfiles; find /etc /usr /opt /srv /var/www -xdev -type f -perm -0002 2>/dev/null | head -n 50
-echo @@wwdirs; find / -xdev -type d -perm -0002 ! -perm -1000 2>/dev/null | head -n 50
+T=$(mktemp -d 2>/dev/null) || { T=/tmp/orbital-audit.$$; mkdir -p "$T"; }
+lim() {
+  if command -v timeout >/dev/null 2>&1; then timeout 25 "$@"; return $?; fi
+  "$@" & p=$!; (sleep 25; kill $p) >/dev/null 2>&1 & k=$!
+  wait $p; r=$?; kill $k 2>/dev/null; [ $r -ge 128 ] && return 124; return $r
+}
+scan() { n=$1; shift; lim find "$@" > "$T/$n" 2>/dev/null; [ $? -eq 124 ] && : > "$T/$n.cut"; }
+set -f
+PR='( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path /snap -o -path /var/lib/docker -o -path /var/lib/containerd -o -path /var/lib/containers -o -path /var/cache -o -path /usr/share -o -path /usr/include -o -path /usr/src -o -path */node_modules -o -path */.cache -o -path */.git ) -prune -o'
+scan suid /usr /bin /sbin /opt /srv /home /var /tmp -xdev $PR -type f \( -perm -4000 -o -perm -2000 \) -print &
+scan wwfiles /etc /usr /opt /srv /var/www -xdev $PR -type f -perm -0002 -print &
+scan wwdirs / -xdev $PR -type d -perm -0002 ! -perm -1000 -print &
+wait
+set +f
+echo @@suid; head -n 300 "$T/suid" 2>/dev/null
+echo @@wwfiles; head -n 50 "$T/wwfiles" 2>/dev/null
+echo @@wwdirs; head -n 50 "$T/wwdirs" 2>/dev/null
+echo @@cut; for n in suid wwfiles wwdirs; do [ -e "$T/$n.cut" ] && echo "$n"; done
+rm -rf "$T"
 echo @@nopasswd; grep -rhsE '^[^#]*NOPASSWD' /etc/sudoers /etc/sudoers.d 2>/dev/null | head -n 20
 echo @@docker; getent group docker 2>/dev/null | cut -d: -f4
 echo @@listen; (ss -Htln 2>/dev/null || netstat -tln 2>/dev/null | tail -n +3) | awk '{ print $4 }'
@@ -335,6 +351,26 @@ pub fn parse(out: &str, root: bool) -> AuditReport {
         ));
     }
 
+    let cut: Vec<String> = section(out, "cut")
+        .iter()
+        .map(|n| match *n {
+            "suid" => "setuid programs",
+            "wwfiles" => "world-writable files",
+            "wwdirs" => "shared folders",
+            other => other,
+        })
+        .map(str::to_string)
+        .collect();
+    if !cut.is_empty() {
+        fs.push(f(
+            "scan-cut",
+            Level::Info,
+            "Some file checks stopped early",
+            "These scans took longer than 25 seconds on this disk and were stopped; what they found so far is shown above. Big data folders (Docker, caches) are skipped on purpose.",
+            cut,
+        ));
+    }
+
     fs.sort_by_key(|x| x.level);
     AuditReport {
         findings: fs,
@@ -419,5 +455,14 @@ deploy,anna
     fn script_is_valid_sh() {
         let o = std::process::Command::new("sh").arg("-n").arg("-c").arg(SCRIPT).output().unwrap();
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+
+    #[test]
+    fn says_which_scans_were_cut_short() {
+        let r = parse("@@uid0\n@@shadow\n@@perms\n@@suid\n/usr/bin/sudo\n@@wwfiles\n@@wwdirs\n@@cut\nsuid\nwwdirs\n@@nopasswd\n@@docker\n\n@@listen\n@@keys\n@@end\n", true);
+        let c = by(&r, "scan-cut");
+        assert_eq!(c.level, Level::Info);
+        assert_eq!(c.items, ["setuid programs", "shared folders"]);
+        assert!(parse("@@suid\n@@cut\n@@end\n", true).findings.iter().all(|x| x.id != "scan-cut"));
     }
 }

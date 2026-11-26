@@ -4,6 +4,10 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Fixed
+- **Changing a process's priority or stopping it asked for a sudo password**: for your own processes it now runs as you, and uses sudo only when the server refuses.
+- **The security audit could time out on big disks**: its file scans now skip Docker data, caches and other bulky folders, run side by side and stop after 25 seconds each. The report says when one was cut short.
+
 ## 1.8.0 (2026-11-26)
 
 ### Added

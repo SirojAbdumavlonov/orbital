@@ -320,16 +320,22 @@ impl Engine {
         let target = format!("{name} (PID {pid}) {}", signal.name());
         crate::procs::check_target(pid, &name, Some(signal))
             .map_err(|e| self.refused_as(&s, Category::Command, "process.signal", &target, e))?;
-        self.system_exec(
-            &s,
-            "process.signal",
-            &target,
-            &crate::procs::signal_command(pid, signal),
-            APPLY_TIMEOUT,
-        )
-        .await?
-        .check()?;
+        self.user_then_root(&s, "process.signal", &target, &crate::procs::signal_command(pid, signal))
+            .await?
+            .check()?;
         Ok(())
+    }
+
+    /// Run as the login user first (their own processes need no sudo, so no
+    /// sudo password is asked for); only when that's refused and the profile
+    /// allows elevation, again with sudo. Recorded either way.
+    async fn user_then_root(&self, s: &SshSession, action: &str, target: &str, cmd: &str) -> Result<ExecOutput> {
+        let o = s.exec_with_input(cmd, None, APPLY_TIMEOUT).await?;
+        if o.ok() || !s.elevation_needed() {
+            self.record_exec(s, Category::Command, action, target, cmd, &o);
+            return Ok(o);
+        }
+        self.system_exec(s, action, target, cmd, APPLY_TIMEOUT).await
     }
 
     /// Change a process's priority (nice -20 … 19).
@@ -339,9 +345,7 @@ impl Engine {
         let target = format!("{name} (PID {pid}) nice {nice}");
         crate::procs::check_target(pid, &name, None).map_err(|e| self.refused_as(&s, Category::Command, "process.renice", &target, e))?;
         let cmd = crate::procs::renice_command(pid, nice)?;
-        self.system_exec(&s, "process.renice", &target, &cmd, APPLY_TIMEOUT)
-            .await?
-            .check()?;
+        self.user_then_root(&s, "process.renice", &target, &cmd).await?.check()?;
         Ok(())
     }
 
