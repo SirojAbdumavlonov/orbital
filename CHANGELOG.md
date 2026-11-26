@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.7.0 (2026-11-26)
+
 ### Added
 - **SQL console**: run a query against any PostgreSQL or MySQL/MariaDB database, on the server or in one of its containers, from the Query button in the database tab. Results come back as a table you can copy into a spreadsheet; read-only by default, so the database itself refuses changes until you allow them. ⌘↵ runs it, and recent queries are kept per database. The activity log records each query's kind, size and fingerprint, never its text.
 - **One-click SSH hardening**: the SSH server tab's Harden button fixes root login, password login, attempts per connection, X11 forwarding and the login time in one step. The settings go into Orbital's own file in sshd_config.d, checked with sshd -t before sshd reloads (open connections stay); changes that would lock this connection out need you to type "lock me out", and one click removes the file again.
