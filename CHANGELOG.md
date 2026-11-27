@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.9.0 (2026-11-27)
+
 ### Added
 - **Alerts on Telegram, by email or through the AI agent** (Settings → Monitoring → Also send alerts to): health and uptime alerts go out the moment they happen, to a Telegram bot of your own, any SMTP mailbox, or the AI agent's bot on one of your servers. Pick which alerts each one gets, send a test, and turn one off without deleting it. Tokens and passwords stay encrypted on this computer.
 
