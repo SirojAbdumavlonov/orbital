@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.10.0 (2026-11-27)
+
 ### Added
 - **One date range for all monitoring** (Monitor, Home and Uptime): pick the last hour, 6 hours, a day, 7 days, 30 days or your own dates once, and every chart follows it. History is now kept 30 days (it was 24 hours) and includes the load and network traffic; what Orbital had recorded before is kept.
 - **See any moment in history**: point at Monitor's charts to see that minute's numbers, the changes Orbital made then and the busiest programs at the time; click to keep it. Only program names are recorded, never their arguments, which can hold passwords.
