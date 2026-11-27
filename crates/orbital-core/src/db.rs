@@ -154,6 +154,19 @@ const MIGRATIONS: &[&str] = &[
         updated_at TEXT NOT NULL
     );
     "#,
+    // v8: where alerts go besides Orbital's window (Telegram, email, the AI agent).
+    // Bot tokens and SMTP passwords are in the vault, never here.
+    r#"
+    CREATE TABLE notify_channels (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        config TEXT NOT NULL,
+        events TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+    );
+    "#,
 ];
 
 impl Database {

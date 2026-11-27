@@ -1023,6 +1023,39 @@ pub fn save_text(path: String, text: String) -> R<()> {
 
 // ---------- DNS ----------
 
+// ---------- notifications elsewhere (Telegram, email, the AI agent) ----------
+
+#[tauri::command]
+pub fn notify_channels(engine: Eng) -> R<Vec<orbital_core::notify::Channel>> {
+    engine.notify_channels()
+}
+
+#[tauri::command]
+pub fn save_notify_channel(engine: Eng, id: Option<String>, input: orbital_core::notify::ChannelInput) -> R<orbital_core::notify::Channel> {
+    engine.save_notify_channel(id.as_deref(), &input)
+}
+
+#[tauri::command]
+pub fn delete_notify_channel(engine: Eng, id: String) -> R<()> {
+    engine.delete_notify_channel(&id)
+}
+
+#[tauri::command]
+pub async fn test_notify_channel(engine: Eng<'_>, id: String) -> R<()> {
+    engine.test_notify_channel(&id).await
+}
+
+#[tauri::command]
+pub async fn telegram_lookup(engine: Eng<'_>, token: String) -> R<orbital_core::notify::TelegramBot> {
+    engine.telegram_lookup(&token).await
+}
+
+/// A health alert found by the UI, sent on to the channels that take it.
+#[tauri::command]
+pub async fn send_alert(engine: Eng<'_>, alert: orbital_core::notify::Alert) -> R<Vec<orbital_core::notify::SendResult>> {
+    Ok(engine.send_alert(&alert).await)
+}
+
 #[tauri::command]
 pub fn dns_accounts(engine: Eng) -> R<Vec<DnsAccount>> {
     engine.dns_accounts()

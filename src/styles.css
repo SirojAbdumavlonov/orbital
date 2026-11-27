@@ -115,7 +115,8 @@ input, textarea, select, button { font: inherit; color: inherit; }
 /* With the sidebar hidden, its controls float beside the window buttons and the header makes room. */
 .float-nav { position: fixed; top: 0; left: var(--lights-w); height: 52px; z-index: 40; display: flex; align-items: center; gap: 2px; pointer-events: none; }
 .float-nav > * { pointer-events: auto; }
-.app.no-sidebar .header-top, .app.no-sidebar .session-strip { padding-left: calc(var(--lights-w) + 102px); }
+/* Only the header's top row makes room for the window buttons; a title row under the server strip lines up with the tabs. */
+.app.no-sidebar .header > :first-child { padding-left: calc(var(--lights-w) + 102px); }
 .app.no-sidebar .main > .empty, .app.no-sidebar .welcome { padding-top: 52px; }
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .drag { -webkit-app-region: drag; }
@@ -1244,3 +1245,21 @@ kbd { font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border: 1px
 .tls-verdict > div { flex: 1; display: flex; flex-direction: column; gap: 3px; }
 .tls-cert { border: 1px solid var(--slate-4); border-radius: var(--radius-s); margin-bottom: 10px; }
 .tls-cert-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px 0; flex-wrap: wrap; }
+
+/* Settings → alerts to Telegram, email or the agent (components/NotifyChannels.tsx) */
+.setting.setting-block { flex-direction: column; align-items: stretch; gap: 10px; }
+.notify { display: flex; flex-direction: column; gap: 8px; }
+.notify-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--slate-4); border-radius: var(--radius-m); background: var(--slate-1); }
+.notify-row.off { opacity: .6; }
+.notify-icon { color: var(--ink-2); flex: none; }
+.notify-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.notify-text b { font-weight: 500; color: var(--ink); }
+.notify-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notify-events { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12.5px; }
+.notify-add { display: flex; gap: 8px; flex-wrap: wrap; }
+.notify-empty, .notify-note { margin: 0; font-size: 12.5px; }
+.notify-steps { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--ink-2); display: flex; flex-direction: column; gap: 4px; }
+.field-row { display: flex; gap: 10px; }
+.field-row > .grow { flex: 1; min-width: 0; }
+.row-input { display: flex; gap: 8px; }
+.row-input > .input { flex: 1; min-width: 0; }

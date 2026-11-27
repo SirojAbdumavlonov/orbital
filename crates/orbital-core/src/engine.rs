@@ -52,6 +52,8 @@ use tokio::sync::{Mutex, RwLock};
 
 #[path = "engine_advanced.rs"]
 mod advanced;
+#[path = "engine_notify.rs"]
+mod notify_calls;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,6 +100,9 @@ pub struct Engine {
     uptime: std::sync::Mutex<uptime::Runtime>,
     uptime_listener: std::sync::RwLock<Option<uptime::Listener>>,
     http: std::sync::OnceLock<reqwest::Client>,
+    /// Telegram's Bot API; tests point it at a local stand-in.
+    telegram_base: std::sync::RwLock<String>,
+    notify_brake: crate::notify::Brake,
 }
 
 /// What a deploy reports while it runs.
@@ -155,6 +160,8 @@ impl Engine {
             uptime: Default::default(),
             uptime_listener: Default::default(),
             http: Default::default(),
+            telegram_base: std::sync::RwLock::new("https://api.telegram.org".into()),
+            notify_brake: Default::default(),
         }
     }
 
@@ -3948,8 +3955,31 @@ impl Engine {
                 change,
                 error: r.error.clone(),
             });
+            // And to Telegram, email or the agent, when set up.
+            let alert = match change {
+                Change::WentDown => crate::notify::Alert {
+                    kind: crate::notify::AlertKind::Uptime,
+                    level: crate::notify::Level::Bad,
+                    title: format!("{} is down", c.name),
+                    body: format!("{}\n{}", c.target, r.error.clone().unwrap_or_else(|| "The check failed.".into())),
+                },
+                Change::Recovered => crate::notify::Alert {
+                    kind: crate::notify::AlertKind::Uptime,
+                    level: crate::notify::Level::Ok,
+                    title: format!("{} is back up", c.name),
+                    body: c.target.clone(),
+                },
+            };
+            self.send_alert(&alert).await;
         }
         if let Some(message) = warn {
+            self.send_alert(&crate::notify::Alert {
+                kind: crate::notify::AlertKind::Uptime,
+                level: crate::notify::Level::Warn,
+                title: format!("{}: certificate expiring", c.name),
+                body: message.clone(),
+            })
+            .await;
             self.uptime_emit(UptimeEvent::CertWarning {
                 check_id: c.id.clone(),
                 name: c.name.clone(),

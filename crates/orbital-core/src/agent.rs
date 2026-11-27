@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 /// The agent itself, uploaded to `/opt/orbital-agent/agent.py`.
 pub const AGENT_PY: &str = include_str!("agent/orbital_agent.py");
 /// Its version, as the agent reports it (kept equal to `VERSION` in the script).
-pub const VERSION: &str = "1.3.3";
+pub const VERSION: &str = "1.4.0";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

@@ -2,6 +2,7 @@ import { Download, Monitor, Moon, RefreshCw, RotateCcw, Sun } from "lucide-react
 import { isMac, isWindows, KEYS } from "../lib/platform";
 import { useEffect, useState } from "react";
 import { confirm } from "../components/ui";
+import { NotifyChannels } from "../components/NotifyChannels";
 import { ACCENTS, DEFAULT_THRESHOLDS, ThemePref, useResolvedTheme, useSettings } from "../lib/settings";
 import { bytes } from "../lib/format";
 import { useUpdates } from "../lib/updates";
@@ -163,6 +164,13 @@ export function SettingsView() {
           <Row title="Health alerts" hint="A notification when a connected server needs attention for a minute or more (a disk nearly full, memory or load high) or a service fails, and when it's back to normal. Mute one server from its card on Home.">
             <input type="checkbox" className="switch" checked={st.healthAlerts} onChange={(e) => st.set({ healthAlerts: e.target.checked })} />
           </Row>
+          <div className="setting setting-block">
+            <div className="setting-text">
+              <b>Also send alerts to</b>
+              <small>Telegram, email or the AI agent's bot, so you hear about a problem away from this window. Health and uptime alerts go out the moment they happen.</small>
+            </div>
+            <NotifyChannels />
+          </div>
           <Row title="Refresh every" hint="How often CPU, memory and network are sampled for the server in view. Servers in the background refresh every 10 seconds.">
             <div className="segmented">
               {[1, 2, 5, 10].map((n) => <button key={n} className={st.refreshSecs === n ? "on" : ""} onClick={() => st.set({ refreshSecs: n })}>{n} s</button>)}

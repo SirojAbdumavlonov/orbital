@@ -34,7 +34,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
-VERSION = "1.3.3"
+VERSION = "1.4.0"
 CONFIG = "/etc/orbital-agent/config.json"
 STATE_DIR = "/var/lib/orbital-agent"
 STATE = STATE_DIR + "/state.json"
@@ -930,6 +930,26 @@ def send_test():
     print(json.dumps({"ok": True, "to": st.get("owner_name")}))
 
 
+def say():
+    """Message the paired account with the text on stdin: Orbital's alerts (no AI involved)."""
+    text = sys.stdin.read().strip()[:3500]
+    if not text:
+        print(json.dumps({"error": "nothing to send"}))
+        sys.exit(1)
+    cfg = load_json(CONFIG, {})
+    st = load_json(STATE, {})
+    if not st.get("owner_id"):
+        print(json.dumps({"error": "the agent isn't paired with a Telegram account yet"}))
+        sys.exit(1)
+    try:
+        Telegram(cfg["telegram_token"]).send(st["owner_id"], text)
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
+        sys.exit(1)
+    log("orbital_alert")
+    print(json.dumps({"ok": True, "to": st.get("owner_name")}))
+
+
 def status():
     """What Orbital shows: never the keys."""
     cfg = load_json(CONFIG, {})
@@ -1114,4 +1134,4 @@ def selftest():
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "run"
-    {"run": lambda: Agent().run(), "status": status, "pair": set_pair_code, "set": set_option, "models": list_models, "test": send_test, "selftest": selftest}.get(cmd, lambda: sys.exit(f"unknown command {cmd}"))()
+    {"run": lambda: Agent().run(), "status": status, "pair": set_pair_code, "set": set_option, "models": list_models, "test": send_test, "say": say, "selftest": selftest}.get(cmd, lambda: sys.exit(f"unknown command {cmd}"))()

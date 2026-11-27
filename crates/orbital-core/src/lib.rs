@@ -34,6 +34,7 @@ pub mod metrics;
 pub mod migrate;
 pub mod netcheck;
 pub mod nginx;
+pub mod notify;
 pub mod packages;
 pub mod ports;
 pub mod presence;

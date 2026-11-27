@@ -239,6 +239,9 @@ let statsState: { available: boolean; enabled: boolean | null } = { available: t
 const demoInstalled = new Set<string>();
 let defaultSiteOff = false;
 /** Demo Compose stacks. */
+let notifyChannels: any[] = [
+  { id: "nc1", name: "My Telegram", enabled: true, events: ["health", "uptime"], config: { kind: "telegram", chatId: "100200300", chatName: "Alex (@alex)" }, createdAt: "2026-11-20T10:00:00Z" },
+];
 const DEMO_APPS = [
   { id: "uptime-kuma", name: "Uptime Kuma", category: "Monitoring", hint: "Status pages and uptime checks with alerts to Telegram, Slack, email and more", port: 3001, firstSteps: "Create the admin account on the first page.", memoryMb: 150, images: ["louislam/uptime-kuma:1"] },
   { id: "portainer", name: "Portainer", category: "Containers", hint: "A web UI for this server's Docker: containers, images, volumes, stacks", port: 9000, firstSteps: "Create the admin user within 5 minutes of starting (after that Portainer locks setup until it's restarted).", memoryMb: 100, images: ["portainer/portainer-ce:lts"] },
@@ -439,7 +442,7 @@ const cleanupItems = () => [
   { id: "docker", title: "Docker leftovers", detail: "Stopped containers, unused networks, dangling images and build cache. Running containers and volumes (data) are kept.", bytes: cleaned.has("docker") ? 0 : 1900 * MB },
   { id: "dockerimages", title: "Docker images no container uses", detail: "Pulled again when a container needs one. Can take a while to download later.", bytes: cleaned.has("dockerimages") ? 0 : 3100 * MB },
 ];
-const agent: any = { installed: false, running: false, version: null, provider: null, model: null, bot: null, alerts: true, pairCodeActive: false, owner: null, pairedAt: null, alerting: [], recent: [], updateAvailable: false, dailyReport: null, latestVersion: "1.3.3" };
+const agent: any = { installed: false, running: false, version: null, provider: null, model: null, bot: null, alerts: true, pairCodeActive: false, owner: null, pairedAt: null, alerting: [], recent: [], updateAvailable: false, dailyReport: null, latestVersion: "1.4.0" };
 const agentLog: any[] = [];
 /** A pairing code; in the demo, "you" send it from Telegram 8 seconds later. */
 function agentCode() {
@@ -995,6 +998,29 @@ export function install() {
         demoStacks.push({ name: args.name, status: args.deploy ? "running(1)" : "not deployed", files: [`/opt/stacks/${args.name}/compose.yaml`], running: !!args.deploy, ours: true });
         return args.deploy ? { stdout: ` Container ${args.name}-web-1  Started\n`, stderr: "", exitCode: 0, durationMs: 1400 } : null;
       }
+      case "notify_channels": return notifyChannels.map((c) => ({ ...c }));
+      case "save_notify_channel": {
+        const { id, input } = args;
+        if (!input.name.trim()) throw { kind: "InvalidInput", message: "Invalid input: give it a name of up to 60 characters" };
+        if (input.config.kind === "telegram" && !input.config.chatId) throw { kind: "InvalidInput", message: "Invalid input: pick the chat to send to (message your bot first, then Find chats)" };
+        if (input.config.kind === "email" && !/@/.test(input.config.from)) throw { kind: "InvalidInput", message: `Invalid input: "${input.config.from}" isn't an email address to send from` };
+        const c = { id: id ?? `nc${notifyChannels.length + 1}`, name: input.name.trim(), enabled: input.enabled, events: input.events, config: input.config, createdAt: new Date().toISOString() };
+        const i = notifyChannels.findIndex((x) => x.id === c.id);
+        if (i >= 0) notifyChannels[i] = c; else notifyChannels.push(c);
+        return c;
+      }
+      case "delete_notify_channel": notifyChannels = notifyChannels.filter((c) => c.id !== args.id); return null;
+      case "test_notify_channel": {
+        await new Promise((r) => setTimeout(r, 700));
+        const c = notifyChannels.find((x) => x.id === args.id);
+        if (c?.config.kind === "agent") throw { kind: "Other", message: `${c.config.server} isn't connected, so its AI agent can't send this` };
+        return null;
+      }
+      case "telegram_lookup":
+        await new Promise((r) => setTimeout(r, 600));
+        if (!/^\d{5,15}:[\w-]{30,64}$/.test(String(args.token).trim())) throw { kind: "InvalidInput", message: "Invalid input: that isn't a Telegram bot token: BotFather gives one like 123456789:AA… (digits, a colon, then letters)" };
+        return { username: "my_servers_bot", chats: [{ id: "100200300", name: "Alex (@alex)", kind: "private" }, { id: "-1001234567890", name: "Ops team", kind: "supergroup" }] };
+      case "send_alert": return notifyChannels.filter((c) => c.enabled && c.events.includes(args.alert.kind)).map((c) => ({ channelId: c.id, channel: c.name, ok: true, error: null }));
       case "app_options": return DEMO_APPS;
       case "install_app": {
         const app = DEMO_APPS.find((a) => a.id === args.app)!;
@@ -1142,11 +1168,11 @@ export function install() {
       case "agent_install": {
         await progress(args.progress, [[0, "step", "Checking the bot token and the API key …"], [700, "step", "Setting up the agent on the server (the first time takes a minute or two) …"], [2600, "step", "Installing the agent …"], [500, "step", "Saving your settings …"], [500, "step", "Starting the agent …"], [600, "step", "Making a pairing code …"]]);
         Object.assign(agent, { installed: true, running: true, version: "1.3.0", updateAvailable: true, provider: args.setup.provider, model: args.setup.model || (args.setup.provider === "openai" ? "gpt-5" : "claude-opus-5-5"), bot: "my_server_helper_bot", alerts: args.setup.alerts, owner: null, pairedAt: null, pairCodeActive: true });
-        agentLog.push({ time: new Date().toISOString().slice(0, 19), event: "start", version: "1.3.3" });
+        agentLog.push({ time: new Date().toISOString().slice(0, 19), event: "start", version: "1.4.0" });
         return agentCode();
       }
       case "agent_pair_code": Object.assign(agent, { owner: null, pairedAt: null, pairCodeActive: true }); return agentCode();
-      case "agent_update": await progress(args.progress, [[0, "step", "Updating the agent …"], [1700, "step", "Restarting it …"]]); agent.version = "1.3.3"; agent.updateAvailable = false; return null;
+      case "agent_update": await progress(args.progress, [[0, "step", "Updating the agent …"], [1700, "step", "Restarting it …"]]); agent.version = "1.4.0"; agent.updateAvailable = false; return null;
       case "agent_set_running": agent.running = args.on; return null;
       case "agent_set_alerts": agent.alerts = args.on; return null;
       case "agent_models":

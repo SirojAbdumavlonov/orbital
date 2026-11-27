@@ -347,7 +347,22 @@ export interface ContainerStats {
 
 export type ContainerAction = "start" | "stop" | "restart" | "pause" | "unpause" | "remove" | "forceRemove";
 
-export type AuditCategory = "connection" | "file" | "config" | "service" | "docker" | "terminal" | "command" | "security" | "dns" | "uptime";
+export type AuditCategory = "connection" | "file" | "config" | "service" | "docker" | "terminal" | "command" | "security" | "dns" | "uptime" | "notify";
+
+// ---------- alerts elsewhere (notify.rs) ----------
+export type AlertKind = "health" | "uptime";
+export interface AlertOut { kind: AlertKind; level: "bad" | "ok" | "warn"; title: string; body: string }
+export type SmtpSecurity = "startTls" | "tls" | "none";
+export type ChannelConfig =
+  | { kind: "telegram"; chatId: string; chatName: string }
+  | { kind: "email"; host: string; port: number; security: SmtpSecurity; username: string; from: string; to: string[] }
+  | { kind: "agent"; profileId: string; server: string };
+export interface NotifyChannel { id: string; name: string; enabled: boolean; events: AlertKind[]; config: ChannelConfig; createdAt: string }
+/** `secret` is the bot token or SMTP password; empty keeps the saved one when editing. */
+export interface NotifyChannelInput { name: string; enabled: boolean; events: AlertKind[]; config: ChannelConfig; secret: string }
+export interface TelegramChat { id: string; name: string; kind: string }
+export interface TelegramBot { username: string; chats: TelegramChat[] }
+export interface SendResult { channelId: string; channel: string; ok: boolean; error: string | null }
 export interface AuditEvent {
   seq: number;
   id: string;
@@ -1472,6 +1487,14 @@ export const api = {
   authorizedKeys: (sessionId: string) => invoke<AuthorizedKeys>("authorized_keys", { sessionId }),
   addAuthorizedKey: (sessionId: string, line: string) => invoke<AuthorizedKeys>("add_authorized_key", { sessionId, line }),
   removeAuthorizedKey: (sessionId: string, line: string, force: boolean) => invoke<AuthorizedKeys>("remove_authorized_key", { sessionId, line, force }),
+  notifyChannels: () => invoke<NotifyChannel[]>("notify_channels"),
+  saveNotifyChannel: (id: string | null, input: NotifyChannelInput) => invoke<NotifyChannel>("save_notify_channel", { id, input }),
+  deleteNotifyChannel: (id: string) => invoke<void>("delete_notify_channel", { id }),
+  testNotifyChannel: (id: string) => invoke<void>("test_notify_channel", { id }),
+  /** The bot's name and the chats that wrote to it (so the user can pick one). */
+  telegramLookup: (token: string) => invoke<TelegramBot>("telegram_lookup", { token }),
+  /** Pass an alert on to Telegram, email or the agent (whichever channels take it). */
+  sendAlert: (alert: AlertOut) => invoke<SendResult[]>("send_alert", { alert }),
   dnsAccounts: () => invoke<DnsAccount[]>("dns_accounts"),
   addDnsAccount: (name: string, kind: DnsProvider, token: string) => invoke<DnsAccount>("add_dns_account", { name, kind, token }),
   removeDnsAccount: (id: string) => invoke<void>("remove_dns_account", { id }),

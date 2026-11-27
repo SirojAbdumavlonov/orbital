@@ -199,6 +199,8 @@ export function checkAlerts() {
     alertStates[s.profile.id] = next;
     if (muted.includes(s.profile.id)) continue;
     for (const m of messages) {
+      // Also to Telegram, email or the AI agent, when set up (Settings → Notifications).
+      void api.sendAlert({ kind: "health", level: m.kind === "bad" ? "bad" : "ok", title: m.title, body: m.body }).catch(() => {});
       st.toast({ kind: m.kind === "bad" ? "error" : "success", title: m.title, body: m.body, action: { label: "Show", run: () => { useStore.setState({ globalView: null }); st.setActive(s.info.id); } } });
       if (document.visibilityState !== "visible" || !document.hasFocus()) void api.notify(m.title, m.body).catch(() => {});
     }

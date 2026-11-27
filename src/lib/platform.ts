@@ -23,7 +23,13 @@ export function navKey(e: KeyboardEvent): -1 | 0 | 1 {
   return e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
 }
 
-/** Set once at startup so the stylesheet can follow the platform (window buttons, title bar). */
+/** Running as the desktop app (Tauri), not in a plain browser (`npm run demo`). */
+export const isApp = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window && !import.meta.env.VITE_DEMO;
+
+/**
+ * Set once at startup so the stylesheet can follow the platform (window buttons, title bar).
+ * In a browser there are no window buttons to leave room for, whatever the computer.
+ */
 export function markPlatform() {
-  document.documentElement.dataset.platform = isMac ? "mac" : isWindows ? "windows" : "linux";
+  document.documentElement.dataset.platform = !isApp ? "web" : isMac ? "mac" : isWindows ? "windows" : "linux";
 }

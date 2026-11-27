@@ -4,7 +4,12 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Alerts on Telegram, by email or through the AI agent** (Settings → Monitoring → Also send alerts to): health and uptime alerts go out the moment they happen, to a Telegram bot of your own, any SMTP mailbox, or the AI agent's bot on one of your servers. Pick which alerts each one gets, send a test, and turn one off without deleting it. Tokens and passwords stay encrypted on this computer.
+
 ### Fixed
+- **Empty space before the sidebar and back/forward buttons in a browser** (the demo): the room for the window buttons is only left in the desktop app on a Mac.
+- **Server name stayed indented with the sidebar hidden**: when several servers are open, the name and address now line up with the tabs below them; only the top row leaves room for the window buttons.
 - **Changing a process's priority or stopping it asked for a sudo password**: for your own processes it now runs as you, and uses sudo only when the server refuses.
 - **The security audit could time out on big disks**: its file scans now skip Docker data, caches and other bulky folders, run side by side and stop after 25 seconds each. The report says when one was cut short.
 

@@ -2234,6 +2234,24 @@ async fn ai_agent_installs_pairs_and_removes() {
     assert!(engine.agent_status(&s.id).await.unwrap().daily_report.is_none());
     let e = engine.agent_test(&s.id).await.unwrap_err().to_string();
     assert!(e.contains("not paired"), "{e}");
+    // Orbital's alerts through the agent ("agent.py say", the text on stdin): refused until paired.
+    let ch = engine
+        .save_notify_channel(
+            None,
+            &orbital_core::notify::ChannelInput {
+                name: "Agent".into(),
+                enabled: true,
+                events: vec![orbital_core::notify::AlertKind::Health],
+                config: orbital_core::notify::ChannelConfig::Agent {
+                    profile_id: s.profile_id.clone(),
+                    server: "test".into(),
+                },
+                secret: String::new(),
+            },
+        )
+        .unwrap();
+    let e = engine.test_notify_channel(&ch.id).await.unwrap_err().to_string();
+    assert!(e.contains("isn't paired"), "{e}");
     engine.agent_remove(&s.id).await.unwrap();
     let gone = root("ls /opt/orbital-agent /etc/orbital-agent 2>&1 || true".into()).await;
     assert!(gone.stdout.contains("No such file"), "{}", gone.stdout);

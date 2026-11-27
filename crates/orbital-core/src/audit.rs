@@ -26,6 +26,8 @@ pub enum Category {
     Dns,
     /// Uptime checks: added, changed, and every up/down change.
     Uptime,
+    /// Alerts sent elsewhere (Telegram, email, the AI agent) and their channels.
+    Notify,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
