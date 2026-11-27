@@ -136,7 +136,27 @@ impl Engine {
             }
         };
         let mut out = Vec::new();
+        let now = {
+            use chrono::Timelike;
+            let t = chrono::Local::now();
+            t.hour() * 60 + t.minute()
+        };
         for c in channels.into_iter().filter(|c| c.enabled && c.events.contains(&a.kind)) {
+            if !nt::goes_now(&c, a, now) {
+                self.record_notify(
+                    "notify.send",
+                    &c.name,
+                    Outcome::Denied,
+                    Some(serde_json::json!({ "error": "quiet hours", "title": a.title })),
+                );
+                out.push(SendResult {
+                    channel_id: c.id.clone(),
+                    channel: c.name.clone(),
+                    ok: false,
+                    error: Some("quiet hours: only problems are sent now".into()),
+                });
+                continue;
+            }
             if !self.notify_brake.allow(&c.id, std::time::Instant::now()) {
                 self.record_notify(
                     "notify.send",

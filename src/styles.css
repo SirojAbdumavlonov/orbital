@@ -1263,3 +1263,44 @@ kbd { font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border: 1px
 .field-row > .grow { flex: 1; min-width: 0; }
 .row-input { display: flex; gap: 8px; }
 .row-input > .input { flex: 1; min-width: 0; }
+
+/* The shared date range (components/RangePicker.tsx) */
+.range-picker { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.range-picker .segmented button { display: inline-flex; align-items: center; gap: 4px; }
+.range-custom { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.range-custom .input { width: 190px; color-scheme: dark; }
+:root[data-theme="light"] .range-custom .input { color-scheme: light; }
+.panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.panel-head h4 { margin-top: 4px; }
+.overview-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.server-card-forecast { font-size: 12px; color: var(--ink-2); align-self: flex-start; }
+.server-card-forecast.warn { color: var(--warn); }
+.disk-forecast { margin: 8px 0 0; font-size: 12px; color: var(--ink-2); }
+.disk-forecast.warn { color: var(--warn); }
+.files-start { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.files-start .input { width: 240px; }
+.hist-svg { cursor: crosshair; }
+.hist-cross { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.hist-event { stroke: var(--log-4); stroke-width: 1; opacity: .55; vector-effect: non-scaling-stroke; }
+.hist-event.failed { stroke: var(--bad); opacity: .8; }
+.hist-event.restart { stroke: var(--warn); opacity: .9; stroke-dasharray: 2 2; }
+.hist-event-key { background: var(--log-4); }
+.hist-moment { border-top: 1px solid var(--slate-4); padding-top: 8px; font-size: 12.5px; display: flex; flex-direction: column; gap: 6px; min-height: 34px; }
+.hist-moment-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.hist-moment-head > span { color: var(--ink-2); flex: 1; }
+.hist-moment-events { margin: 0; padding-left: 16px; color: var(--ink-2); }
+.hist-moment-events .failed { color: var(--bad); }
+.hist-moment-events .restart { color: var(--warn); }
+.hist-procs { font-size: 12px; }
+.disk-growth { white-space: nowrap; font-size: 12px; }
+.disk-growth svg { vertical-align: middle; margin-right: 6px; }
+
+/* Home → Compare servers (components/CompareChart.tsx) */
+.compare { margin-top: 14px; border: 1px solid var(--slate-4); border-radius: var(--radius-m); background: var(--slate-2); }
+.compare-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 10px 12px; background: none; border: 0; color: var(--ink); cursor: pointer; font-weight: 500; text-align: left; }
+.compare-head .faint { font-weight: 400; margin-left: 4px; }
+.compare-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 10px; }
+.compare-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+.compare .chip.on { border-color: var(--btn-hover-line); color: var(--ink); }
+.compare-swatch { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.compare-table { font-size: 12.5px; }

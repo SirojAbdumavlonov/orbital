@@ -1023,6 +1023,38 @@ pub fn save_text(path: String, text: String) -> R<()> {
 
 // ---------- DNS ----------
 
+// ---------- monitoring history over a date range ----------
+
+#[tauri::command]
+pub fn metric_history(engine: Eng, profile_id: String, from: i64, to: i64, max: u32) -> R<(i64, Vec<orbital_core::metric_store::Point>)> {
+    engine.metric_history(&profile_id, from, to, max)
+}
+
+#[tauri::command]
+pub fn metric_moment(engine: Eng, profile_id: String, t: i64, within: i64) -> R<Option<orbital_core::metric_store::Moment>> {
+    engine.metric_moment(&profile_id, t, within)
+}
+
+#[tauri::command]
+pub fn disk_history(engine: Eng, profile_id: String, from: i64, to: i64, max: u32) -> R<Vec<orbital_core::metric_store::DiskSeries>> {
+    engine.disk_history(&profile_id, from, to, max)
+}
+
+#[tauri::command]
+pub fn metric_events(engine: Eng, profile_id: String, from: i64, to: i64) -> R<Vec<orbital_core::metric_store::Event>> {
+    engine.metric_events(&profile_id, from, to)
+}
+
+#[tauri::command]
+pub fn import_metric_history(engine: Eng, profile_id: String, points: Vec<orbital_core::metric_store::Point>) -> R<usize> {
+    engine.import_metric_history(&profile_id, &points)
+}
+
+#[tauri::command]
+pub fn uptime_range(engine: Eng, from: i64, to: i64, max: u32) -> R<Vec<orbital_core::uptime::RangeSummary>> {
+    engine.uptime_range(from, to, max)
+}
+
 // ---------- notifications elsewhere (Telegram, email, the AI agent) ----------
 
 #[tauri::command]

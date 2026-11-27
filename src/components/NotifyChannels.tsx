@@ -10,7 +10,7 @@ import { confirm, Modal } from "./ui";
 // vault (notify.rs); nothing here keeps them.
 
 const KIND_ICON = { telegram: MessageCircle, email: Mail, agent: Bot } as const;
-const EVENT_LABEL: Record<AlertKind, string> = { health: "Health", uptime: "Uptime" };
+const EVENT_LABEL: Record<AlertKind, string> = { health: "Health", uptime: "Uptime", jobs: "Jobs" };
 
 function describe(c: ChannelConfig): string {
   if (c.kind === "telegram") return `Telegram · ${c.chatName || c.chatId}`;
@@ -28,7 +28,7 @@ export function NotifyChannels() {
 
   const save = async (c: NotifyChannel, patch: Partial<NotifyChannelInput>) => {
     try {
-      await api.saveNotifyChannel(c.id, { name: c.name, enabled: c.enabled, events: c.events, config: c.config, secret: "", ...patch });
+      await api.saveNotifyChannel(c.id, { name: c.name, enabled: c.enabled, events: c.events, config: c.config, quiet: c.quiet ?? null, secret: "", ...patch });
       void load();
     } catch (e) {
       toast({ kind: "error", title: "Couldn't change it", body: asApiError(e).message });
@@ -61,10 +61,10 @@ export function NotifyChannels() {
             <Icon size={16} className="notify-icon" />
             <div className="notify-text">
               <b>{c.name}</b>
-              <small className="faint">{describe(c.config)}</small>
+              <small className="faint">{describe(c.config)}{c.quiet ? ` · quiet ${c.quiet.from}–${c.quiet.to}` : ""}</small>
             </div>
             <div className="notify-events">
-              {(["health", "uptime"] as AlertKind[]).map((k) => (
+              {(["health", "uptime", "jobs"] as AlertKind[]).map((k) => (
                 <label key={k} className="check" title={`Send ${EVENT_LABEL[k].toLowerCase()} alerts here`}>
                   <input type="checkbox" checked={c.events.includes(k)} disabled={c.events.length === 1 && c.events.includes(k)}
                     onChange={(e) => void save(c, { events: e.target.checked ? [...c.events, k] : c.events.filter((x) => x !== k) })} />
@@ -97,6 +97,9 @@ function ChannelDialog({ channel, kind, onClose, onSaved }: { channel: NotifyCha
   const c = channel?.config;
   const [name, setName] = useState(channel?.name ?? (kind === "telegram" ? "My Telegram" : kind === "email" ? "Email" : "AI agent"));
   const [events, setEvents] = useState<AlertKind[]>(channel?.events ?? ["health", "uptime"]);
+  const [quietOn, setQuietOn] = useState(!!channel?.quiet);
+  const [quietFrom, setQuietFrom] = useState(channel?.quiet?.from ?? "22:00");
+  const [quietTo, setQuietTo] = useState(channel?.quiet?.to ?? "07:00");
   const [secret, setSecret] = useState("");
   // Telegram
   const [chatId, setChatId] = useState(c?.kind === "telegram" ? c.chatId : "");
@@ -140,7 +143,7 @@ function ChannelDialog({ channel, kind, onClose, onSaved }: { channel: NotifyCha
     setBusy(true);
     setProblem(null);
     try {
-      const saved = await api.saveNotifyChannel(channel?.id ?? null, { name, enabled: channel?.enabled ?? true, events, config: config(), secret });
+      const saved = await api.saveNotifyChannel(channel?.id ?? null, { name, enabled: channel?.enabled ?? true, events, config: config(), secret, quiet: quietOn ? { from: quietFrom, to: quietTo } : null });
       // A first message proves it works; a failure here still keeps the channel.
       if (!channel) {
         try { await api.testNotifyChannel(saved.id); } catch (e) {
@@ -231,7 +234,19 @@ function ChannelDialog({ channel, kind, onClose, onSaved }: { channel: NotifyCha
           <div className="notify-events">
             <label className="check"><input type="checkbox" checked={events.includes("health")} onChange={() => toggle("health")} /> Health alerts <span className="faint">(server needs attention, a service or container failed, back to normal)</span></label>
             <label className="check"><input type="checkbox" checked={events.includes("uptime")} onChange={() => toggle("uptime")} /> Uptime alerts <span className="faint">(a check went down or came back, certificate expiring)</span></label>
+            <label className="check"><input type="checkbox" checked={events.includes("jobs")} onChange={() => toggle("jobs")} /> Long jobs <span className="faint">(an install, backup, upload or update that ran 2 minutes or more finished or failed)</span></label>
           </div>
+        </div>
+        <div className="field">
+          <label className="check"><input type="checkbox" checked={quietOn} onChange={(e) => setQuietOn(e.target.checked)} /> Quiet hours</label>
+          {quietOn && (
+            <div className="row-input" style={{ alignItems: "center" }}>
+              <input className="input mono" type="time" value={quietFrom} onChange={(e) => setQuietFrom(e.target.value)} aria-label="Quiet from" style={{ width: 120 }} />
+              <span className="faint">to</span>
+              <input className="input mono" type="time" value={quietTo} onChange={(e) => setQuietTo(e.target.value)} aria-label="Quiet until" style={{ width: 120 }} />
+            </div>
+          )}
+          <span className="hint">{quietOn ? "In these hours (this computer's time) only problems are sent; recoveries, warnings and finished jobs are left out." : "Send at any hour."}</span>
         </div>
         {problem && <div className="alert" style={{ whiteSpace: "pre-wrap" }}>{problem}</div>}
       </div>

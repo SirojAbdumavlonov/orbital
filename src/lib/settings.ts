@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { create } from "zustand";
+import type { FilesStart } from "./startFolder";
 
 export type ThemePref = "system" | "light" | "dark";
 
@@ -41,6 +42,10 @@ export interface Settings {
   terminalTmux: boolean;
   /** At launch, reopen the servers that were open, on the same tab and folder. */
   restoreSession: boolean;
+  /** Where Files opens when a server connects (a server's own start folder wins). */
+  filesStart: FilesStart;
+  /** The folder for `filesStart: "custom"`. */
+  filesStartPath: string;
   /** New terminals are recorded (output only) to a .cast file on this computer. */
   recordTerminals: boolean;
   /** Notify when a connected server needs attention (and when it's fine again). */
@@ -64,6 +69,8 @@ const DEFAULTS: Settings = {
   terminalSuggestions: true,
   terminalTmux: false,
   restoreSession: true,
+  filesStart: "home",
+  filesStartPath: "",
   recordTerminals: false,
   healthAlerts: true,
   thresholds: DEFAULT_THRESHOLDS,

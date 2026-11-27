@@ -140,7 +140,7 @@ export interface AlertState {
 export const NO_ALERTS: AlertState = { redFor: 0, alerted: false, failed: [] };
 
 export interface AlertMessage {
-  kind: "bad" | "ok";
+  kind: "bad" | "ok" | "warn";
   title: string;
   body: string;
 }
@@ -182,6 +182,15 @@ export const useHealthMute = create<{ muted: string[]; toggle(profileId: string)
 }));
 
 const alertStates: Record<string, AlertState> = {};
+/** Each server's uptime at the last check, to notice a restart. */
+const lastUptime: Record<string, number> = {};
+
+/** The server restarted since the last check: its uptime went down. Pure; tested. */
+export function restartMessage(server: string, prevUptime: number | undefined, uptime: number): AlertMessage | null {
+  if (prevUptime === undefined || uptime + 120 >= prevUptime) return null;
+  const mins = Math.max(1, Math.round(uptime / 60));
+  return { kind: "warn", title: `${server} restarted`, body: `Up again for ${mins < 120 ? `${mins} min` : `${Math.round(mins / 60)} h`}; it had been up ${Math.round(prevUptime / 3600)} h. If you didn't restart it, check its logs.` };
+}
 
 /** Runs after each minute's check: notifies (and toasts) health changes worth knowing. */
 export function checkAlerts() {
@@ -197,11 +206,17 @@ export function checkAlerts() {
     // Containers in trouble alert like failed services: at once, and once.
     const { next, messages } = alertStep(alertStates[s.profile.id] ?? NO_ALERTS, s.profile.name, h, [...failed, ...boxes.map((b) => `container ${b}`)]);
     alertStates[s.profile.id] = next;
+    const up = s.metrics[s.metrics.length - 1]?.uptimeSecs;
+    if (typeof up === "number") {
+      const restart = restartMessage(s.profile.name, lastUptime[s.profile.id], up);
+      lastUptime[s.profile.id] = up;
+      if (restart) messages.push(restart);
+    }
     if (muted.includes(s.profile.id)) continue;
     for (const m of messages) {
       // Also to Telegram, email or the AI agent, when set up (Settings → Notifications).
-      void api.sendAlert({ kind: "health", level: m.kind === "bad" ? "bad" : "ok", title: m.title, body: m.body }).catch(() => {});
-      st.toast({ kind: m.kind === "bad" ? "error" : "success", title: m.title, body: m.body, action: { label: "Show", run: () => { useStore.setState({ globalView: null }); st.setActive(s.info.id); } } });
+      void api.sendAlert({ kind: "health", level: m.kind, title: m.title, body: m.body }).catch(() => {});
+      st.toast({ kind: m.kind === "bad" ? "error" : m.kind === "warn" ? "info" : "success", title: m.title, body: m.body, action: { label: "Show", run: () => { useStore.setState({ globalView: null }); st.setActive(s.info.id); } } });
       if (document.visibilityState !== "visible" || !document.hasFocus()) void api.notify(m.title, m.body).catch(() => {});
     }
   }

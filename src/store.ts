@@ -1,6 +1,7 @@
 import type { TermLaunch } from "./lib/api";
 import { toast as sonner } from "sonner";
 import { useSettings } from "./lib/settings";
+import { lastFolder, startFolder } from "./lib/startFolder";
 import { create } from "zustand";
 import { api, asApiError, ApiError, ConnectOpts, DetectedTool, Metrics, Profile, SessionInfo, Validator , setNotConnectedHandler, setReconnector } from "./lib/api";
 import { usePanes } from "./lib/panes";
@@ -537,11 +538,12 @@ const NEEDS_USER = ["UnknownHostKey", "HostKeyMismatch", "CredentialsRequired", 
 
 /** A freshly connected server's state: Files in its home folder. */
 function newSession(info: SessionInfo, profile: Profile): SessionState {
+  const st = useSettings.getState();
   return {
     info,
     profile,
     tab: "files",
-    cwd: info.home,
+    cwd: startFolder(info.home, profile, st.filesStart, st.filesStartPath, lastFolder(profile.id)),
     files: [],
     activeFile: null,
     terminals: [],

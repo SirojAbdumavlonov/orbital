@@ -1,9 +1,11 @@
 import { HistoryChart } from "../components/HistoryChart";
+import { RangePicker } from "../components/RangePicker";
+import { diskForecast, useRangeHistory } from "../lib/metricHistory";
 import { AlertTriangle, ArrowUp, CheckCircle2, File, Folder, FolderOpen, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Bar, confirm, LiveNumber, Modal, Sparkline } from "../components/ui";
 import { runJob } from "../lib/jobs";
-import { api, DiskUsage, Metrics, ProcessReport } from "../lib/api";
+import { api, DiskSeries, DiskUsage, Metrics, ProcessReport } from "../lib/api";
 import { asApiError } from "../lib/api";
 import { useRemote } from "../lib/remote";
 import { bytes, duration, rate } from "../lib/format";
@@ -285,7 +287,42 @@ function MemoryDetails({ m }: { m: Metrics }) {
   );
 }
 
+const WEEK = { preset: "7d" } as const;
+
+/** Where the fullest disk is heading, at last week's pace (nothing when it isn't filling). */
+function DiskForecast({ profileId }: { profileId: string }) {
+  const week = useRangeHistory(profileId, 200, WEEK);
+  const days = week ? diskForecast(week.points) : null;
+  if (days === null) return null;
+  const when = days < 2 ? `about ${Math.max(1, Math.round(days * 24))} hours` : `about ${Math.round(days)} days`;
+  return <p className={`disk-forecast ${days < 7 ? "warn" : ""}`}>At last week's pace, the fullest disk is full in {when}.</p>;
+}
+
+/** "+1.2 GB/day", "shrinking", "steady", or nothing before 6 hours of data. Exported for tests. */
+export function growthText(g: DiskSeries | undefined): string {
+  if (!g || g.perDay === null) return "";
+  const abs = Math.abs(g.perDay);
+  if (abs < 1024 * 1024) return "steady";
+  return `${g.perDay > 0 ? "+" : "−"}${bytes(abs)}/day`;
+}
+
+/** Each disk's last 7 days: growth and a small trend (refreshed every 10 minutes). */
+function useDiskGrowth(profileId: string): Record<string, DiskSeries> {
+  const [by, setBy] = useState<Record<string, DiskSeries>>({});
+  useEffect(() => {
+    const load = () => {
+      const now = Math.floor(Date.now() / 1000);
+      api.diskHistory(profileId, now - 7 * 86400, now, 60).then((l) => setBy(Object.fromEntries(l.map((x) => [x.mount, x]))), () => {});
+    };
+    load();
+    const t = setInterval(load, 600_000);
+    return () => clearInterval(t);
+  }, [profileId]);
+  return by;
+}
+
 export function MonitorView({ s }: { s: SessionState }) {
+  const growth = useDiskGrowth(s.profile.id);
   const m = s.metrics[s.metrics.length - 1];
   if (!m) return <div className="empty"><p>Collecting the first sample…</p></div>;
   const hist = (f: (x: typeof m) => number) => s.metrics.map(f);
@@ -329,23 +366,31 @@ export function MonitorView({ s }: { s: SessionState }) {
       </section>
 
       <section className="panel span-12">
-        <h4>Last 24 hours</h4>
-        <HistoryChart profileId={s.profile.id} />
+        <div className="panel-head"><h4>History</h4><RangePicker /></div>
+        <HistoryChart profileId={s.profile.id} name={s.profile.name} />
       </section>
 
       <section className="panel span-7">
         <h4>Disks</h4>
+        <DiskForecast profileId={s.profile.id} />
         <table className="table">
-          <thead><tr><th>Mount</th><th>Device</th><th style={{ width: "34%" }}>Used</th><th className="num">Free</th></tr></thead>
+          <thead><tr><th>Mount</th><th>Device</th><th style={{ width: "30%" }}>Used</th><th className="num">Free</th><th title="Over the last 7 days">Growth</th></tr></thead>
           <tbody>
-            {m.disks.map((d) => (
-              <tr key={d.mount + d.filesystem}>
-                <td className="mono">{d.mount}</td>
-                <td className="faint mono" style={{ fontSize: 11.5 }}>{d.filesystem} · {d.fsType}</td>
-                <td><div style={{ display: "flex", alignItems: "center", gap: 8 }}><Bar value={d.usedPercent} hot={d.usedPercent > 90} /><span style={{ fontSize: 12, minWidth: 34 }}>{d.usedPercent.toFixed(0)}%</span></div></td>
-                <td className="num">{bytes(d.availableBytes)}</td>
-              </tr>
-            ))}
+            {m.disks.map((d) => {
+              const g = growth[d.mount];
+              return (
+                <tr key={d.mount + d.filesystem}>
+                  <td className="mono">{d.mount}</td>
+                  <td className="faint mono" style={{ fontSize: 11.5 }}>{d.filesystem} · {d.fsType}</td>
+                  <td><div style={{ display: "flex", alignItems: "center", gap: 8 }}><Bar value={d.usedPercent} hot={d.usedPercent > 90} /><span style={{ fontSize: 12, minWidth: 34 }}>{d.usedPercent.toFixed(0)}%</span></div></td>
+                  <td className="num">{bytes(d.availableBytes)}</td>
+                  <td className="disk-growth">
+                    {g && g.points.length > 1 && <Sparkline values={g.points.map((x) => x[1])} max={0} width={60} height={16} />}
+                    <span className={g?.fullAt && g.fullAt - Date.now() / 1000 < 14 * 86400 ? "warn-ink" : "faint"} title={g?.fullAt ? `Full around ${new Date(g.fullAt * 1000).toLocaleDateString()} at this pace` : undefined}>{growthText(g)}</span>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </section>

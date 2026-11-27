@@ -156,6 +156,20 @@ export function SettingsView() {
           <Row title="Reopen the servers you had open" hint="At launch, Orbital connects again to the servers that were open when it closed, on the same tab and folder. Servers that need a password or a new host key are left for you to open.">
             <input type="checkbox" className="switch" checked={st.restoreSession} onChange={(e) => st.set({ restoreSession: e.target.checked })} />
           </Row>
+          <Row title="Files opens in" hint={`The folder Files shows when a server connects. A server with its own start folder (in its settings) always opens there${st.restoreSession ? ", and servers reopened at launch go back to where you were" : ""}.`}>
+            <div className="files-start">
+              <div className="segmented">
+                {([["home", "Home folder"], ["root", "/"], ["last", "Last folder"], ["custom", "This folder"]] as const).map(([id, label]) => (
+                  <button key={id} className={st.filesStart === id ? "on" : ""} onClick={() => st.set({ filesStart: id })}>{label}</button>
+                ))}
+              </div>
+              {st.filesStart === "custom" && (
+                <input className="input mono" value={st.filesStartPath} placeholder="/var/www" aria-label="Folder Files opens in"
+                  onChange={(e) => st.set({ filesStartPath: e.target.value })} />
+              )}
+              {st.filesStart === "custom" && st.filesStartPath.trim() && !st.filesStartPath.trim().startsWith("/") && <span className="hint warn-ink">Start it with / (a full path).</span>}
+            </div>
+          </Row>
 
           <h3 className="settings-title">Monitoring</h3>
           <Row title="When to warn" hint="A server's dot turns orange at the first number and red at the second (alerts go out when it stays red). Disk and memory in % used; load per CPU core.">

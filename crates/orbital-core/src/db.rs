@@ -167,6 +167,33 @@ const MIGRATIONS: &[&str] = &[
         created_at TEXT NOT NULL
     );
     "#,
+    // v9: monitoring history, one point a minute per server, kept 30 days.
+    r#"
+    CREATE TABLE metric_history (
+        profile_id TEXT NOT NULL,
+        t INTEGER NOT NULL,
+        cpu REAL,
+        mem REAL NOT NULL,
+        disk REAL,
+        load REAL NOT NULL,
+        rx REAL,
+        tx REAL,
+        uptime INTEGER,
+        PRIMARY KEY (profile_id, t)
+    ) WITHOUT ROWID;
+    CREATE INDEX metric_history_t ON metric_history(t);
+    -- What ran and how full each disk was, a minute at a time (program names only, never arguments).
+    CREATE TABLE metric_detail (
+        profile_id TEXT NOT NULL,
+        t INTEGER NOT NULL,
+        procs TEXT NOT NULL,
+        disks TEXT NOT NULL,
+        PRIMARY KEY (profile_id, t)
+    ) WITHOUT ROWID;
+    CREATE INDEX metric_detail_t ON metric_detail(t);
+    -- Quiet hours per alert channel (JSON {"from":"22:00","to":"07:00"} or NULL).
+    ALTER TABLE notify_channels ADD COLUMN quiet TEXT;
+    "#,
 ];
 
 impl Database {

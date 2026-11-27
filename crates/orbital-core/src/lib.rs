@@ -30,6 +30,7 @@ pub mod known_hosts;
 pub mod logins;
 pub mod logs;
 pub mod logsearch;
+pub mod metric_store;
 pub mod metrics;
 pub mod migrate;
 pub mod netcheck;

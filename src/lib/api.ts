@@ -349,17 +349,30 @@ export type ContainerAction = "start" | "stop" | "restart" | "pause" | "unpause"
 
 export type AuditCategory = "connection" | "file" | "config" | "service" | "docker" | "terminal" | "command" | "security" | "dns" | "uptime" | "notify";
 
+// ---------- monitoring history (metric_store.rs) ----------
+/** One bucket of a server's history (Unix seconds; % for cpu, mem, disk; bytes/s for rx, tx). */
+export interface MetricPoint { t: number; cpu: number | null; mem: number; disk: number | null; load: number; rx: number | null; tx: number | null; uptime: number | null }
+export interface ProcSample { name: string; user: string; pid: number; cpu: number; mem: number; rssKb: number }
+export interface Moment { t: number; procs: ProcSample[]; disks: { mount: string; used: number; total: number }[] }
+/** One disk over a range: [time, bytes used] points, growth per day, when it fills (Unix seconds). */
+export interface DiskSeries { mount: string; total: number; points: [number, number][]; perDay: number | null; fullAt: number | null }
+/** Something that happened on a server: "restart", or the audit category of a change Orbital made. */
+export interface MetricEvent { t: number; kind: string; action: string; target: string | null; ok: boolean }
+export interface UptimeRangePoint { t: number; latencyMs: number | null; down: number; total: number }
+export interface UptimeRange { checkId: string; checks: number; upPercent: number | null; avgLatencyMs: number | null; points: UptimeRangePoint[] }
+
 // ---------- alerts elsewhere (notify.rs) ----------
-export type AlertKind = "health" | "uptime";
+export type AlertKind = "health" | "uptime" | "jobs";
 export interface AlertOut { kind: AlertKind; level: "bad" | "ok" | "warn"; title: string; body: string }
 export type SmtpSecurity = "startTls" | "tls" | "none";
 export type ChannelConfig =
   | { kind: "telegram"; chatId: string; chatName: string }
   | { kind: "email"; host: string; port: number; security: SmtpSecurity; username: string; from: string; to: string[] }
   | { kind: "agent"; profileId: string; server: string };
-export interface NotifyChannel { id: string; name: string; enabled: boolean; events: AlertKind[]; config: ChannelConfig; createdAt: string }
+export interface QuietHours { from: string; to: string }
+export interface NotifyChannel { id: string; name: string; enabled: boolean; events: AlertKind[]; config: ChannelConfig; quiet: QuietHours | null; createdAt: string }
 /** `secret` is the bot token or SMTP password; empty keeps the saved one when editing. */
-export interface NotifyChannelInput { name: string; enabled: boolean; events: AlertKind[]; config: ChannelConfig; secret: string }
+export interface NotifyChannelInput { name: string; enabled: boolean; events: AlertKind[]; config: ChannelConfig; secret: string; quiet: QuietHours | null }
 export interface TelegramChat { id: string; name: string; kind: string }
 export interface TelegramBot { username: string; chats: TelegramChat[] }
 export interface SendResult { channelId: string; channel: string; ok: boolean; error: string | null }
@@ -1487,6 +1500,13 @@ export const api = {
   authorizedKeys: (sessionId: string) => invoke<AuthorizedKeys>("authorized_keys", { sessionId }),
   addAuthorizedKey: (sessionId: string, line: string) => invoke<AuthorizedKeys>("add_authorized_key", { sessionId, line }),
   removeAuthorizedKey: (sessionId: string, line: string, force: boolean) => invoke<AuthorizedKeys>("remove_authorized_key", { sessionId, line, force }),
+  /** A server's history between two times (Unix seconds) in at most `max` buckets: [bucket seconds, points]. */
+  metricHistory: (profileId: string, from: number, to: number, max: number) => invoke<[number, MetricPoint[]]>("metric_history", { profileId, from, to, max }),
+  metricMoment: (profileId: string, t: number, within: number) => invoke<Moment | null>("metric_moment", { profileId, t, within }),
+  diskHistory: (profileId: string, from: number, to: number, max: number) => invoke<DiskSeries[]>("disk_history", { profileId, from, to, max }),
+  metricEvents: (profileId: string, from: number, to: number) => invoke<MetricEvent[]>("metric_events", { profileId, from, to }),
+  importMetricHistory: (profileId: string, points: MetricPoint[]) => invoke<number>("import_metric_history", { profileId, points }),
+  uptimeRange: (from: number, to: number, max: number) => invoke<UptimeRange[]>("uptime_range", { from, to, max }),
   notifyChannels: () => invoke<NotifyChannel[]>("notify_channels"),
   saveNotifyChannel: (id: string | null, input: NotifyChannelInput) => invoke<NotifyChannel>("save_notify_channel", { id, input }),
   deleteNotifyChannel: (id: string) => invoke<void>("delete_notify_channel", { id }),

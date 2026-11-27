@@ -1,96 +1,82 @@
-import { create } from "zustand";
-import { useEffect } from "react";
-import { Metrics } from "./api";
-import { useStore } from "../store";
+import { useEffect, useState } from "react";
+import { api, MetricPoint } from "./api";
+import { bounds, Range, useRange } from "./range";
 
-// The last 24 hours of each server's CPU, memory and fullest disk, one point a
-// minute, from the metrics Orbital already reads while it's connected. Kept on
-// this computer per server (localStorage `orbital.history.<profile id>`), so the
-// Monitor tab and the Home cards can show a day's trend. Gaps are times Orbital
-// wasn't connected. Pure parts (`point`, `addPoint`) are tested.
+// Monitoring history comes from Orbital's database (metric_store.rs: a point
+// a minute per server, kept 30 days, recorded as metrics are read). Views ask
+// for the shared date range (lib/range.ts) and get it averaged into buckets.
+// Pure parts (`diskForecast`, `toCsv`, `fromOld`) are tested.
 
-export interface HistoryPoint {
-  /** Start of the minute, Unix seconds. */
-  t: number;
-  cpu: number | null;
-  /** % used. */
-  mem: number;
-  /** % used on the fullest real disk. */
-  disk: number | null;
-}
+export type HistoryPoint = MetricPoint;
 
-export const DAY = 24 * 3600;
-const IGNORED_FS = /^(tmpfs|devtmpfs|overlay|squashfs|iso9660|udf|efivarfs|ramfs|nsfs)$/;
-
-export function point(m: Metrics): HistoryPoint {
-  const disks = m.disks.filter((d) => !IGNORED_FS.test(d.fsType) && !d.mount.startsWith("/snap/") && d.totalBytes >= 64 * 1024 * 1024);
-  return {
-    t: Math.floor(m.sampledAtMs / 60_000) * 60,
-    cpu: m.cpuPercent === null ? null : Math.round(m.cpuPercent * 10) / 10,
-    mem: m.memTotal ? Math.round((1 - m.memAvailable / m.memTotal) * 1000) / 10 : 0,
-    disk: disks.length ? Math.round(Math.max(...disks.map((d) => d.usedPercent)) * 10) / 10 : null,
-  };
-}
-
-/** Adds a point (replacing one for the same minute) and drops what's older than a day. */
-export function addPoint(points: HistoryPoint[], p: HistoryPoint): HistoryPoint[] {
-  const kept = points.filter((x) => x.t > p.t - DAY && x.t !== p.t);
-  kept.push(p);
-  kept.sort((a, b) => a.t - b.t);
-  return kept;
-}
-
-const key = (profileId: string) => `orbital.history.${profileId}`;
-
-function load(profileId: string): HistoryPoint[] {
-  try {
-    const v = JSON.parse(localStorage.getItem(key(profileId)) ?? "[]");
-    const now = Date.now() / 1000;
-    return Array.isArray(v) ? v.filter((p) => p && typeof p.t === "number" && p.t > now - DAY) : [];
-  } catch {
-    return [];
-  }
-}
-
-export const useHistory = create<{ byProfile: Record<string, HistoryPoint[]> }>(() => ({ byProfile: {} }));
-
-export function historyOf(profileId: string): HistoryPoint[] {
-  const have = useHistory.getState().byProfile[profileId];
-  if (have) return have;
-  const loaded = load(profileId);
-  useHistory.setState((s) => ({ byProfile: { ...s.byProfile, [profileId]: loaded } }));
-  return loaded;
-}
-
-/** Mounted once in App: records each connected server's latest sample once a minute, and saves. */
-export function useHistoryRecorder() {
+/** History for the shared range, refreshed every minute. */
+export function useRangeHistory(profileId: string | null | undefined, max = 720, override?: Range) {
+  const shared = useRange((x) => x.range);
+  const range = override ?? shared;
+  const [data, setData] = useState<{ bucket: number; points: HistoryPoint[]; from: number; to: number } | null>(null);
+  const key = JSON.stringify(range);
   useEffect(() => {
-    let lastSeen: Record<string, number> = {};
-    const unsub = useStore.subscribe((st) => {
-      for (const s of Object.values(st.sessions)) {
-        const m = s.metrics[s.metrics.length - 1];
-        if (!m || s.lost) continue;
-        if (lastSeen[s.info.id] === m.sampledAtMs) continue;
-        lastSeen[s.info.id] = m.sampledAtMs;
-        const pid = s.profile.id;
-        const next = addPoint(historyOf(pid), point(m));
-        useHistory.setState((h) => ({ byProfile: { ...h.byProfile, [pid]: next } }));
-      }
-    });
-    // Saved once a minute (and when Orbital closes), not on every sample.
-    const save = () => {
-      for (const [pid, pts] of Object.entries(useHistory.getState().byProfile)) {
-        try { localStorage.setItem(key(pid), JSON.stringify(pts)); } catch { /* this run only */ }
-      }
+    if (!profileId) return;
+    let alive = true;
+    const load = () => {
+      const { from, to } = bounds(range);
+      api.metricHistory(profileId, from, to, max).then(([bucket, points]) => alive && setData({ bucket, points, from, to }), () => {});
     };
-    const t = setInterval(save, 60_000);
-    window.addEventListener("beforeunload", save);
-    return () => {
-      unsub();
-      clearInterval(t);
-      window.removeEventListener("beforeunload", save);
-      save();
-      lastSeen = {};
-    };
+    load();
+    const t = setInterval(load, 60_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [profileId, key, max]);
+  return data;
+}
+
+/**
+ * When the fullest disk fills up at its recent pace: a straight line through
+ * the points (least squares), from at least 12 hours of data, only when it's
+ * rising. Days from the last point, or null.
+ */
+export function diskForecast(points: HistoryPoint[]): number | null {
+  const pts = points.filter((p) => p.disk !== null) as (HistoryPoint & { disk: number })[];
+  if (pts.length < 6 || pts[pts.length - 1].t - pts[0].t < 12 * 3600) return null;
+  const n = pts.length;
+  const mx = pts.reduce((a, p) => a + p.t, 0) / n;
+  const my = pts.reduce((a, p) => a + p.disk, 0) / n;
+  let num = 0, den = 0;
+  for (const p of pts) { num += (p.t - mx) * (p.disk - my); den += (p.t - mx) ** 2; }
+  if (den === 0) return null;
+  const slope = num / den; // % per second
+  if (slope <= 0) return null;
+  const last = pts[n - 1];
+  const now = my + slope * (last.t - mx);
+  const days = (100 - now) / slope / 86400;
+  return days > 0 && days < 365 ? Math.round(days * 10) / 10 : null;
+}
+
+/** The points as CSV (times in ISO 8601, UTC). */
+export function toCsv(points: HistoryPoint[]): string {
+  const rows = ["time,cpu_percent,memory_percent,fullest_disk_percent,load_1m,net_in_bytes_per_sec,net_out_bytes_per_sec"];
+  const v = (x: number | null | undefined) => (x === null || x === undefined ? "" : String(x));
+  for (const p of points) rows.push([new Date(p.t * 1000).toISOString(), v(p.cpu), v(p.mem), v(p.disk), v(p.load), v(p.rx), v(p.tx)].join(","));
+  return rows.join("\n") + "\n";
+}
+
+/** A point kept by versions up to 1.9 (CPU, memory and disk only). */
+export function fromOld(p: any): HistoryPoint | null {
+  if (!p || typeof p.t !== "number" || typeof p.mem !== "number") return null;
+  return { t: p.t, cpu: typeof p.cpu === "number" ? p.cpu : null, mem: p.mem, disk: typeof p.disk === "number" ? p.disk : null, load: 0, rx: null, tx: null, uptime: null };
+}
+
+/** Mounted once in App: moves history kept in local storage by older versions into the database, then drops it. */
+export function useHistoryMigration() {
+  useEffect(() => {
+    let keys: string[] = [];
+    try { keys = Object.keys(localStorage).filter((k) => k.startsWith("orbital.history.")); } catch { return; }
+    for (const k of keys) {
+      let pts: HistoryPoint[] = [];
+      try { pts = (JSON.parse(localStorage.getItem(k) ?? "[]") as any[]).map(fromOld).filter(Boolean) as HistoryPoint[]; } catch { /* unreadable: drop it */ }
+      const pid = k.slice("orbital.history.".length);
+      const done = () => { try { localStorage.removeItem(k); } catch { /* next time */ } };
+      if (!pts.length) { done(); continue; }
+      api.importMetricHistory(pid, pts).then(done, () => {});
+    }
   }, []);
 }

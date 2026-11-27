@@ -2,7 +2,10 @@ import { Bell, BellOff, FileInput, Loader2, NotebookPen, Plus } from "lucide-rea
 import { isSsh, SessionState, useStore } from "../store";
 import { Profile } from "../lib/api";
 import { useHealthMute, useSessionHealth } from "../lib/health";
-import { useHistory } from "../lib/metricHistory";
+import { diskForecast, useRangeHistory } from "../lib/metricHistory";
+import { label, useRange } from "../lib/range";
+import { RangePicker } from "./RangePicker";
+import { CompareServers } from "./CompareChart";
 import { certText, updatesText, useFleet } from "../lib/fleet";
 import { noteTitle, readNote, useNotes } from "../lib/notes";
 import { Sparkline } from "./ui";
@@ -33,6 +36,8 @@ export function Welcome() {
   );
 }
 
+const WEEK = { preset: "7d" } as const;
+
 /** Every saved server at a glance: connected ones first with their numbers and anything that needs attention. */
 function Overview() {
   const { profiles, sessions } = useStore();
@@ -41,10 +46,14 @@ function Overview() {
   const list = [...profiles].sort((a, b) => Number(!!live[b.id]) - Number(!!live[a.id]) || when(b) - when(a) || a.name.localeCompare(b.name));
   return (
     <div className="overview">
-      <span className="faint overview-title">Your servers · {Object.keys(live).length} of {profiles.length} connected</span>
+      <div className="overview-head">
+        <span className="faint overview-title">Your servers · {Object.keys(live).length} of {profiles.length} connected</span>
+        <RangePicker />
+      </div>
       <div className="overview-grid">
         {list.map((p) => <ServerCard key={p.id} p={p} s={live[p.id]} />)}
       </div>
+      <CompareServers profiles={list} />
     </div>
   );
 }
@@ -61,8 +70,11 @@ function ServerCard({ p, s }: { p: Profile; s?: SessionState }) {
   const fleet = useFleet((f) => f.updates[p.id]);
   const upd = updatesText(fleet);
   const cert = certText(useFleet((f) => f.certs[p.id]));
-  const hist = useHistory((x) => x.byProfile[p.id]) ?? [];
-  const trend = hist.slice(-120).map((x) => x.cpu ?? 0);
+  // CPU over the shared date range, and where the fullest disk is heading over the last week.
+  const range = useRange((x) => x.range);
+  const trend = (useRangeHistory(p.id, 80)?.points ?? []).map((x) => x.cpu ?? 0);
+  const week = useRangeHistory(p.id, 200, WEEK);
+  const full = week ? diskForecast(week.points) : null;
   return (
     <button className={`server-card ${level}`} onClick={() => connect(p.id)} title={s ? `Open ${p.name}` : `Connect to ${p.name}`}>
       <div className="server-card-head">
@@ -95,8 +107,13 @@ function ServerCard({ p, s }: { p: Profile; s?: SessionState }) {
           {s ? (isSsh(s) ? "Connected · reading…" : "Connected (file storage)") : p.lastConnectedAt ? `Not connected · last opened ${relativeTime(when(p) / 1000)}` : "Not connected yet"}
         </span>
       )}
-      {s && trend.length > 1 && (
-        <div className="server-card-trend" title="CPU over the last 2 hours"><Sparkline values={trend} width={200} height={22} fluid /></div>
+      {trend.length > 1 && (
+        <div className="server-card-trend" title={`CPU, ${label(range).toLowerCase()}`}><Sparkline values={trend} width={200} height={22} fluid /></div>
+      )}
+      {full !== null && full < 30 && (
+        <span className={`server-card-forecast ${full < 7 ? "warn" : ""}`} title="At last week's pace (a straight line through the fullest disk's use)">
+          Disk full in ~{full < 2 ? `${Math.max(1, Math.round(full * 24))} h` : `${Math.round(full)} days`}
+        </span>
       )}
       {s && upd && (
         <span

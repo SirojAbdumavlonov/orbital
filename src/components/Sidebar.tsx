@@ -1,10 +1,11 @@
 import { PROTOCOL_NAMES } from "./ProfileDialog";
 import { JobsMenu } from "./JobsMenu";
-import { Activity, HeartPulse, SquareCode, ChevronLeft, ChevronRight, FileInput, Globe, Home, KeyRound, LifeBuoy, Loader2, MessageSquare, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sparkles, Sun, Unplug } from "lucide-react";
+import { Activity, HeartPulse, SquareCode, ChevronLeft, ChevronRight, FileInput, Globe, Home, KeyRound, LifeBuoy, Loader2, MessageSquare, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sparkles, SquareTerminal, Sun, Unplug } from "lucide-react";
 import { isMac, KEYS } from "../lib/platform";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Profile } from "../lib/api";
+import { sshCommand } from "../lib/sshCommand";
 import { goTo, useStore } from "../store";
 import { useSessionHealth } from "../lib/health";
 
@@ -73,6 +74,16 @@ export function Sidebar() {
                     <Loader2 size={14} className="spin faint" />
                   ) : (
                     <div className="row-actions">
+                      {sshCommand(p, profiles) && (
+                        <button className="icon-btn" aria-label="Copy ssh command" title={`Copy: ${sshCommand(p, profiles)}`} onClick={(e) => {
+                          e.stopPropagation();
+                          const cmd = sshCommand(p, profiles)!;
+                          void navigator.clipboard?.writeText(cmd).catch(() => {});
+                          useStore.getState().toast({ kind: "success", title: "ssh command copied", body: cmd });
+                        }}>
+                          <SquareTerminal size={13} />
+                        </button>
+                      )}
                       <button className="icon-btn" aria-label="Edit server" title="Edit" onClick={(e) => { e.stopPropagation(); setEditing(p); }}>
                         <Pencil size={13} />
                       </button>

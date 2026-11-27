@@ -677,6 +677,63 @@ pub fn last_state(db: &Database, check_id: &str) -> Result<CheckState> {
 }
 
 /// Drop results and changes past their keep time.
+/// A check over a chosen date range (the shared range on the Uptime page).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RangeSummary {
+    pub check_id: String,
+    /// Results in the range.
+    pub checks: u32,
+    pub up_percent: Option<f64>,
+    pub avg_latency_ms: Option<f64>,
+    /// One per bucket: average latency of the successful checks, and whether any failed.
+    pub points: Vec<RangePoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RangePoint {
+    pub t: i64,
+    pub latency_ms: Option<f64>,
+    pub down: u32,
+    pub total: u32,
+}
+
+/// Results of one check between `from` and `to` (Unix seconds), in at most `max` buckets.
+pub fn range_summary(db: &Database, check_id: &str, from: i64, to: i64, max: u32) -> Result<RangeSummary> {
+    let b = crate::metric_store::bucket(from, to, max);
+    let conn = db.conn();
+    let mut st = conn.prepare_cached(
+        "SELECT (CAST(strftime('%s', at) AS INTEGER) / ?4) * ?4 AS b,
+                AVG(CASE WHEN up = 1 THEN latency_ms END), SUM(CASE WHEN up = 0 THEN 1 ELSE 0 END), COUNT(*)
+         FROM uptime_results WHERE check_id = ?1 AND CAST(strftime('%s', at) AS INTEGER) BETWEEN ?2 AND ?3
+         GROUP BY b ORDER BY b",
+    )?;
+    let points = st
+        .query_map(rusqlite::params![check_id, from, to, b], |r| {
+            Ok(RangePoint {
+                t: r.get(0)?,
+                latency_ms: r.get::<_, Option<f64>>(1)?.map(f64::round),
+                down: r.get::<_, i64>(2)? as u32,
+                total: r.get::<_, i64>(3)? as u32,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let checks: u32 = points.iter().map(|p| p.total).sum();
+    let down: u32 = points.iter().map(|p| p.down).sum();
+    let (lat_sum, lat_n) = points
+        .iter()
+        .filter_map(|p| p.latency_ms.map(|l| (l * (p.total - p.down) as f64, (p.total - p.down) as f64)))
+        .fold((0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+    Ok(RangeSummary {
+        check_id: check_id.to_string(),
+        checks,
+        up_percent: (checks > 0).then(|| ((checks - down) as f64 / checks as f64 * 1000.0).round() / 10.0),
+        avg_latency_ms: (lat_n > 0.0).then(|| (lat_sum / lat_n).round()),
+        points,
+    })
+}
+
 pub fn prune(db: &Database, now: DateTime<Utc>) -> Result<()> {
     let conn = db.conn();
     conn.execute(
@@ -1040,5 +1097,42 @@ mod tests {
         assert!(get_check(&db, &c.id).is_err());
         assert!(list_checks(&db).unwrap().is_empty());
         assert!(save_check(&db, Some("missing"), &input(CheckKind::Tcp, "a:1")).is_err());
+    }
+
+    #[test]
+    fn summarises_a_date_range() {
+        let db = Database::in_memory().unwrap();
+        let c = save_check(
+            &db,
+            None,
+            &CheckInput {
+                name: "shop".into(),
+                kind: CheckKind::Http,
+                target: "https://shop.example.com/".into(),
+                expected_status: None,
+                contains: None,
+                interval_minutes: 1,
+                paused: false,
+            },
+        )
+        .unwrap();
+        let at = |m: i64, up: bool, ms: u64| CheckResult {
+            at: DateTime::<Utc>::from_timestamp(1_800_000_000 + m * 60, 0).unwrap().to_rfc3339(),
+            up,
+            latency_ms: up.then_some(ms),
+            status_code: None,
+            error: (!up).then(|| "timed out".into()),
+            cert_expires: None,
+            warning: None,
+        };
+        for (m, up, ms) in [(0, true, 100), (1, true, 300), (2, false, 0), (3, true, 200)] {
+            store_result(&db, &c.id, &at(m, up, ms)).unwrap();
+        }
+        let s = range_summary(&db, &c.id, 1_800_000_000, 1_800_000_000 + 3600, 720).unwrap();
+        assert_eq!((s.checks, s.up_percent, s.avg_latency_ms), (4, Some(75.0), Some(200.0)));
+        assert_eq!(s.points.len(), 4);
+        assert_eq!(s.points[2].down, 1);
+        let out = range_summary(&db, &c.id, 0, 1000, 720).unwrap();
+        assert!(out.checks == 0 && out.up_percent.is_none());
     }
 }

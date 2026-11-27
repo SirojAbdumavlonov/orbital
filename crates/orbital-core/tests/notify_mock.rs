@@ -159,6 +159,7 @@ fn input(name: &str, events: Vec<AlertKind>, config: ChannelConfig, secret: &str
         events,
         config,
         secret: secret.into(),
+        quiet: None,
     }
 }
 

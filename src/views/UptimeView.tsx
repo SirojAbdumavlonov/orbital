@@ -1,7 +1,9 @@
 import { AlertTriangle, Globe, Loader2, Pause, Pencil, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { confirm, DrawerClose, Modal, Sparkline } from "../components/ui";
-import { api, asApiError, CheckInput, CheckKind, CheckStatus, NginxConfig } from "../lib/api";
+import { api, asApiError, CheckInput, CheckKind, CheckStatus, NginxConfig, UptimeRange } from "../lib/api";
+import { bounds, label, useRange } from "../lib/range";
+import { RangePicker } from "../components/RangePicker";
 import { useUptimeEvents } from "../lib/uptime";
 import { isSsh, useStore } from "../store";
 
@@ -142,8 +144,9 @@ function Ticks({ s }: { s: CheckStatus }) {
   );
 }
 
-function Detail({ s, onClose, onEdit }: { s: CheckStatus; onClose: () => void; onEdit: () => void }) {
+function Detail({ s, r, onClose, onEdit }: { s: CheckStatus; r?: UptimeRange; onClose: () => void; onEdit: () => void }) {
   const st = stateOf(s);
+  const range = useRange((x) => x.range);
   const latency = s.recent.filter((r) => r.up && r.latencyMs != null).map((r) => r.latencyMs!);
   const avg = latency.length ? Math.round(latency.reduce((a, b) => a + b, 0) / latency.length) : null;
   return (
@@ -165,8 +168,9 @@ function Detail({ s, onClose, onEdit }: { s: CheckStatus; onClose: () => void; o
           {s.last?.certExpires && <><dt>Certificate</dt><dd>expires {new Date(s.last.certExpires).toLocaleDateString()}</dd></>}
         </dl>
         {s.last?.warning && <div className="notice uptime-warning"><AlertTriangle size={14} /> {s.last.warning}</div>}
-        <div className="section-title">Latency, last {s.recent.length} checks</div>
-        <div style={{ padding: "0 14px" }}><Sparkline values={s.recent.map((r) => r.latencyMs ?? 0)} max={0} width={300} height={46} fluid /></div>
+        <div className="section-title">Latency, {label(range).toLowerCase()}{r ? ` · ${pct(r.upPercent)} up over ${r.checks} checks${r.avgLatencyMs != null ? `, ${r.avgLatencyMs} ms average` : ""}` : ""}</div>
+        <div style={{ padding: "0 14px" }}><Sparkline values={(r?.points ?? []).map((x) => x.latencyMs ?? 0)} max={0} width={300} height={46} fluid /></div>
+        {r && r.points.some((x) => x.down > 0) && <p className="faint" style={{ margin: "4px 14px 0", fontSize: 12 }}>Down in {r.points.filter((x) => x.down > 0).length} of {r.points.length} stretches of this range. Results are kept 7 days.</p>}
         <div className="section-title">Last error</div>
         <div style={{ padding: "0 14px", fontSize: 12 }}>
           {s.lastError ? <><div className="faint">{new Date(s.lastError.at).toLocaleString()}</div><div className="mono selectable">{s.lastError.error}</div></> : <span className="faint">None in the last 7 days.</span>}
@@ -184,6 +188,17 @@ function Detail({ s, onClose, onEdit }: { s: CheckStatus; onClose: () => void; o
 }
 
 /** Global page: website and port checks run from this computer, with alerts. */
+/** Every check over the shared date range (lib/range.ts), refreshed with the list. */
+function useUptimeRange(rev: unknown) {
+  const range = useRange((x) => x.range);
+  const [byId, setById] = useState<Record<string, UptimeRange>>({});
+  useEffect(() => {
+    const { from, to } = bounds(range);
+    api.uptimeRange(from, to, 120).then((r) => setById(Object.fromEntries(r.map((x) => [x.checkId, x]))), () => {});
+  }, [JSON.stringify(range), rev]);
+  return byId;
+}
+
 export function UptimeView() {
   const toast = useStore((x) => x.toast);
   const [list, setList] = useState<CheckStatus[] | null>(null);
@@ -236,6 +251,8 @@ export function UptimeView() {
     }
   }
 
+  const ranged = useUptimeRange(list);
+  const range = useRange((x) => x.range);
   const down = list?.filter((s) => !s.check.paused && s.state === "down").length ?? 0;
   const selected = list?.find((s) => s.check.id === sel) ?? null;
 
@@ -245,6 +262,7 @@ export function UptimeView() {
         {list && list.length > 0 && <span className={down ? "badge bad" : "badge ok"}>{down ? `${down} down` : "All up"}</span>}
         <span className="faint">{list ? `${list.length} check${list.length === 1 ? "" : "s"} · run from this computer while Orbital is open` : "Loading…"}</span>
         <span className="spacer" />
+        <RangePicker />
         <button className="btn" onClick={() => setEditing({ check: null, initial: blank("tcp") })}><Plus size={14} /> Port</button>
         <button className="btn primary" onClick={() => setEditing({ check: null })}><Plus size={14} /> Website</button>
       </div>
@@ -270,7 +288,7 @@ export function UptimeView() {
             </div>
           ) : (
             <table className="table">
-              <thead><tr><th>Check</th><th>Last 30</th><th>Latency</th><th className="num">24 h</th><th className="num">7 days</th><th>Last error</th><th /></tr></thead>
+              <thead><tr><th>Check</th><th>Last 30</th><th title={label(range)}>Latency</th><th className="num" title={label(range)}>Up, {label(range).replace(/^Last /, "")}</th><th className="num">7 days</th><th>Last error</th><th /></tr></thead>
               <tbody>
                 {(list ?? []).map((s) => {
                   const st = stateOf(s);
@@ -282,8 +300,8 @@ export function UptimeView() {
                         <div className="faint" style={{ fontSize: 11.5 }}>{st.label}{s.since && !s.check.paused ? ` ${lasted(s.since)}` : ""} · every {s.check.intervalMinutes} min · checked {ago(s.last?.at)}</div>
                       </td>
                       <td><Ticks s={s} /></td>
-                      <td className="nowrap"><div className="uptime-latency"><Sparkline values={s.recent.map((r) => r.latencyMs ?? 0)} max={0} width={80} height={20} /><span className="mono">{s.last?.latencyMs != null ? `${s.last.latencyMs} ms` : "—"}</span></div></td>
-                      <td className="num">{pct(s.uptime24h)}</td>
+                      <td className="nowrap"><div className="uptime-latency"><Sparkline values={(ranged[s.check.id]?.points ?? []).map((r) => r.latencyMs ?? 0)} max={0} width={80} height={20} /><span className="mono">{s.last?.latencyMs != null ? `${s.last.latencyMs} ms` : "—"}</span></div></td>
+                      <td className="num">{pct(ranged[s.check.id]?.upPercent ?? null)}</td>
                       <td className="num">{pct(s.uptime7d)}</td>
                       <td className="faint" style={{ maxWidth: 260, fontSize: 12 }}>{s.lastError ? <><span className="uptime-error">{s.lastError.error}</span><br />{ago(s.lastError.at)}</> : "—"}</td>
                       <td className="nowrap" onClick={(e) => e.stopPropagation()}>
@@ -299,7 +317,7 @@ export function UptimeView() {
             </table>
           )}
         </div>
-        {selected && <Detail s={selected} onClose={() => setSel(null)} onEdit={() => setEditing({ check: selected.check })} />}
+        {selected && <Detail s={selected} r={ranged[selected.check.id]} onClose={() => setSel(null)} onEdit={() => setEditing({ check: selected.check })} />}
       </div>
       {editing && <CheckDialog check={editing.check} initial={editing.initial} onClose={() => setEditing(null)} onSaved={load} />}
     </div>

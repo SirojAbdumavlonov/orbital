@@ -998,6 +998,80 @@ export function install() {
         demoStacks.push({ name: args.name, status: args.deploy ? "running(1)" : "not deployed", files: [`/opt/stacks/${args.name}/compose.yaml`], running: !!args.deploy, ours: true });
         return args.deploy ? { stdout: ` Container ${args.name}-web-1  Started\n`, stderr: "", exitCode: 0, durationMs: 1400 } : null;
       }
+      case "metric_history": {
+        // Made-up history: a daily rhythm, a disk on prod-web-01 filling about 1 % a day, nothing older than 21 days.
+        const { profileId, max } = args;
+        const to = Math.min(args.to, Math.floor(Date.now() / 1000));
+        const from = Math.max(args.from, to - 21 * 86400);
+        const bucket = Math.max(60, Math.ceil((to - from) / max / 60) * 60);
+        const seed = profileId.charCodeAt(profileId.length - 1);
+        const pts: any[] = [];
+        for (let t = Math.floor(from / bucket) * bucket; t <= to; t += bucket) {
+          if (profileId === "p3" && (t / 3600) % 24 < 6) continue; // staging: only some hours recorded
+          const day = Math.sin((t / 86400) * 2 * Math.PI);
+          const ageDays = (to - t) / 86400;
+          pts.push({
+            t, cpu: Math.max(1, Math.round((25 + 15 * day + 6 * Math.sin(t / 1300 + seed)) * 10) / 10),
+            mem: Math.round((55 + 8 * day) * 10) / 10,
+            disk: profileId === "p1" ? Math.round((91 - ageDays * 1.1) * 10) / 10 : 42,
+            load: Math.round((1.2 + day) * 100) / 100, rx: Math.round(200_000 + 150_000 * day), tx: Math.round(90_000 + 60_000 * day), uptime: Math.round(40 * 86400 - ageDays * 86400),
+          });
+        }
+        return [bucket, pts];
+      }
+      case "import_metric_history": return args.points.length;
+      case "metric_moment": {
+        const t = Math.round(args.t / 60) * 60;
+        const n = (t / 60) % 7;
+        return {
+          t, disks: [],
+          procs: [
+            { name: "node", user: "deploy", pid: 2210, cpu: 18 + n * 3, mem: 6.2, rssKb: 520_000 },
+            { name: "postgres", user: "postgres", pid: 1402, cpu: 9 + n, mem: 14.8, rssKb: 1_240_000 },
+            { name: "nginx", user: "www-data", pid: 812, cpu: 3.1, mem: 0.4, rssKb: 32_000 },
+            { name: "dockerd", user: "root", pid: 640, cpu: 1.2, mem: 1.9, rssKb: 160_000 },
+          ],
+        };
+      }
+      case "disk_history": {
+        const GB = 1024 ** 3;
+        const pts = (start: number, perDay: number) => Array.from({ length: 30 }, (_, i) => [args.from + (i * (args.to - args.from)) / 29, Math.round((start + (perDay * i * (args.to - args.from)) / 29 / 86400) * GB)] as [number, number]);
+        if (args.profileId !== "p1") return [];
+        return [
+          { mount: "/", total: 160 * GB, points: pts(60, 0.02), perDay: 0.02 * GB, fullAt: null },
+          { mount: "/var/lib/docker", total: 500 * GB, points: pts(415, 5.5), perDay: 5.5 * GB, fullAt: Math.floor(Date.now() / 1000) + 8 * 86400 },
+          { mount: "/boot/efi", total: 0.5 * GB, points: pts(0.03, 0), perDay: 0, fullAt: null },
+        ];
+      }
+      case "metric_events": {
+        if (args.profileId !== "p1") return [];
+        const now = Math.floor(Date.now() / 1000);
+        const ev = [
+          { t: now - 3 * 3600, kind: "service", action: "service.restart", target: "nginx.service", ok: true },
+          { t: now - 26 * 3600, kind: "config", action: "config.safe_save", target: "/etc/nginx/sites-available/shop.example.com", ok: true },
+          { t: now - 50 * 3600, kind: "docker", action: "docker.restart", target: "shop-api-1", ok: true },
+          { t: now - 5 * 86400, kind: "restart", action: "server.restart", target: null, ok: true },
+          { t: now - 9 * 86400, kind: "command", action: "package.install", target: "htop", ok: false },
+        ];
+        return ev.filter((e) => e.t >= args.from && e.t <= args.to).sort((a, b) => a.t - b.t);
+      }
+
+      case "uptime_range": {
+        const { from, to, max } = args;
+        const bucket = Math.max(60, Math.ceil((to - from) / max / 60) * 60);
+        return uptimeChecks.map((c) => {
+          const rs = (uptimeResults[c.id] ?? []).filter((r) => { const t = new Date(r.at).getTime() / 1000; return t >= from && t <= to; });
+          const byB = new Map<number, any[]>();
+          for (const r of rs) { const b = Math.floor(new Date(r.at).getTime() / 1000 / bucket) * bucket; byB.set(b, [...(byB.get(b) ?? []), r]); }
+          const points = [...byB.entries()].sort((a, b) => a[0] - b[0]).map(([t, xs]) => {
+            const ups = xs.filter((x) => x.up);
+            return { t, latencyMs: ups.length ? Math.round(ups.reduce((a, x) => a + x.latencyMs, 0) / ups.length) : null, down: xs.length - ups.length, total: xs.length };
+          });
+          const down = rs.filter((r) => !r.up).length;
+          const ups = rs.filter((r) => r.up);
+          return { checkId: c.id, checks: rs.length, upPercent: rs.length ? Math.round(((rs.length - down) / rs.length) * 1000) / 10 : null, avgLatencyMs: ups.length ? Math.round(ups.reduce((a, x) => a + x.latencyMs, 0) / ups.length) : null, points };
+        });
+      }
       case "notify_channels": return notifyChannels.map((c) => ({ ...c }));
       case "save_notify_channel": {
         const { id, input } = args;

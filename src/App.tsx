@@ -1,3 +1,4 @@
+import { ShortcutSheet } from "./components/Shortcuts";
 import { PanelRightClose } from "lucide-react";
 import { CheckupView } from "./views/CheckupView";
 import { UpdatesView } from "./views/UpdatesView";
@@ -40,7 +41,8 @@ import { ChangesView, useWhatsNewAnnounce, WhatsNewDialog } from "./components/W
 import { isMac, isSidebarKey, mod } from "./lib/platform";
 import { isPaneKey, usePanes } from "./lib/panes";
 import { useFailedPolling } from "./lib/health";
-import { useHistoryRecorder } from "./lib/metricHistory";
+import { useHistoryMigration } from "./lib/metricHistory";
+import { useRememberFolders } from "./lib/startFolder";
 import { useFleetUpdates } from "./lib/fleet";
 import { useSessionRestore } from "./lib/restore";
 import { useUptimeAlerts } from "./lib/uptime";
@@ -214,7 +216,8 @@ export default function App() {
   useWhatsNewAnnounce();
   useUptimeAlerts();
   useFailedPolling();
-  useHistoryRecorder();
+  useHistoryMigration();
+  useRememberFolders((f) => useStore.subscribe(f));
   useFleetUpdates();
   const profilesLoaded = useStore((x) => x.profilesLoaded);
   useSessionRestore(profilesLoaded);
@@ -279,6 +282,7 @@ export default function App() {
     {/* Outside the grid: these draw floating layers, not columns. */}
     <Toasts />
     <CommandMenu />
+    <ShortcutSheet />
     <StatsPrompt />
     <WhatsNewDialog />
     </>

@@ -84,3 +84,15 @@ it("uses the thresholds from Settings", () => {
   const strict = { diskWarn: 30, diskBad: 50, memWarn: 40, memBad: 99, loadWarn: 0.1, loadBad: 9 };
   expect(assess(metrics(), [], [], strict)).toEqual({ level: "warn", reasons: ["Disk / 40%", "Memory 50% used", "Load 0.5 on 4 cores"] });
 });
+
+describe("restart alerts", async () => {
+  const { restartMessage } = await import("./health");
+  it("alerts once when uptime goes down", () => {
+    expect(restartMessage("web", undefined, 500)).toBeNull();
+    expect(restartMessage("web", 1000, 1060)).toBeNull();
+    const m = restartMessage("web", 90_000, 180)!;
+    expect(m.kind).toBe("warn");
+    expect(m.title).toBe("web restarted");
+    expect(m.body).toContain("3 min");
+  });
+});

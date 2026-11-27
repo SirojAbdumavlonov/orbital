@@ -339,6 +339,20 @@ async fn full_workflow_password_auth() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     let m2 = engine.metrics(&sid).await.unwrap();
     assert!(m2.cpu_percent.is_some(), "second sample yields a CPU rate");
+    // Each sample also lands in the monitoring history (a point a minute).
+    let now = chrono::Utc::now().timestamp();
+    let (_, hist) = engine.metric_history(&s.profile_id, now - 3600, now + 60, 720).unwrap();
+    assert!(!hist.is_empty() && hist.last().unwrap().uptime.unwrap_or(0) > 0, "{hist:?}");
+    // And that minute's busiest programs (names only) and every disk.
+    let moment = engine
+        .metric_moment(&s.profile_id, hist.last().unwrap().t, 120)
+        .unwrap()
+        .expect("the minute was recorded");
+    assert!(
+        !moment.procs.is_empty() && moment.procs.iter().all(|p| !p.name.contains(' ')),
+        "{moment:?}"
+    );
+    assert!(!moment.disks.is_empty(), "{moment:?}");
 
     // --- terminal in a given directory ---
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -2247,6 +2261,7 @@ async fn ai_agent_installs_pairs_and_removes() {
                     server: "test".into(),
                 },
                 secret: String::new(),
+                quiet: None,
             },
         )
         .unwrap();

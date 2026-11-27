@@ -4,6 +4,22 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **One date range for all monitoring** (Monitor, Home and Uptime): pick the last hour, 6 hours, a day, 7 days, 30 days or your own dates once, and every chart follows it. History is now kept 30 days (it was 24 hours) and includes the load and network traffic; what Orbital had recorded before is kept.
+- **See any moment in history**: point at Monitor's charts to see that minute's numbers, the changes Orbital made then and the busiest programs at the time; click to keep it. Only program names are recorded, never their arguments, which can hold passwords.
+- **Changes and restarts on the chart**: service and container actions, config saves, package changes, deploys and server restarts are marked along the chart, so a spike can be matched with what caused it.
+- **Growth per disk**: Monitor's disk table shows how fast each disk grows a day over the last week, with a small trend and when it fills at that pace.
+- **Compare servers** (Home): one metric (CPU, memory, disk, load or network) for up to six servers on one chart over the chosen dates, with averages and peaks.
+- **Network chart**: Monitor's history shows network traffic in and out beside CPU, memory and disk, with averages and peaks for the range.
+- **Export history as CSV**: save the chosen range of a server's history to a spreadsheet from Monitor.
+- **Disk-full forecast**: at last week's pace, Monitor and the Home card say when the fullest disk fills up (within a month).
+- **Restart alerts**: when a connected server restarts, you're told, and so are your Telegram, email or agent channels.
+- **Long job alerts**: installs, backups, uploads and updates that ran 2 minutes or more report how they ended to the channels that ask for job alerts.
+- **Quiet hours** for alert channels: at night (or any hours you choose) only problems are sent; recoveries, warnings and finished jobs are left out.
+- **Copy ssh command**: one click in the sidebar copies the command for a terminal outside Orbital, with port, key and jump hosts.
+- **Keyboard shortcuts sheet**: ⌘/ (Ctrl+/ on Windows and Linux) lists every shortcut anywhere in the app.
+- **Files opens in your folder of choice** (Settings → Starting Orbital): the home folder, /, the last folder you had open on that server, or a fixed folder such as /var/www.
+
 ## 1.9.0 (2026-11-27)
 
 ### Added

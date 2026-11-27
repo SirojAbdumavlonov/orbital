@@ -150,6 +150,15 @@ function finished(id: string, quietHere: boolean) {
   if (document.visibilityState !== "visible" || !document.hasFocus()) {
     void api.notify(title, body ?? "").catch(() => {});
   }
+  // A long one also goes to Telegram, email or the agent, when a channel takes job alerts.
+  if (reportsElsewhere(j)) {
+    void api.sendAlert({ kind: "jobs", level: ok ? "ok" : "bad", title: j.server ? `${j.server}: ${title}` : title, body: `${body ?? ""}${body ? " · " : ""}took ${Math.round(((j.ended ?? Date.now()) - j.started) / 60_000)} min` }).catch(() => {});
+  }
+}
+
+/** Jobs of 2 minutes or more that finished or failed (not ones the user stopped). Pure; tested. */
+export function reportsElsewhere(j: Pick<Job, "status" | "started" | "ended">): boolean {
+  return (j.status === "done" || j.status === "failed") && (j.ended ?? 0) - j.started >= 120_000;
 }
 
 /** The newest job with this key: the one a view started, still there after it was reopened. */

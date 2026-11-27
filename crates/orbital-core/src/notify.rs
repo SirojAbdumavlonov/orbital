@@ -27,6 +27,8 @@ pub enum AlertKind {
     Health,
     /// An uptime check went down, came back, or its certificate is expiring.
     Uptime,
+    /// A long job (install, backup, upload, update…) finished or failed.
+    Jobs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,7 +100,44 @@ pub struct Channel {
     /// Which alerts it gets.
     pub events: Vec<AlertKind>,
     pub config: ChannelConfig,
+    /// Hours when only problems are sent (recoveries, warnings and finished jobs wait).
+    #[serde(default)]
+    pub quiet: Option<Quiet>,
     pub created_at: String,
+}
+
+/// Local time of day, "HH:MM"; `from` may be later than `to` (overnight).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Quiet {
+    pub from: String,
+    pub to: String,
+}
+
+fn minutes(hhmm: &str) -> Option<u32> {
+    let (h, m) = hhmm.trim().split_once(':')?;
+    let (h, m) = (h.parse::<u32>().ok()?, m.parse::<u32>().ok()?);
+    (h < 24 && m < 60 && hhmm.trim().len() == 5).then_some(h * 60 + m)
+}
+
+/// Is `now` (minutes since local midnight) inside the quiet hours?
+pub fn in_quiet(q: &Quiet, now: u32) -> bool {
+    let (Some(f), Some(t)) = (minutes(&q.from), minutes(&q.to)) else {
+        return false;
+    };
+    if f == t {
+        return false;
+    }
+    if f < t {
+        (f..t).contains(&now)
+    } else {
+        now >= f || now < t
+    }
+}
+
+/// Whether an alert goes out now: problems always do; the rest wait out quiet hours.
+pub fn goes_now(c: &Channel, a: &Alert, now: u32) -> bool {
+    a.level == Level::Bad || !c.quiet.as_ref().is_some_and(|q| in_quiet(q, now))
 }
 
 /// What the dialog sends to add or change a channel. `secret` is the bot
@@ -112,6 +151,8 @@ pub struct ChannelInput {
     pub config: ChannelConfig,
     #[serde(default)]
     pub secret: String,
+    #[serde(default)]
+    pub quiet: Option<Quiet>,
 }
 
 pub fn secret_key(id: &str) -> String {
@@ -150,6 +191,13 @@ pub fn validate(input: &ChannelInput, has_saved_secret: bool) -> Result<()> {
     }
     if input.events.is_empty() {
         return Err(Error::InvalidInput("choose at least one kind of alert to send".into()));
+    }
+    if let Some(q) = &input.quiet {
+        if minutes(&q.from).is_none() || minutes(&q.to).is_none() || q.from.trim() == q.to.trim() {
+            return Err(Error::InvalidInput(
+                "give quiet hours as two different times, like 22:00 and 07:00".into(),
+            ));
+        }
     }
     let secret = input.secret.trim();
     match &input.config {
@@ -244,6 +292,7 @@ pub fn email(a: &Alert) -> (String, String) {
     let what = match a.kind {
         AlertKind::Health => "a server's health",
         AlertKind::Uptime => "an uptime check",
+        AlertKind::Jobs => "a job you started",
     };
     let body = format!(
         "{}\n\n{}\n\n--\nSent by Orbital on your computer about {what}. Change or stop these in Orbital → Settings → Notifications.\n",
@@ -264,6 +313,7 @@ fn row(r: &Row) -> rusqlite::Result<Channel> {
         enabled: r.get::<_, i64>("enabled")? != 0,
         events: serde_json::from_str(&events).unwrap_or_default(),
         config: serde_json::from_str(&config).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+        quiet: r.get::<_, Option<String>>("quiet")?.and_then(|q| serde_json::from_str(&q).ok()),
         created_at: r.get("created_at")?,
     })
 }
@@ -301,12 +351,16 @@ pub fn save(db: &Database, id: Option<&str>, input: &ChannelInput) -> Result<Cha
     events.dedup();
     let cfg = serde_json::to_string(&config).map_err(|e| Error::Other(e.to_string()))?;
     let ev = serde_json::to_string(&events).map_err(|e| Error::Other(e.to_string()))?;
+    let quiet = input
+        .quiet
+        .as_ref()
+        .map(|q| serde_json::json!({ "from": q.from.trim(), "to": q.to.trim() }).to_string());
     let conn = db.conn();
     let id = match id {
         Some(id) => {
             let n = conn.execute(
-                "UPDATE notify_channels SET name = ?2, kind = ?3, config = ?4, events = ?5, enabled = ?6 WHERE id = ?1",
-                params![id, input.name.trim(), config.kind(), cfg, ev, input.enabled as i64],
+                "UPDATE notify_channels SET name = ?2, kind = ?3, config = ?4, events = ?5, enabled = ?6, quiet = ?7 WHERE id = ?1",
+                params![id, input.name.trim(), config.kind(), cfg, ev, input.enabled as i64, quiet],
             )?;
             if n == 0 {
                 return Err(Error::InvalidInput("that notification channel no longer exists".into()));
@@ -316,7 +370,7 @@ pub fn save(db: &Database, id: Option<&str>, input: &ChannelInput) -> Result<Cha
         None => {
             let id = uuid::Uuid::new_v4().to_string();
             conn.execute(
-                "INSERT INTO notify_channels (id, name, kind, config, events, enabled, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO notify_channels (id, name, kind, config, events, enabled, created_at, quiet) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     id,
                     input.name.trim(),
@@ -324,7 +378,8 @@ pub fn save(db: &Database, id: Option<&str>, input: &ChannelInput) -> Result<Cha
                     cfg,
                     ev,
                     input.enabled as i64,
-                    chrono::Utc::now().to_rfc3339()
+                    chrono::Utc::now().to_rfc3339(),
+                    quiet
                 ],
             )?;
             id
@@ -556,6 +611,7 @@ mod tests {
                 chat_name: "Me".into(),
             },
             secret: secret.into(),
+            quiet: None,
         }
     }
 
@@ -573,6 +629,7 @@ mod tests {
                 to: to.iter().map(|s| s.to_string()).collect(),
             },
             secret: "app-password".into(),
+            quiet: None,
         }
     }
 
@@ -614,7 +671,8 @@ mod tests {
                     profile_id: String::new(),
                     server: "web".into()
                 },
-                secret: String::new()
+                secret: String::new(),
+                quiet: None,
             },
             false
         )
@@ -700,5 +758,46 @@ mod tests {
         let e = telegram_error(400, &serde_json::json!({ "description": "Bad Request: chat not found" })).to_string();
         assert!(e.contains("Find chats"));
         assert!(check_bot_token(TOKEN).is_ok() && check_bot_token("123:abc").is_err());
+    }
+
+    #[test]
+    fn quiet_hours_hold_all_but_problems() {
+        let night = Quiet {
+            from: "22:00".into(),
+            to: "07:00".into(),
+        };
+        assert!(in_quiet(&night, 23 * 60) && in_quiet(&night, 3 * 60) && !in_quiet(&night, 7 * 60) && !in_quiet(&night, 12 * 60));
+        let lunch = Quiet {
+            from: "12:00".into(),
+            to: "13:30".into(),
+        };
+        assert!(in_quiet(&lunch, 12 * 60 + 45) && !in_quiet(&lunch, 13 * 60 + 30));
+        assert!(!in_quiet(
+            &Quiet {
+                from: "25:00".into(),
+                to: "07:00".into()
+            },
+            60
+        ));
+        let db = Database::in_memory().unwrap();
+        let mut i = tg("1", TOKEN);
+        i.quiet = Some(night.clone());
+        let c = save(&db, None, &i).unwrap();
+        assert_eq!(c.quiet, Some(night));
+        let a = |level| Alert {
+            kind: AlertKind::Health,
+            level,
+            title: "x".into(),
+            body: String::new(),
+        };
+        assert!(goes_now(&c, &a(Level::Bad), 23 * 60), "problems always go");
+        assert!(!goes_now(&c, &a(Level::Ok), 23 * 60) && !goes_now(&c, &a(Level::Warn), 23 * 60));
+        assert!(goes_now(&c, &a(Level::Ok), 9 * 60));
+        let mut bad = tg("1", TOKEN);
+        bad.quiet = Some(Quiet {
+            from: "22:00".into(),
+            to: "22:00".into(),
+        });
+        assert!(validate(&bad, false).is_err());
     }
 }

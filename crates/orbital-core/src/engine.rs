@@ -487,6 +487,7 @@ impl Engine {
             self.secrets.delete(&secret_key(id, kind))?;
         }
         profiles::delete(&self.db, id)?;
+        let _ = crate::metric_store::forget(&self.db, id);
         self.record(
             None,
             NewEvent {
@@ -2551,7 +2552,48 @@ impl Engine {
         let mut last = self.last_metrics.lock().await;
         let m = metrics::derive(last.get(sid), snap, chrono::Utc::now().timestamp_millis());
         last.insert(sid.to_string(), m.clone());
+        drop(last);
+        // Monitoring history (a point a minute, kept 30 days); a failure here never fails the read.
+        let saved = crate::metric_store::record(&self.db, &s.profile.id, &crate::metric_store::point(&m))
+            .and_then(|_| crate::metric_store::record_moment(&self.db, &s.profile.id, &crate::metric_store::moment(&m)));
+        if let Err(e) = saved {
+            tracing::warn!("couldn't record monitoring history: {e}");
+        }
         Ok(m)
+    }
+
+    /// A server's monitoring history between two times (Unix seconds), in at most `max` points.
+    /// Returns the bucket size in seconds too.
+    pub fn metric_history(&self, profile_id: &str, from: i64, to: i64, max: u32) -> Result<(i64, Vec<crate::metric_store::Point>)> {
+        crate::metric_store::range(&self.db, profile_id, from, to, max.clamp(10, 2000))
+    }
+
+    /// The recorded minute nearest `t` (busiest programs, every disk), within `within` seconds.
+    pub fn metric_moment(&self, profile_id: &str, t: i64, within: i64) -> Result<Option<crate::metric_store::Moment>> {
+        crate::metric_store::moment_at(&self.db, profile_id, t, within.clamp(60, 86_400))
+    }
+
+    /// Every disk's use over a range, with how fast it grows and when it fills.
+    pub fn disk_history(&self, profile_id: &str, from: i64, to: i64, max: u32) -> Result<Vec<crate::metric_store::DiskSeries>> {
+        crate::metric_store::disk_series(&self.db, profile_id, from, to, max.clamp(10, 2000))
+    }
+
+    /// What changed on the server in a range (from the audit log) and its restarts, to mark on charts.
+    pub fn metric_events(&self, profile_id: &str, from: i64, to: i64) -> Result<Vec<crate::metric_store::Event>> {
+        crate::metric_store::events(&self.db, profile_id, from, to)
+    }
+
+    /// History kept by older versions in the UI's local storage, brought in once.
+    pub fn import_metric_history(&self, profile_id: &str, points: &[crate::metric_store::Point]) -> Result<usize> {
+        crate::metric_store::import(&self.db, profile_id, points)
+    }
+
+    /// Each uptime check over a date range (the Uptime page's shared range).
+    pub fn uptime_range(&self, from: i64, to: i64, max: u32) -> Result<Vec<uptime::RangeSummary>> {
+        uptime::list_checks(&self.db)?
+            .iter()
+            .map(|c| uptime::range_summary(&self.db, &c.id, from, to, max.clamp(10, 2000)))
+            .collect()
     }
 
     // ---------- services ----------
