@@ -32,6 +32,7 @@ Orbital (working name) is a macOS desktop app for managing Linux servers over SS
 - Releases: `npm run release -- patch|minor|major|beta|X.Y.Z` (bumps every version, dates `## Unreleased` in CHANGELOG, commits, tags), push the tag, publish the draft. See docs/RELEASING.md
 - Live storage tests: `bash scripts/it-storage.sh`, export what it prints, `cargo test -p orbital-core --test live_storage -- --test-threads=1`, then `bash scripts/it-storage.sh stop`
 - Live SSH tests: `sudo bash scripts/it-sshd.sh` on Linux/CI, export the printed vars, then `cargo test -p orbital-core --test live_ssh -- --test-threads=1`
+- Live SSH tests on a Mac: `bash scripts/it-docker.sh` (Docker: Ubuntu 24.04 with systemd, sshd on 127.0.0.1:2222, Fail2ban, ufw, nginx, Docker, git), export the printed vars, run the same cargo command, then `bash scripts/it-docker.sh stop`. All 47 passed there on 2026-11-28. ufw adds a rule for an existing target by updating it in place: the lock-out check models that (`firewall::after_add`).
 
 ## Status (1.8.0: processes, disks, packages, certificate check, timers; 2026-11-27)
 - Unit tests for all five modules (ps parsing/elapsed/details/protection, lsblk/df/fstab/SMART + warnings, package list/search/plan/essential/commands, certificate description + a local TLS server trusted and not, timer validation/rendering/calendar) and `parseTarget` (vitest). Live tests (CI only): `processes_list_renice_and_signal`, `disks_and_packages_read_and_guard`, `systemd_timer_create_and_remove`. Demo-checked: every screen.

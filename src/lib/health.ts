@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { useEffect } from "react";
 import { api, Metrics } from "./api";
-import { isSsh, useStore } from "../store";
+import { goTo, isSsh, useStore } from "../store";
 import { DEFAULT_THRESHOLDS, Thresholds, useSettings } from "./settings";
 
 // How a connected server is doing, at a glance (the sidebar's dot and the
@@ -125,19 +125,30 @@ export function useSessionHealth(sid: string | undefined): Health {
 //
 // A notification when a server turns red and stays red for two checks in a
 // row (a minute apart, so a load spike doesn't alert), at once when a service
-// fails, and when an alerted server is back to normal. Per-server mute and a
-// global switch (Settings → Monitoring).
+// fails, and when an alerted server has been fine for three checks in a row.
+// A server that keeps going back and forth (a value sitting on a threshold)
+// needs five red checks to alert again within 30 minutes of recovering, so
+// it can't flood the phone. Per-server mute and a global switch (Settings →
+// Monitoring).
 
 export interface AlertState {
   /** Checks in a row the server has been red. */
   redFor: number;
+  /** Checks in a row it has been fine since an alert. */
+  okFor: number;
   /** A "needs attention" alert was sent and not yet cleared. */
   alerted: boolean;
   /** Failed services already told about. */
   failed: string[];
+  /** When it last came back to normal (ms), for the flapping brake. */
+  recoveredAt: number | null;
 }
 
-export const NO_ALERTS: AlertState = { redFor: 0, alerted: false, failed: [] };
+export const NO_ALERTS: AlertState = { redFor: 0, okFor: 0, alerted: false, failed: [], recoveredAt: null };
+
+/** Checks in a row before "back to normal". */
+export const CALM_CHECKS = 3;
+const FLAP_WINDOW_MS = 30 * 60_000;
 
 export interface AlertMessage {
   kind: "bad" | "ok" | "warn";
@@ -146,27 +157,35 @@ export interface AlertMessage {
 }
 
 /** One check: the next state and what to tell the user. Pure; tested. */
-export function alertStep(prev: AlertState, server: string, h: Health, failed: string[]): { next: AlertState; messages: AlertMessage[] } {
+export function alertStep(prev: AlertState, server: string, h: Health, failed: string[], now = Date.now()): { next: AlertState; messages: AlertMessage[] } {
   const messages: AlertMessage[] = [];
   if (h.level === "unknown") return { next: prev, messages };
   const newlyFailed = failed.filter((u) => !prev.failed.includes(u));
   const redFor = h.level === "bad" ? prev.redFor + 1 : 0;
+  const fine = h.level !== "bad" && failed.length === 0;
+  let okFor = fine ? prev.okFor + 1 : 0;
   let alerted = prev.alerted;
+  let recoveredAt = prev.recoveredAt;
+  // Just back from an alert: wait longer before alerting again.
+  const need = recoveredAt !== null && now - recoveredAt < FLAP_WINDOW_MS ? 5 : 2;
   if (newlyFailed.length) {
     // Services read "nginx failed"; containers come described ("container api is unhealthy").
     const what = newlyFailed.map((u) => (u.startsWith("container ") ? u.slice("container ".length) : `${u.replace(/\.service$/, "")} failed`));
     const names = newlyFailed.map((u) => (u.startsWith("container ") ? u.slice("container ".length).split(" ")[0] : u.replace(/\.service$/, "")));
     messages.push({ kind: "bad", title: `${server}: ${what.length === 1 ? what[0] : `${what.length} problems`}`, body: what.length === 1 ? names[0] : what.join(", ") });
     alerted = true;
-  } else if (redFor === 2 && !prev.alerted) {
+    okFor = 0;
+  } else if (redFor === need && !prev.alerted) {
     messages.push({ kind: "bad", title: `${server} needs attention`, body: h.reasons.slice(0, 3).join(" · ") });
     alerted = true;
   }
-  if (prev.alerted && h.level !== "bad" && failed.length === 0 && !newlyFailed.length) {
+  if (prev.alerted && fine && okFor >= CALM_CHECKS) {
     messages.push({ kind: "ok", title: `${server} is back to normal`, body: h.level === "warn" ? h.reasons.slice(0, 2).join(" · ") : "Nothing needs attention." });
     alerted = false;
+    okFor = 0;
+    recoveredAt = now;
   }
-  return { next: { redFor, alerted, failed }, messages };
+  return { next: { redFor, okFor, alerted, failed, recoveredAt }, messages };
 }
 
 /** Servers whose alerts are muted (profile ids), on this computer. */
@@ -182,14 +201,50 @@ export const useHealthMute = create<{ muted: string[]; toggle(profileId: string)
 }));
 
 const alertStates: Record<string, AlertState> = {};
-/** Each server's uptime at the last check, to notice a restart. */
-const lastUptime: Record<string, number> = {};
+/** Each server's last uptime reading and when it was taken, to notice a restart. */
+const lastUptime: Record<string, { uptime: number; at: number }> = {};
 
-/** The server restarted since the last check: its uptime went down. Pure; tested. */
-export function restartMessage(server: string, prevUptime: number | undefined, uptime: number): AlertMessage | null {
-  if (prevUptime === undefined || uptime + 120 >= prevUptime) return null;
+/**
+ * The server restarted between two readings: its uptime is shorter than the
+ * time since the last one (it started counting again in between). An older
+ * reading turning up later (from before the Mac slept, or a connection that
+ * was just replaced) is not a restart. Pure; tested.
+ */
+export function restartMessage(server: string, prev: { uptime: number; at: number } | undefined, uptime: number, at: number): AlertMessage | null {
+  if (!prev || at <= prev.at) return null;
+  const elapsed = (at - prev.at) / 1000;
+  if (uptime > elapsed + 120 || uptime + 300 > prev.uptime + elapsed) return null;
   const mins = Math.max(1, Math.round(uptime / 60));
-  return { kind: "warn", title: `${server} restarted`, body: `Up again for ${mins < 120 ? `${mins} min` : `${Math.round(mins / 60)} h`}; it had been up ${Math.round(prevUptime / 3600)} h. If you didn't restart it, check its logs.` };
+  return { kind: "warn", title: `${server} restarted`, body: `Up again for ${mins < 120 ? `${mins} min` : `${Math.round(mins / 60)} h`}; it had been up ${Math.round(prev.uptime / 3600)} h. If you didn't restart it, check its logs.` };
+}
+
+/** Metrics older than this don't count for alerts (a connection that stopped updating). */
+export const FRESH_MS = 3 * 60_000;
+
+/**
+ * The connection to judge each server by: one per server (the one with the
+ * newest numbers), only open, shown ones, and only when its numbers are fresh.
+ * Pure; tested.
+ */
+export function sessionsToCheck<T extends { info: { id: string }; profile: { id: string }; lost?: boolean; metrics: { sampledAtMs: number }[] }>(sessions: Record<string, T>, order: string[], now: number): T[] {
+  const best = new Map<string, T>();
+  for (const id of order) {
+    const s = sessions[id];
+    const m = s?.metrics[s.metrics.length - 1];
+    if (!s || s.lost || !m || now - m.sampledAtMs > FRESH_MS) continue;
+    const cur = best.get(s.profile.id);
+    if (!cur || cur.metrics[cur.metrics.length - 1].sampledAtMs < m.sampledAtMs) best.set(s.profile.id, s);
+  }
+  return [...best.values()];
+}
+
+/** "Show" for an alert: the server's connection as it is now (it may have been replaced since), else Home. */
+function showServer(profileId: string) {
+  const st = useStore.getState();
+  const id = st.order.find((x) => st.sessions[x]?.profile.id === profileId && !st.sessions[x].lost);
+  useStore.setState({ globalView: null });
+  if (id) st.setActive(id);
+  else goTo(null);
 }
 
 /** Runs after each minute's check: notifies (and toasts) health changes worth knowing. */
@@ -197,26 +252,28 @@ export function checkAlerts() {
   if (!useSettings.getState().healthAlerts) return;
   const st = useStore.getState();
   const muted = useHealthMute.getState().muted;
-  for (const s of Object.values(st.sessions)) {
-    if (s.lost || !isSsh(s)) continue;
+  const now = Date.now();
+  for (const s of sessionsToCheck(st.sessions, st.order, now)) {
+    if (!isSsh(s)) continue;
+    const last = s.metrics[s.metrics.length - 1];
     const failed = useFailed.getState().bySession[s.info.id] ?? [];
     const boxes = useFailed.getState().containers[s.info.id] ?? [];
-    const h = assess(s.metrics[s.metrics.length - 1], failed, boxes, useSettings.getState().thresholds);
+    const h = assess(last, failed, boxes, useSettings.getState().thresholds);
     // Keyed by server, so a reconnect doesn't alert again.
     // Containers in trouble alert like failed services: at once, and once.
-    const { next, messages } = alertStep(alertStates[s.profile.id] ?? NO_ALERTS, s.profile.name, h, [...failed, ...boxes.map((b) => `container ${b}`)]);
+    const { next, messages } = alertStep(alertStates[s.profile.id] ?? NO_ALERTS, s.profile.name, h, [...failed, ...boxes.map((b) => `container ${b}`)], now);
     alertStates[s.profile.id] = next;
-    const up = s.metrics[s.metrics.length - 1]?.uptimeSecs;
-    if (typeof up === "number") {
-      const restart = restartMessage(s.profile.name, lastUptime[s.profile.id], up);
-      lastUptime[s.profile.id] = up;
+    if (typeof last.uptimeSecs === "number") {
+      const restart = restartMessage(s.profile.name, lastUptime[s.profile.id], last.uptimeSecs, last.sampledAtMs);
+      if (!lastUptime[s.profile.id] || last.sampledAtMs > lastUptime[s.profile.id].at) lastUptime[s.profile.id] = { uptime: last.uptimeSecs, at: last.sampledAtMs };
       if (restart) messages.push(restart);
     }
     if (muted.includes(s.profile.id)) continue;
+    const profileId = s.profile.id;
     for (const m of messages) {
       // Also to Telegram, email or the AI agent, when set up (Settings → Notifications).
       void api.sendAlert({ kind: "health", level: m.kind, title: m.title, body: m.body }).catch(() => {});
-      st.toast({ kind: m.kind === "bad" ? "error" : m.kind === "warn" ? "info" : "success", title: m.title, body: m.body, action: { label: "Show", run: () => { useStore.setState({ globalView: null }); st.setActive(s.info.id); } } });
+      st.toast({ kind: m.kind === "bad" ? "error" : m.kind === "warn" ? "info" : "success", title: m.title, body: m.body, action: { label: "Show", run: () => showServer(profileId) } });
       if (document.visibilityState !== "visible" || !document.hasFocus()) void api.notify(m.title, m.body).catch(() => {});
     }
   }

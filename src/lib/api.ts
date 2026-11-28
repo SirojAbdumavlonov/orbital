@@ -920,6 +920,8 @@ export interface Jail {
   ignoreIp: string[];
 }
 
+/** Fail2ban → Protection: `maxRetry` failures within `findTimeMins` ban for `banTimeMins` (-1 = for good). */
+export interface SshProtection { maxRetry: number; findTimeMins: number; banTimeMins: number; increment: boolean; ignoreSelf: boolean; recidive: boolean; ignore: string[] }
 export interface Fail2banStatus {
   version: string | null;
   running: boolean;
@@ -1338,6 +1340,10 @@ export const api = {
   fail2banStatus: (sessionId: string) => invoke<Fail2banStatus>("fail2ban_status", { sessionId }),
   fail2banUnban: (sessionId: string, jail: string | null, ip: string) => invoke<Fail2banStatus>("fail2ban_unban", { sessionId, jail, ip }),
   fail2banBan: (sessionId: string, jail: string, ip: string) => invoke<Fail2banStatus>("fail2ban_ban", { sessionId, jail, ip }),
+  /** The SSH limits Orbital wrote, or null when it hasn't. */
+  fail2banProtection: (sessionId: string) => invoke<SshProtection | null>("fail2ban_protection", { sessionId }),
+  fail2banProtect: (sessionId: string, protection: SshProtection, force: boolean, onProgress?: OnProgress) =>
+    invoke<Fail2banStatus>("fail2ban_protect", { sessionId, protection, force, progress: progressChannel(onProgress) }),
 
   certbotStatus: (sessionId: string) => invoke<CertbotStatus>("certbot_status", { sessionId }),
   certbotIssue: (sessionId: string, request: IssueRequest, onProgress?: OnProgress) =>

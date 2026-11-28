@@ -670,6 +670,27 @@ pub async fn fail2ban_unban(engine: Eng<'_>, session_id: String, jail: Option<St
 }
 
 #[tauri::command]
+pub async fn fail2ban_protection(engine: Eng<'_>, session_id: String) -> R<Option<orbital_core::fail2ban::SshProtection>> {
+    engine.fail2ban_protection(&session_id).await
+}
+
+#[tauri::command]
+pub async fn fail2ban_protect(
+    engine: Eng<'_>,
+    session_id: String,
+    protection: orbital_core::fail2ban::SshProtection,
+    force: bool,
+    progress: Channel<ProgressEvent>,
+) -> R<Fail2banStatus> {
+    progress::run_job(
+        progress.id(),
+        sink(progress),
+        engine.fail2ban_protect(&session_id, &protection, force),
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn fail2ban_ban(engine: Eng<'_>, session_id: String, jail: String, ip: String) -> R<Fail2banStatus> {
     engine.fail2ban_ban(&session_id, &jail, &ip).await
 }

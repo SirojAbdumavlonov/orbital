@@ -185,6 +185,196 @@ pub fn ban_command(jail: &str, ip: &str) -> Result<String> {
     Ok(format!("fail2ban-client set {} banip {}", quote(validate_jail(jail)?), quote(&ip)))
 }
 
+// ---------- SSH protection (Fail2ban → Protection) ----------
+
+/// Where Orbital keeps its sshd jail settings. `.local` files in jail.d win over
+/// the distribution's `.conf` ones; the stock files are never changed.
+pub const PROTECT_FILE: &str = "/etc/fail2ban/jail.d/zz-orbital-sshd.local";
+
+/// How SSH logins are limited: `max_retry` failures within `find_time_mins`
+/// ban the address for `ban_time_mins` (`-1` = for good).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshProtection {
+    pub max_retry: u32,
+    pub find_time_mins: u32,
+    pub ban_time_mins: i64,
+    /// Each new ban of the same address lasts longer (doubling, up to a week).
+    pub increment: bool,
+    /// Never ban the address this computer connects from.
+    pub ignore_self: bool,
+    /// Ban addresses that were banned 5 times in a day for a week (the recidive jail).
+    pub recidive: bool,
+    /// More addresses or networks never to ban.
+    #[serde(default)]
+    pub ignore: Vec<String>,
+}
+
+impl Default for SshProtection {
+    fn default() -> Self {
+        Self {
+            max_retry: 5,
+            find_time_mins: 10,
+            ban_time_mins: 60,
+            increment: true,
+            ignore_self: true,
+            recidive: true,
+            ignore: Vec::new(),
+        }
+    }
+}
+
+/// An address or a network (`203.0.113.0/24`).
+fn valid_net(s: &str) -> bool {
+    let (ip, bits) = match s.split_once('/') {
+        Some((ip, b)) => (ip, Some(b)),
+        None => (s, None),
+    };
+    match ip.parse::<IpAddr>() {
+        Ok(a) => bits.is_none_or(|b| b.parse::<u8>().is_ok_and(|n| n <= if a.is_ipv4() { 32 } else { 128 })),
+        Err(_) => false,
+    }
+}
+
+pub fn validate_protection(p: &SshProtection) -> Result<()> {
+    if !(2..=20).contains(&p.max_retry) {
+        return Err(Error::InvalidInput("allow 2 to 20 failed attempts".into()));
+    }
+    if !(1..=1440).contains(&p.find_time_mins) {
+        return Err(Error::InvalidInput("count failures over 1 minute to 24 hours".into()));
+    }
+    if p.ban_time_mins != -1 && !(1..=525_600).contains(&p.ban_time_mins) {
+        return Err(Error::InvalidInput("ban for 1 minute to a year, or for good".into()));
+    }
+    if p.ignore.len() > 20 {
+        return Err(Error::InvalidInput("up to 20 addresses never to ban".into()));
+    }
+    if let Some(bad) = p.ignore.iter().find(|x| !valid_net(x.trim())) {
+        return Err(Error::InvalidInput(format!(
+            "{bad:?} isn't an address or a network like 203.0.113.0/24"
+        )));
+    }
+    Ok(())
+}
+
+/// The jail file: only numbers and checked addresses go in.
+pub fn render_protection(p: &SshProtection, client_ip: Option<&str>) -> Result<String> {
+    validate_protection(p)?;
+    let mut ignore = vec!["127.0.0.1/8".to_string(), "::1".to_string()];
+    if p.ignore_self {
+        if let Some(ip) = client_ip.filter(|ip| valid_net(ip)) {
+            ignore.push(ip.to_string());
+        }
+    }
+    for x in &p.ignore {
+        let x = x.trim().to_string();
+        if !ignore.contains(&x) {
+            ignore.push(x);
+        }
+    }
+    let ban = if p.ban_time_mins == -1 {
+        "-1".to_string()
+    } else {
+        format!("{}m", p.ban_time_mins)
+    };
+    let mut s = format!(
+        "# Written by Orbital (Fail2ban → Protection); change it there or remove this file.\n[sshd]\nenabled = true\nmaxretry = {}\nfindtime = {}m\nbantime = {ban}\nignoreip = {}\n",
+        p.max_retry,
+        p.find_time_mins,
+        ignore.join(" ")
+    );
+    if p.increment && p.ban_time_mins != -1 {
+        s.push_str("bantime.increment = true\nbantime.factor = 2\nbantime.maxtime = 1w\n");
+    }
+    if p.recidive {
+        s.push_str("\n[recidive]\nenabled = true\nfindtime = 1d\nmaxretry = 5\nbantime = 1w\n");
+    }
+    Ok(s)
+}
+
+/// Applies the file on stdin: keeps the old one, checks the whole config with
+/// `fail2ban-client -t`, puts the old one back if that fails, then reloads.
+/// On systems without auth.log (journal only) the sshd jail reads the journal.
+pub const PROTECT_APPLY: &str = r#"set -e
+f=/etc/fail2ban/jail.d/zz-orbital-sshd.local
+tmp=$(mktemp)
+cat > "$tmp"
+if [ ! -e /var/log/auth.log ] && [ ! -e /var/log/secure ] && command -v journalctl >/dev/null 2>&1; then
+  awk '{ print } $0 == "[sshd]" { print "backend = systemd" }' "$tmp" > "$tmp.b" && mv "$tmp.b" "$tmp"
+fi
+[ -e "$f" ] && cp -p "$f" "$f.orbital-prev" || rm -f "$f.orbital-prev"
+install -m 0644 "$tmp" "$f"; rm -f "$tmp"
+if ! out=$(fail2ban-client -t 2>&1); then
+  if [ -e "$f.orbital-prev" ]; then mv "$f.orbital-prev" "$f"; else rm -f "$f"; fi
+  echo "fail2ban rejected the settings, so the old ones were kept:" >&2
+  printf '%s
+' "$out" | tail -n 15 >&2
+  exit 3
+fi
+rm -f "$f.orbital-prev"
+if systemctl is-active --quiet fail2ban 2>/dev/null; then fail2ban-client reload >/dev/null; else systemctl enable --now fail2ban >/dev/null 2>&1 || fail2ban-client start >/dev/null; fi
+echo ok"#;
+
+/// Reads the file back (to fill the form), or None when Orbital hasn't written one.
+pub const PROTECT_READ: &str = "cat /etc/fail2ban/jail.d/zz-orbital-sshd.local 2>/dev/null || true";
+
+/// Duration text from fail2ban (`10m`, `1h`, `600`, `-1`) in minutes.
+fn minutes_of(v: &str) -> Option<i64> {
+    let v = v.trim();
+    if v == "-1" {
+        return Some(-1);
+    }
+    let (num, unit) = v.split_at(v.find(|c: char| !c.is_ascii_digit()).unwrap_or(v.len()));
+    let n: i64 = num.parse().ok()?;
+    Some(match unit.trim() {
+        "" | "s" => (n + 59) / 60,
+        "m" => n,
+        "h" => n * 60,
+        "d" => n * 1440,
+        "w" => n * 10080,
+        _ => return None,
+    })
+}
+
+pub fn parse_protection(file: &str) -> Option<SshProtection> {
+    if !file.contains("[sshd]") {
+        return None;
+    }
+    let mut p = SshProtection {
+        increment: false,
+        recidive: file.contains("[recidive]"),
+        ignore_self: false,
+        ..Default::default()
+    };
+    let mut section = "";
+    for l in file.lines().map(str::trim) {
+        if l.starts_with('[') {
+            section = l;
+            continue;
+        }
+        if section != "[sshd]" {
+            continue;
+        }
+        let Some((k, v)) = l.split_once('=') else { continue };
+        let v = v.trim();
+        match k.trim() {
+            "maxretry" => p.max_retry = v.parse().unwrap_or(p.max_retry),
+            "findtime" => p.find_time_mins = minutes_of(v).map(|m| m.max(1) as u32).unwrap_or(p.find_time_mins),
+            "bantime" => p.ban_time_mins = minutes_of(v).unwrap_or(p.ban_time_mins),
+            "bantime.increment" => p.increment = v == "true",
+            "ignoreip" => {
+                p.ignore = v
+                    .split_whitespace()
+                    .filter(|x| *x != "127.0.0.1/8" && *x != "::1")
+                    .map(String::from)
+                    .collect()
+            }
+            _ => {}
+        }
+    }
+    Some(p)
+}
+
 impl SshSession {
     pub async fn fail2ban_status(&self) -> Result<Fail2banStatus> {
         let (o, _) = self.exec_inspect(STATUS_SCRIPT).await?;
@@ -297,5 +487,81 @@ No IP address/network is ignored
         let out = std::process::Command::new("sh").arg("-c").arg(STATUS_SCRIPT).output().unwrap();
         assert!(out.status.success());
         let _ = parse_status(&String::from_utf8_lossy(&out.stdout));
+    }
+
+    #[test]
+    fn ssh_protection_renders_checks_and_reads_back() {
+        let p = SshProtection {
+            max_retry: 3,
+            find_time_mins: 15,
+            ban_time_mins: 1440,
+            ignore: vec!["198.51.100.0/24".into()],
+            ..Default::default()
+        };
+        let f = render_protection(&p, Some("203.0.113.9")).unwrap();
+        assert!(
+            f.contains("[sshd]\nenabled = true\nmaxretry = 3\nfindtime = 15m\nbantime = 1440m\n"),
+            "{f}"
+        );
+        assert!(f.contains("ignoreip = 127.0.0.1/8 ::1 203.0.113.9 198.51.100.0/24"), "{f}");
+        assert!(f.contains("bantime.increment = true") && f.contains("[recidive]"));
+        let back = parse_protection(&f).unwrap();
+        assert_eq!(
+            (
+                back.max_retry,
+                back.find_time_mins,
+                back.ban_time_mins,
+                back.increment,
+                back.recidive
+            ),
+            (3, 15, 1440, true, true)
+        );
+        assert_eq!(back.ignore, ["203.0.113.9", "198.51.100.0/24"]);
+        let forever = render_protection(
+            &SshProtection {
+                ban_time_mins: -1,
+                recidive: false,
+                ignore_self: false,
+                ..Default::default()
+            },
+            Some("203.0.113.9"),
+        )
+        .unwrap();
+        assert!(forever.contains("bantime = -1") && !forever.contains("increment") && !forever.contains("203.0.113.9"));
+        for bad in [
+            SshProtection {
+                max_retry: 1,
+                ..Default::default()
+            },
+            SshProtection {
+                find_time_mins: 0,
+                ..Default::default()
+            },
+            SshProtection {
+                ban_time_mins: 0,
+                ..Default::default()
+            },
+            SshProtection {
+                ignore: vec!["evil; rm -rf /".into()],
+                ..Default::default()
+            },
+            SshProtection {
+                ignore: vec!["10.0.0.0/40".into()],
+                ..Default::default()
+            },
+        ] {
+            assert!(render_protection(&bad, None).is_err(), "{bad:?}");
+        }
+        assert_eq!(minutes_of("1h"), Some(60));
+        assert_eq!(minutes_of("600"), Some(10));
+        assert_eq!(minutes_of("1w"), Some(10080));
+        assert!(parse_protection("").is_none());
+        let o = std::process::Command::new("sh")
+            .arg("-n")
+            .arg("-c")
+            .arg(PROTECT_APPLY)
+            .output()
+            .unwrap();
+        assert!(o.status.success());
     }
 }

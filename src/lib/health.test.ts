@@ -45,6 +45,10 @@ describe("alertStep", () => {
     expect(r.messages).toEqual([{ kind: "bad", title: "web needs attention", body: "Disk / 97%" }]);
     r = alertStep(r.next, "web", red, []);
     expect(r.messages).toEqual([]);
+    // Back to normal only after three fine checks in a row.
+    r = alertStep(r.next, "web", green, []);
+    r = alertStep(r.next, "web", green, []);
+    expect(r.messages).toEqual([]);
     r = alertStep(r.next, "web", green, []);
     expect(r.messages[0]).toMatchObject({ kind: "ok", title: "web is back to normal" });
     st = r.next;
@@ -59,7 +63,9 @@ describe("alertStep", () => {
     const a = alertStep(NO_ALERTS, "web", warn, ["nginx.service"]);
     expect(a.messages).toEqual([{ kind: "bad", title: "web: nginx failed", body: "nginx" }]);
     expect(alertStep(a.next, "web", warn, ["nginx.service"]).messages).toEqual([]);
-    expect(alertStep(a.next, "web", green, []).messages[0].kind).toBe("ok");
+    let r = alertStep(a.next, "web", green, []);
+    r = alertStep(r.next, "web", green, []);
+    expect(alertStep(r.next, "web", green, []).messages[0].kind).toBe("ok");
   });
   it("ignores checks without numbers", () => {
     expect(alertStep(NO_ALERTS, "web", { level: "unknown", reasons: [] }, [])).toEqual({ next: NO_ALERTS, messages: [] });
@@ -87,12 +93,58 @@ it("uses the thresholds from Settings", () => {
 
 describe("restart alerts", async () => {
   const { restartMessage } = await import("./health");
-  it("alerts once when uptime goes down", () => {
-    expect(restartMessage("web", undefined, 500)).toBeNull();
-    expect(restartMessage("web", 1000, 1060)).toBeNull();
-    const m = restartMessage("web", 90_000, 180)!;
+  const H = 3600;
+  it("alerts when the uptime started again between two readings", () => {
+    expect(restartMessage("web", undefined, 500, 1_000_000)).toBeNull();
+    // A minute later, 60 s more: fine.
+    expect(restartMessage("web", { uptime: 1000, at: 0 }, 1060, 60_000)).toBeNull();
+    // A minute later the server has been up 3 minutes... after 25 hours: it restarted.
+    const m = restartMessage("web", { uptime: 90_000, at: 0 }, 180, 60_000)!;
     expect(m.kind).toBe("warn");
     expect(m.title).toBe("web restarted");
     expect(m.body).toContain("3 min");
+  });
+  it("an older reading turning up later is not a restart (249 h, then a stale 239 h)", () => {
+    expect(restartMessage("sirojniki", { uptime: 249 * H, at: 10 * H * 1000 }, 239 * H, 10 * H * 1000 + 60_000)).toBeNull();
+    // A reading from before the last one is ignored too.
+    expect(restartMessage("web", { uptime: 249 * H, at: 50_000 }, 239 * H, 40_000)).toBeNull();
+    // The Mac slept 10 hours; the server kept running: no alert.
+    expect(restartMessage("web", { uptime: 239 * H, at: 0 }, 249 * H, 10 * H * 1000)).toBeNull();
+  });
+});
+
+describe("which connections count", async () => {
+  const { sessionsToCheck } = await import("./health");
+  it("one per server, shown, open and fresh", () => {
+    const now = 1_000_000;
+    const s = (id: string, pid: string, at: number, lost = false) => ({ info: { id }, profile: { id: pid }, lost, metrics: [{ sampledAtMs: at }] });
+    const sessions = {
+      a: s("a", "p1", now - 10_000),
+      old: s("old", "p1", now - 36_000_000), // a connection that stopped updating 10 hours ago
+      b: s("b", "p2", now - 5_000, true),
+      c: s("c", "p3", now - 4 * 60_000),
+      d: s("d", "p4", now - 1_000),
+    };
+    const picked = sessionsToCheck(sessions, ["a", "old", "b", "c"], now).map((x) => x.info.id);
+    expect(picked).toEqual(["a"]); // d isn't shown (not in the list of open servers)
+  });
+});
+
+describe("flapping", () => {
+  const red = { level: "bad" as const, reasons: ["Load 2.1 per core"] };
+  const green = { level: "ok" as const, reasons: [] };
+  it("a server going back and forth doesn't flood", () => {
+    let st = NO_ALERTS;
+    let sent = 0;
+    let t = 0;
+    for (let i = 0; i < 60; i++) {
+      // Two minutes red, three fine, again and again for an hour.
+      const h = i % 5 < 2 ? red : green;
+      const r = alertStep(st, "web", h, [], (t += 60_000));
+      sent += r.messages.length;
+      st = r.next;
+    }
+    // Without the brake this would be 24 messages; with it a handful.
+    expect(sent).toBeLessThanOrEqual(4);
   });
 });

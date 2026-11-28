@@ -1045,6 +1045,50 @@ async fn fail2ban_ban_and_unban() {
         .iter()
         .any(|ip| ip == test_ip));
 
+    // Protect SSH: refused without keeping this computer out (lock-out check), then
+    // applied, checked by fail2ban, read back, and in effect; bad input changes nothing.
+    use orbital_core::fail2ban::SshProtection;
+    let risky = SshProtection {
+        ignore_self: false,
+        ..Default::default()
+    };
+    assert!(matches!(
+        engine.fail2ban_protect(&s.id, &risky, false).await,
+        Err(Error::PreflightFailed { .. })
+    ));
+    let p = SshProtection {
+        max_retry: 7,
+        find_time_mins: 20,
+        ban_time_mins: 120,
+        ..Default::default()
+    };
+    let st = engine.fail2ban_protect(&s.id, &p, false).await.unwrap();
+    let sshd = st.jails.iter().find(|j| j.name == "sshd").expect("sshd jail");
+    assert_eq!(sshd.maxretry.as_deref(), Some("7"));
+    assert_eq!(sshd.findtime.as_deref(), Some("1200"));
+    assert!(st.jails.iter().any(|j| j.name == "recidive"), "{st:?}");
+    let back = engine.fail2ban_protection(&s.id).await.unwrap().unwrap();
+    assert_eq!((back.max_retry, back.find_time_mins, back.ban_time_mins), (7, 20, 120));
+    assert!(engine
+        .fail2ban_protect(
+            &s.id,
+            &SshProtection {
+                max_retry: 1,
+                ..Default::default()
+            },
+            false
+        )
+        .await
+        .is_err());
+    engine
+        .run_command(
+            &s.id,
+            "rm -f /etc/fail2ban/jail.d/zz-orbital-sshd.local && fail2ban-client reload",
+            true,
+        )
+        .await
+        .unwrap();
+
     // certbot answers with root, and a dry run with nothing to renew succeeds.
     if let Ok(c) = engine.certbot_status(&s.id).await {
         assert!(c.error.is_none(), "{c:?}");

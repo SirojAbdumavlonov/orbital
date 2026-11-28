@@ -4,6 +4,16 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Protect SSH** (Fail2ban tab): choose how many failed logins within how long ban an address, and for how long; longer bans for repeat offenders, a week for addresses banned again and again, and your own address never banned. Checked by Fail2ban before it's kept; the stock files aren't changed.
+- **Banned now** (Fail2ban tab): every banned address is listed in the main view with its jail and an Unban button, and the tab refreshes on its own every 20 seconds.
+
+### Fixed
+- **False "server restarted" alerts**: an old reading (from before the Mac slept, or from a connection that was just replaced) no longer looks like a restart. Only a server whose uptime started counting again since the last reading is reported.
+- **Health alerts repeating**: a server going back and forth around a limit no longer sends alert after alert. "Back to normal" waits for three calm minutes, and a new alert within half an hour of recovering needs five minutes in trouble.
+- **"Show" on an alert opened an empty page** after the connection had been renewed in the background; it now opens that server, or Home if it's no longer open.
+- **The firewall could lock you out**: adding a deny rule for the SSH port when an allow rule for it existed slipped past the lock-out check, because ufw replaces the existing rule instead of adding one after it. The check now sees it and stops it.
+
 ## 1.10.0 (2026-11-27)
 
 ### Added

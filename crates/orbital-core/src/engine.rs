@@ -1606,8 +1606,8 @@ impl Engine {
         let args = firewall::rule_args(&rule).map_err(|e| self.refused(&s, ACTION, "ufw", e))?;
         let st = s.ufw_status().await?;
         if st.active && !force {
-            let mut rules = st.effective_rules();
-            rules.push(firewall::preview_rule(&rule)?);
+            // As ufw applies it: a rule for a target that already has one replaces it in place.
+            let rules = firewall::after_add(&st.effective_rules(), &firewall::preview_rule(&rule)?);
             if let Err(e) = self.ssh_lockout_check(&s, &rules, st.default_incoming.as_deref()).await {
                 return Err(self.refused(&s, ACTION, &args, e));
             }
@@ -1721,6 +1721,49 @@ impl Engine {
     }
 
     /// Unban an address from one jail, or from every jail when `jail` is `None`.
+    /// The SSH protection Orbital wrote (None when it hasn't), to fill the form.
+    pub async fn fail2ban_protection(&self, sid: &str) -> Result<Option<fail2ban::SshProtection>> {
+        let s = self.session(sid).await?;
+        let (o, _) = s.exec_inspect(fail2ban::PROTECT_READ).await?;
+        Ok(fail2ban::parse_protection(&o.stdout))
+    }
+
+    /// Limits SSH logins (attempts, window, ban length) in Orbital's own jail.d
+    /// file, checked by `fail2ban-client -t` and put back if refused. Not
+    /// excluding this computer's address could lock the user out after a few
+    /// mistyped passwords: that needs `force`.
+    pub async fn fail2ban_protect(&self, sid: &str, p: &fail2ban::SshProtection, force: bool) -> Result<Fail2banStatus> {
+        let s = self.session(sid).await?;
+        const ACTION: &str = "fail2ban.protect";
+        let target = format!("sshd: {} tries in {} min", p.max_retry, p.find_time_mins);
+        let client = s.ssh_connection().await.0.map(|ip| ip.to_string());
+        let file = fail2ban::render_protection(p, client.as_deref()).map_err(|e| self.refused(&s, ACTION, &target, e))?;
+        if !p.ignore_self && !force {
+            if let Some(ip) = &client {
+                let e = Error::PreflightFailed {
+                    check: "your access".into(),
+                    output: format!("This computer connects from {ip}. Without it on the never-ban list, {} mistyped passwords would lock you out of this server.", p.max_retry),
+                };
+                return Err(self.refused(&s, ACTION, &target, e));
+            }
+        }
+        progress::step("Checking the settings with fail2ban-client -t …");
+        let o = self
+            .system_exec_with(
+                &s,
+                ACTION,
+                &target,
+                fail2ban::PROTECT_APPLY,
+                Some(file.as_bytes()),
+                std::time::Duration::from_secs(90),
+            )
+            .await?;
+        if !o.ok() {
+            return Err(Error::Other(o.stderr.trim().to_string()));
+        }
+        s.fail2ban_status().await
+    }
+
     pub async fn fail2ban_unban(&self, sid: &str, jail: Option<&str>, ip: &str) -> Result<Fail2banStatus> {
         let s = self.session(sid).await?;
         const ACTION: &str = "fail2ban.unban";

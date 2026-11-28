@@ -500,6 +500,27 @@ pub fn rule_args(r: &UfwRuleInput) -> Result<String> {
     Ok(out)
 }
 
+/// The rules after `ufw <rule>` as ufw really applies it: a rule for the same
+/// target (same `to`, `from` and direction, whatever its action) is *updated in
+/// place* ("Rule updated"), IPv6 twin included; only a new target is appended.
+/// So `deny 22/tcp` where `allow 22/tcp` exists replaces the allow, it doesn't
+/// land after it. Pure; tested.
+pub fn after_add(rules: &[UfwRule], new: &UfwRule) -> Vec<UfwRule> {
+    let bare = |s: &str| s.trim_end_matches(" (v6)").trim().to_string();
+    let same = |r: &UfwRule| bare(&r.to) == bare(&new.to) && bare(&r.from) == bare(&new.from) && r.direction == new.direction;
+    let mut out: Vec<UfwRule> = rules.to_vec();
+    let mut replaced = false;
+    for r in out.iter_mut().filter(|r| same(r)) {
+        r.action = new.action.clone();
+        r.comment = new.comment.clone();
+        replaced = true;
+    }
+    if !replaced {
+        out.push(new.clone());
+    }
+    out
+}
+
 /// The rule a [`UfwRuleInput`] will become, in `ufw status` shape, for the
 /// reachability check before it exists.
 pub fn preview_rule(r: &UfwRuleInput) -> Result<UfwRule> {
@@ -651,6 +672,34 @@ DEFAULT_OUTPUT_POLICY=\"ACCEPT\"
         assert!(!ssh_reachable(&deny_first, Some("deny"), 22, Some(me)));
         // Custom SSH port.
         assert!(!ssh_reachable(&st.rules, Some("deny"), 2222, Some(me)));
+    }
+
+    #[test]
+    fn a_rule_for_the_same_target_replaces_the_old_one() {
+        // `ufw deny 2222/tcp` with `allow 2222/tcp` in place: ufw updates the allow, so SSH on 2222 is cut.
+        let rules = vec![
+            parse_rule_line(1, "22/tcp ALLOW IN Anywhere").unwrap(),
+            parse_rule_line(2, "2222/tcp ALLOW IN Anywhere").unwrap(),
+            parse_rule_line(3, "22/tcp (v6) ALLOW IN Anywhere (v6)").unwrap(),
+            parse_rule_line(4, "2222/tcp (v6) ALLOW IN Anywhere (v6)").unwrap(),
+        ];
+        let me: IpAddr = "198.51.100.4".parse().unwrap();
+        let deny = rule_from_added("deny 2222/tcp").unwrap();
+        let after = after_add(&rules, &deny);
+        assert_eq!(after.len(), 4, "updated in place, not appended");
+        assert_eq!(after[1].action, "DENY");
+        assert_eq!(after[3].action, "DENY", "the IPv6 twin too");
+        assert!(!ssh_reachable(&after, Some("deny"), 2222, Some(me)), "the check sees the lock-out");
+        // Appending (the old model) would have hidden it.
+        let mut appended = rules.clone();
+        appended.push(deny);
+        assert!(ssh_reachable(&appended, Some("deny"), 2222, Some(me)));
+        // A rule for another target is still appended.
+        let web = rule_from_added("allow 80/tcp").unwrap();
+        assert_eq!(after_add(&rules, &web).len(), 5);
+        // From a specific address is another target.
+        let one = rule_from_added("deny from 203.0.113.7 to any port 2222 proto tcp").unwrap();
+        assert_eq!(after_add(&rules, &one).len(), 5);
     }
 
     #[test]

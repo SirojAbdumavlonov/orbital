@@ -318,6 +318,8 @@ pub fn run() {
             commands::fail2ban_status,
             commands::fail2ban_unban,
             commands::fail2ban_ban,
+            commands::fail2ban_protection,
+            commands::fail2ban_protect,
             commands::certbot_status,
             commands::certbot_issue,
             commands::certbot_renew,

@@ -242,6 +242,7 @@ let defaultSiteOff = false;
 let notifyChannels: any[] = [
   { id: "nc1", name: "My Telegram", enabled: true, events: ["health", "uptime"], config: { kind: "telegram", chatId: "100200300", chatName: "Alex (@alex)" }, createdAt: "2026-11-20T10:00:00Z" },
 ];
+let demoProtection: any = null;
 const DEMO_APPS = [
   { id: "uptime-kuma", name: "Uptime Kuma", category: "Monitoring", hint: "Status pages and uptime checks with alerts to Telegram, Slack, email and more", port: 3001, firstSteps: "Create the admin account on the first page.", memoryMb: 150, images: ["louislam/uptime-kuma:1"] },
   { id: "portainer", name: "Portainer", category: "Containers", hint: "A web UI for this server's Docker: containers, images, volumes, stacks", port: 9000, firstSteps: "Create the admin user within 5 minutes of starting (after that Portainer locks setup until it's restarted).", memoryMb: 100, images: ["portainer/portainer-ce:lts"] },
@@ -1415,6 +1416,15 @@ export function install() {
       case "fail2ban_ban":
         if (args.ip === "203.0.113.9") throw { ...lockout, data: { check: "SSH access", output: "203.0.113.9 is the address this connection comes from; banning it would lock you out." } };
         banned[args.jail] = [...banned[args.jail], args.ip]; return f2b();
+      case "fail2ban_protection": return demoProtection;
+      case "fail2ban_protect": {
+        const pr = args.protection;
+        if (!pr.ignoreSelf && !args.force) throw { ...lockout, data: { check: "your access", output: `This computer connects from 203.0.113.9. Without it on the never-ban list, ${pr.maxRetry} mistyped passwords would lock you out of this server.` } };
+        if (pr.maxRetry < 2 || pr.maxRetry > 20) throw { kind: "InvalidInput", message: "Invalid input: allow 2 to 20 failed attempts" };
+        await progress(args.progress, [[0, "step", "Checking the settings with fail2ban-client -t …"], [700, "line", "OK: configuration test is successful"]]);
+        demoProtection = { ...pr, ignore: [...(pr.ignoreSelf ? ["203.0.113.9"] : []), ...pr.ignore] };
+        return f2b();
+      }
       case "certbot_status": return certs();
       case "certbot_issue":
         await progress(args.progress, [

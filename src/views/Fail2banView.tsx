@@ -1,8 +1,9 @@
-import { Ban, FileText, FolderOpen, Play, RefreshCw, ShieldOff } from "lucide-react";
-import { useState } from "react";
+import { Ban, FileText, FolderOpen, Play, RefreshCw, ShieldCheck, ShieldOff } from "lucide-react";
+import { useEffect, useState } from "react";
 import { confirm, Modal } from "../components/ui";
-import { api, asApiError, Fail2banStatus } from "../lib/api";
-import { seconds, useRemote } from "../lib/remote";
+import { api, asApiError, Fail2banStatus, SshProtection } from "../lib/api";
+import { runJob } from "../lib/jobs";
+import { seconds, useRemote, withSafetyOverride } from "../lib/remote";
 import { SessionState, useStore } from "../store";
 import { useKept } from "../lib/kept";
 
@@ -17,6 +18,14 @@ export function Fail2banView({ s }: { s: SessionState }) {
   const [unbanAll, setUnbanAll] = useState(false);
   const [anyIp, setAnyIp] = useState("");
   const [busy, setBusy] = useState(false);
+  const [protecting, setProtecting] = useState(false);
+  // Bans happen on their own: look again every 20 seconds while this tab is open, and when the window comes back.
+  useEffect(() => {
+    const t = setInterval(() => { if (document.visibilityState === "visible") void reload(); }, 20_000);
+    const on = () => { if (document.visibilityState === "visible") void reload(); };
+    document.addEventListener("visibilitychange", on);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", on); };
+  }, [sid]);
 
   const jail = st?.jails.find((j) => j.name === sel) ?? st?.jails[0] ?? null;
   const jailLocal = tool?.paths.find((p) => p.path === "/etc/fail2ban/jail.local");
@@ -72,6 +81,7 @@ export function Fail2banView({ s }: { s: SessionState }) {
         {jailLocal
           ? <button className="btn" onClick={() => openFile(sid, jailLocal.path)}><FileText size={13} /> Edit jail.local</button>
           : <button className="btn" onClick={() => showFolder(sid, "/etc/fail2ban")}><FolderOpen size={13} /> Open /etc/fail2ban</button>}
+        {st && <button className="btn primary" disabled={busy} onClick={() => setProtecting(true)}><ShieldCheck size={13} /> Protect SSH</button>}
         {st?.running && <button className="btn" disabled={busy} onClick={() => setUnbanAll(true)}><ShieldOff size={13} /> Unban an address</button>}
         <button className="icon-btn" aria-label="Refresh" onClick={reload}><RefreshCw size={14} className={loading ? "spin" : ""} /></button>
       </div>
@@ -100,7 +110,22 @@ export function Fail2banView({ s }: { s: SessionState }) {
                 ))}
               </tbody>
             </table>
-            {st.jails.length === 0 && <div className="empty" style={{ flex: "none" }}><p>No jails are enabled. Enable one (for example <span className="mono">[sshd] enabled = true</span>) in jail.local.</p></div>}
+            {st.jails.length === 0 && <div className="empty" style={{ flex: "none" }}><p>No jails are enabled. <button className="link-btn" onClick={() => setProtecting(true)}>Protect SSH</button> turns on the sshd jail with limits you choose.</p></div>}
+            <div className="section-title">Banned now{banned ? ` · ${banned}` : ""}</div>
+            {banned === 0 ? <p className="faint" style={{ margin: "0 16px", fontSize: 12.5 }}>Nobody is banned right now.</p> : (
+              <table className="table">
+                <thead><tr><th>Address</th><th>Jail</th><th /></tr></thead>
+                <tbody>
+                  {st.jails.flatMap((j) => j.banned.map((ip) => (
+                    <tr key={`${j.name}:${ip}`}>
+                      <td className="mono">{ip}{ip === st.clientIp && <span className="badge amber" style={{ marginLeft: 6 }}>you</span>}</td>
+                      <td className="mono faint">{j.name}</td>
+                      <td style={{ textAlign: "right" }}><button className="btn" disabled={busy} onClick={() => unban(ip, j.name)}>Unban</button></td>
+                    </tr>
+                  )))}
+                </tbody>
+              </table>
+            )}
             <p className="footnote">A jail watches a log for failed logins. After <i>max retry</i> failures within <i>find time</i>, the address is banned for <i>ban time</i>.{st.clientIp && <> This connection comes from <span className="mono">{st.clientIp}</span>.</>}</p>
           </div>
           <aside className="drawer">
@@ -134,6 +159,7 @@ export function Fail2banView({ s }: { s: SessionState }) {
           </aside>
         </div>
       )}
+      {protecting && <ProtectDialog sid={sid} clientIp={st?.clientIp ?? null} onClose={() => setProtecting(false)} onDone={(x) => { setData(x); setProtecting(false); }} />}
       {unbanAll && (
         <Modal title="Unban an address" subtitle="Removes the address from every jail, for example when you locked yourself out from another machine." onClose={() => setUnbanAll(false)}
           footer={<><button className="btn" onClick={() => setUnbanAll(false)}>Cancel</button><button className="btn primary" disabled={busy || !anyIp.trim()} onClick={async () => { if (await unban(anyIp.trim(), null)) { setUnbanAll(false); setAnyIp(""); } }}>Unban everywhere</button></>}>
@@ -141,5 +167,75 @@ export function Fail2banView({ s }: { s: SessionState }) {
         </Modal>
       )}
     </div>
+  );
+}
+
+const BAN_CHOICES: [number, string][] = [[10, "10 minutes"], [60, "1 hour"], [1440, "1 day"], [10080, "1 week"], [-1, "For good"]];
+
+/** Fail2ban → Protect SSH: how many failed logins, within how long, ban for how long. */
+function ProtectDialog({ sid, clientIp, onClose, onDone }: { sid: string; clientIp: string | null; onClose: () => void; onDone: (st: Fail2banStatus) => void }) {
+  const [p, setP] = useState<SshProtection | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [extra, setExtra] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  useEffect(() => {
+    api.fail2banProtection(sid).then((x) => {
+      setSaved(!!x);
+      const base: SshProtection = x ?? { maxRetry: 5, findTimeMins: 10, banTimeMins: 60, increment: true, ignoreSelf: true, recidive: true, ignore: [] };
+      // The saved list includes this computer's address when it was kept out; show it as the checkbox instead.
+      const ignoreSelf = x ? !!clientIp && x.ignore.includes(clientIp) : true;
+      setP({ ...base, ignoreSelf: x ? ignoreSelf : true, ignore: base.ignore.filter((i) => i !== clientIp) });
+      setExtra(base.ignore.filter((i) => i !== clientIp).join(" "));
+    }, () => setP({ maxRetry: 5, findTimeMins: 10, banTimeMins: 60, increment: true, ignoreSelf: true, recidive: true, ignore: [] }));
+  }, [sid]);
+  if (!p) return null;
+  const set = (x: Partial<SshProtection>) => setP({ ...p, ...x });
+  const go = async () => {
+    setBusy(true);
+    setProblem(null);
+    const protection = { ...p, ignore: extra.split(/[\s,]+/).filter(Boolean) };
+    try {
+      const st = await withSafetyOverride(
+        (force) => runJob((pr) => api.fail2banProtect(sid, protection, force, pr), { key: `f2b-protect:${sid}`, title: "Protecting SSH with Fail2ban", sid, done: () => "SSH protection is on" }),
+        "this could lock you out",
+      );
+      if (st) onDone(st);
+    } catch (e) {
+      setProblem(asApiError(e).message.replace(/^Invalid input: /, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const banLabel = p.banTimeMins === -1 ? "for good" : BAN_CHOICES.find(([m]) => m === p.banTimeMins)?.[1] ?? `${p.banTimeMins} minutes`;
+  return (
+    <Modal title="Protect SSH" subtitle="Ban addresses that keep failing to sign in. Written to Orbital's own Fail2ban file (the stock ones aren't changed), checked by fail2ban before it's kept." keepOnOutsideClick onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={go}>{busy ? "Applying…" : saved ? "Save" : "Turn on"}</button></>}>
+      <div className="route-form">
+        <div className="protect-row">
+          Ban after
+          <input className="input mono" style={{ width: 64 }} type="number" min={2} max={20} value={p.maxRetry} onChange={(e) => set({ maxRetry: Number(e.target.value) || 0 })} aria-label="Failed attempts" />
+          failed logins within
+          <input className="input mono" style={{ width: 72 }} type="number" min={1} max={1440} value={p.findTimeMins} onChange={(e) => set({ findTimeMins: Number(e.target.value) || 0 })} aria-label="Minutes" />
+          minutes
+        </div>
+        <div className="field">
+          <span>Ban for</span>
+          <div className="segmented">
+            {BAN_CHOICES.map(([m, label]) => <button key={m} className={p.banTimeMins === m ? "on" : ""} onClick={() => set({ banTimeMins: m })}>{label}</button>)}
+          </div>
+        </div>
+        <label className="check"><input type="checkbox" checked={p.increment} disabled={p.banTimeMins === -1} onChange={(e) => set({ increment: e.target.checked })} /> Ban repeat offenders longer each time (doubling, up to a week)</label>
+        <label className="check"><input type="checkbox" checked={p.recidive} onChange={(e) => set({ recidive: e.target.checked })} /> Ban addresses banned 5 times in a day for a week (all services)</label>
+        <label className="check"><input type="checkbox" checked={p.ignoreSelf} onChange={(e) => set({ ignoreSelf: e.target.checked })} /> Never ban this computer{clientIp ? <> (<span className="mono">{clientIp}</span>)</> : ""}</label>
+        <label className="field">
+          <span>Also never ban</span>
+          <input className="input mono" value={extra} onChange={(e) => setExtra(e.target.value)} placeholder="198.51.100.0/24 203.0.113.5" />
+          <span className="hint">Your office or VPN addresses, separated by spaces.</span>
+        </label>
+        <p className="faint" style={{ margin: 0, fontSize: 12.5 }}>So: {p.maxRetry} wrong passwords or keys within {p.findTimeMins} min from one address and it's blocked {banLabel}.</p>
+        {problem && <div className="alert" style={{ whiteSpace: "pre-wrap" }}>{problem}</div>}
+      </div>
+    </Modal>
   );
 }
