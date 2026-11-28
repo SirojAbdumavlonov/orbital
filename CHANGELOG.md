@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.12.0 (2026-11-28)
+
 ### Added
 - **Zoom with ⌘+ ⌘− ⌘0** (Ctrl on Windows and Linux): in a terminal they change its text size, in the editor the editor's, anywhere else the size of the whole interface. Each size is kept, and can also be set in Settings (Interface size is new).
 - **Go to folder** (Files, ⇧⌘G or Ctrl+Shift+G, or the toolbar button): type or paste a path to jump straight there, as in the Finder. Folders are suggested as you type (Tab completes), `~` is your home folder, relative paths start where you are, a file's path opens the file in its folder, and recent folders are remembered per server.
