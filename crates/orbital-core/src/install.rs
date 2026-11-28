@@ -196,7 +196,95 @@ pub const INSTALLABLE: &[Installable] = &[
 ];
 
 /// After Docker: the Compose plugin, under whichever name this system packages it.
-const COMPOSE_AFTER: &str = "if ! docker compose version >/dev/null 2>&1; then\n  if command -v apt-get >/dev/null 2>&1; then apt-get install -y -q docker-compose-v2 || apt-get install -y -q docker-compose-plugin || true;\n  else dnf install -y docker-compose || dnf install -y docker-compose-plugin || true; fi\nfi";
+/// After Docker: its plugins (Compose, Buildx), as below.
+const COMPOSE_AFTER: &str = PLUGINS_CORE;
+
+/// Installs Docker's missing CLI plugins with the packages that match how
+/// Docker came: Docker's own repository (docker-ce) ships
+/// docker-compose-plugin and docker-buildx-plugin; Debian and Ubuntu's
+/// docker.io has docker-compose-v2 and docker-buildx; Fedora's moby-engine has
+/// docker-compose and docker-buildx. Only names the repositories know are
+/// asked for. Fixed text: nothing from the user goes in.
+const PLUGINS_CORE: &str = r#"ce=0
+{ dpkg -s docker-ce >/dev/null 2>&1 || rpm -q docker-ce >/dev/null 2>&1; } && ce=1
+need=""
+docker compose version >/dev/null 2>&1 || need="compose"
+docker buildx version >/dev/null 2>&1 || need="$need buildx"
+if [ -n "$need" ]; then
+  if command -v apt-get >/dev/null 2>&1; then
+    if [ $ce = 1 ]; then c=docker-compose-plugin; b=docker-buildx-plugin; else c=docker-compose-v2; b=docker-buildx; fi
+    want=""
+    case "$need" in *compose*) apt-cache show "$c" >/dev/null 2>&1 && want="$c" || { apt-cache show docker-compose-plugin >/dev/null 2>&1 && want=docker-compose-plugin; };; esac
+    case "$need" in *buildx*) apt-cache show "$b" >/dev/null 2>&1 && want="$want $b" || { apt-cache show docker-buildx-plugin >/dev/null 2>&1 && want="$want docker-buildx-plugin"; };; esac
+    [ -n "$want" ] && DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o APT::Status-Fd=1 $want || true
+  elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+    pm=$(command -v dnf || command -v yum)
+    if [ $ce = 1 ]; then c=docker-compose-plugin; b=docker-buildx-plugin; else c=docker-compose; b=docker-buildx; fi
+    case "$need" in *compose*) "$pm" install -y "$c" || "$pm" install -y docker-compose-plugin || true;; esac
+    case "$need" in *buildx*) "$pm" install -y "$b" || "$pm" install -y docker-buildx-plugin || true;; esac
+  fi
+fi"#;
+
+/// Just the plugins, for a server whose Docker is there without them
+/// (Docker CE installed with only docker-ce and docker-ce-cli, say). Fails
+/// when Compose still doesn't work, saying which repository was used.
+pub fn plugins_script() -> String {
+    let head = r#"set -e
+export LC_ALL=C
+command -v docker >/dev/null 2>&1 || { echo "Docker isn't installed on this server." >&2; exit 2; }
+echo '@@progress 2'
+if command -v apt-get >/dev/null 2>&1; then DEBIAN_FRONTEND=noninteractive apt-get update -q; fi
+echo '@@progress 10'
+"#;
+    let tail = r#"
+echo '@@progress 96'
+if ! docker compose version; then echo "Docker Compose still isn't available: this server's repositories have no package for it." >&2; exit 3; fi
+docker buildx version 2>/dev/null || echo "Buildx: not available from these repositories (only needed to build images)."
+"#;
+    format!("{head}{PLUGINS_CORE}{tail}")
+}
+
+/// What's there: Docker, its Compose and Buildx plugins, and where Docker came from.
+pub const PLUGINS_CHECK: &str = r#"command -v docker >/dev/null 2>&1 || { echo @@nodocker; exit 0; }
+docker compose version >/dev/null 2>&1 && echo @@compose
+docker buildx version >/dev/null 2>&1 && echo @@buildx
+if dpkg -s docker-ce >/dev/null 2>&1 || rpm -q docker-ce >/dev/null 2>&1; then echo "@@source docker-ce"
+elif dpkg -s docker.io >/dev/null 2>&1; then echo "@@source docker.io"
+elif rpm -q moby-engine >/dev/null 2>&1; then echo "@@source moby-engine"; fi
+echo "@@version $(docker version --format '{{.Client.Version}}' 2>/dev/null)"
+true"#;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerPlugins {
+    pub docker: bool,
+    pub compose: bool,
+    pub buildx: bool,
+    /// "docker-ce" (Docker's own repository), "docker.io" (Debian/Ubuntu), "moby-engine" (Fedora), or "".
+    pub source: String,
+    pub version: String,
+}
+
+pub fn parse_plugins(out: &str) -> DockerPlugins {
+    let mut p = DockerPlugins {
+        docker: !out.contains("@@nodocker"),
+        ..Default::default()
+    };
+    for l in out.lines().map(str::trim) {
+        match l {
+            "@@compose" => p.compose = true,
+            "@@buildx" => p.buildx = true,
+            _ => {
+                if let Some(v) = l.strip_prefix("@@source ") {
+                    p.source = v.trim().to_string();
+                } else if let Some(v) = l.strip_prefix("@@version") {
+                    p.version = v.trim().to_string();
+                }
+            }
+        }
+    }
+    p
+}
 
 /// Daily security updates on: apt's periodic settings, or dnf-automatic's timer.
 const AUTO_UPDATES_AFTER: &str = "if [ -d /etc/apt/apt.conf.d ] && command -v unattended-upgrade >/dev/null 2>&1; then\n  printf 'APT::Periodic::Update-Package-Lists \"1\";\\nAPT::Periodic::Unattended-Upgrade \"1\";\\n' > /etc/apt/apt.conf.d/20auto-upgrades\nfi\nif systemctl list-unit-files dnf-automatic-install.timer >/dev/null 2>&1; then systemctl enable --now dnf-automatic-install.timer || true; fi";
@@ -321,5 +409,38 @@ mod tests {
                 .unwrap();
             assert!(out.status.success(), "{}: {}", i.id, String::from_utf8_lossy(&out.stderr));
         }
+    }
+
+    #[test]
+    fn docker_plugins_by_where_docker_came_from() {
+        let p = plugins_script();
+        assert!(
+            p.contains("docker-compose-plugin") && p.contains("docker-buildx-plugin"),
+            "Docker CE names"
+        );
+        assert!(
+            p.contains("docker-compose-v2") && p.contains("docker-buildx"),
+            "Debian/Ubuntu names"
+        );
+        assert!(p.contains("@@progress 10") && p.contains("docker compose version"));
+        for sc in [p.clone(), PLUGINS_CHECK.to_string(), script(find("docker").unwrap())] {
+            let o = std::process::Command::new("sh").arg("-n").arg("-c").arg(&sc).output().unwrap();
+            assert!(o.status.success(), "{sc}: {}", String::from_utf8_lossy(&o.stderr));
+        }
+        assert!(
+            script(find("docker").unwrap()).contains("docker-buildx"),
+            "a fresh Docker gets Buildx too"
+        );
+        assert_eq!(
+            parse_plugins("@@buildx\n@@source docker-ce\n@@version 29.0.1\n"),
+            DockerPlugins {
+                docker: true,
+                compose: false,
+                buildx: true,
+                source: "docker-ce".into(),
+                version: "29.0.1".into()
+            }
+        );
+        assert!(!parse_plugins("@@nodocker\n").docker);
     }
 }

@@ -23,11 +23,11 @@ function Row({ title, hint, children }: { title: string; hint?: string; children
   );
 }
 
-function Stepper({ value, min, max, onChange, unit }: { value: number; min: number; max: number; onChange: (v: number) => void; unit: string }) {
+function Stepper({ value, min, max, onChange, unit, show }: { value: number; min: number; max: number; onChange: (v: number) => void; unit: string; show?: (v: number) => string }) {
   return (
     <div className="stepper">
       <button className="btn" aria-label="Smaller" disabled={value <= min} onClick={() => onChange(value - 1)}>−</button>
-      <span className="mono">{value} {unit}</span>
+      <span className="mono">{show ? show(value) : `${value} ${unit}`}</span>
       <button className="btn" aria-label="Larger" disabled={value >= max} onClick={() => onChange(value + 1)}>+</button>
     </div>
   );
@@ -120,6 +120,9 @@ export function SettingsView() {
               ))}
             </div>
           </Row>
+          <Row title="Interface size" hint={`Everything in Orbital's window. Or ${KEYS.zoomIn} and ${KEYS.zoomOut} anywhere outside a terminal or the editor; ${KEYS.zoomReset} goes back to 100 %.`}>
+            <Stepper value={Math.round(st.uiZoom * 10)} min={7} max={16} unit="%" show={(v) => `${v * 10} %`} onChange={(v) => st.set({ uiZoom: v / 10 })} />
+          </Row>
           <Row title="Accent colour" hint="The one highlight colour: primary buttons, the selected row, live charts and running jobs.">
             <div className="accent-swatches" role="radiogroup" aria-label="Accent colour">
               {ACCENTS.map((a) => (
@@ -129,7 +132,7 @@ export function SettingsView() {
           </Row>
 
           <h3 className="settings-title">Editor</h3>
-          <Row title="Font size"><Stepper value={st.editorFontSize} min={10} max={22} unit="pt" onChange={(v) => st.set({ editorFontSize: v })} /></Row>
+          <Row title="Font size" hint={`Or ${KEYS.zoomIn} and ${KEYS.zoomOut} in the editor; ${KEYS.zoomReset} goes back to 13 pt.`}><Stepper value={st.editorFontSize} min={8} max={32} unit="pt" onChange={(v) => st.set({ editorFontSize: v })} /></Row>
           <Row title="Wrap long lines" hint="Long lines continue on the next line instead of scrolling sideways.">
             <input type="checkbox" className="switch" checked={st.editorWordWrap} onChange={(e) => st.set({ editorWordWrap: e.target.checked })} />
           </Row>
@@ -144,7 +147,7 @@ export function SettingsView() {
           <Row title="Open as root when sudo is set up" hint="New terminals start a root shell (sudo -i) on servers whose settings allow sudo, typing a saved sudo password for you. The other kind is one click away in the Terminal tab.">
             <input type="checkbox" className="switch" checked={st.terminalAsRoot} onChange={(e) => st.set({ terminalAsRoot: e.target.checked })} />
           </Row>
-          <Row title="Font size"><Stepper value={st.terminalFontSize} min={10} max={22} unit="pt" onChange={(v) => st.set({ terminalFontSize: v })} /></Row>
+          <Row title="Font size" hint={`Or ${KEYS.zoomIn} and ${KEYS.zoomOut} in a terminal; ${KEYS.zoomReset} goes back to 13 pt.`}><Stepper value={st.terminalFontSize} min={8} max={32} unit="pt" onChange={(v) => st.set({ terminalFontSize: v })} /></Row>
           <Row title="Open terminals in tmux" hint="New terminals run inside tmux (sessions orbital-1, orbital-2, …), so a long command keeps going when the connection drops, and opening a terminal again picks the session up. Needs tmux on the server; without it you get a normal shell.">
             <input type="checkbox" className="switch" checked={st.terminalTmux} onChange={(e) => st.set({ terminalTmux: e.target.checked })} />
           </Row>

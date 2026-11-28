@@ -1,7 +1,7 @@
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   ArrowRightLeft, ArrowUp, ChevronRight, Download, Eye, EyeOff, FilePlus, FileText, Folder, FolderPlus, FolderUp, History, Link2, Lock, Pencil, RefreshCw, RotateCcw, Save,
-  ClipboardPaste, GitCompare, Search, ShieldCheck, SquareTerminal, Star, Trash2, Upload, X,
+  ClipboardPaste, FolderInput, GitCompare, Search, ShieldCheck, SquareTerminal, Star, Trash2, Upload, X,
 } from "lucide-react";
 import { isMac, KEYS, mod } from "../lib/platform";
 import Editor, { DiffEditor, DiffOnMount, OnMount } from "@monaco-editor/react";
@@ -10,6 +10,7 @@ import { confirm, Modal } from "../components/ui";
 import { FindReport, api, asApiError, FileEntry, SafeWriteReport } from "../lib/api";
 import { runJob, useRunningJob } from "../lib/jobs";
 import { JobProgress } from "../components/JobProgress";
+import { GoToFolder } from "../components/GoToFolder";
 import { baseName, breadcrumbs, bytes, joinPath, octal, parentPath, relativeTime } from "../lib/format";
 import { languageFor } from "../lib/language";
 import "../lib/monaco";
@@ -99,6 +100,7 @@ function Browser({ s }: { s: SessionState }) {
 
   useEffect(() => { load(s.cwd); setSel(null); setFilter(""); setFound(null); setFindErr(null); }, [s.cwd]);
   const go = (path: string) => patch(sid, { cwd: path });
+  const [goingTo, setGoingTo] = useState(false);
 
   async function openEntry(e: FileEntry) {
     if (e.kind === "dir") return go(e.path);
@@ -214,7 +216,14 @@ function Browser({ s }: { s: SessionState }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const st = useStore.getState();
-      if (st.globalView || st.active !== sid || st.sessions[sid]?.tab !== "files" || !mod(e) || e.altKey || e.shiftKey) return;
+      if (st.globalView || st.active !== sid || st.sessions[sid]?.tab !== "files" || !mod(e) || e.altKey) return;
+      // ⌘⇧G (Ctrl+Shift+G): Go to Folder, as in the Finder; also from the filter box.
+      if (e.shiftKey && e.key.toLowerCase() === "g" && !document.querySelector("[role=dialog]") && !(e.target as Element | null)?.closest?.(".monaco-editor, .xterm")) {
+        e.preventDefault();
+        setGoingTo(true);
+        return;
+      }
+      if (e.shiftKey) return;
       if (typingIn(e.target) || document.querySelector("[role=dialog]")) return;
       const k = e.key.toLowerCase();
       if (k === "c") {
@@ -258,8 +267,10 @@ function Browser({ s }: { s: SessionState }) {
 
   return (
     <section className={`browser ${dropping ? "dropzone" : ""}`} aria-label="Remote files">
+      {goingTo && <GoToFolder sid={sid} profileId={s.profile.id} cwd={s.cwd} home={s.info.home} onClose={() => setGoingTo(false)} onGo={(p) => { setGoingTo(false); go(p); }} onOpenFile={(p) => void openFile(sid, p)} />}
       <div className="toolbar">
         <button className="icon-btn" aria-label="Up one folder" title="Up" disabled={s.cwd === "/"} onClick={() => go(parentPath(s.cwd))}><ArrowUp size={15} /></button>
+        <button className="icon-btn" aria-label="Go to folder" title={`Go to folder… (${KEYS.gotoFolder})`} onClick={() => setGoingTo(true)}><FolderInput size={15} /></button>
         <div className="crumbs mono">
           {breadcrumbs(s.cwd).map((b) => <button key={b.path} onClick={() => go(b.path)}>{b.name}</button>)}
         </div>

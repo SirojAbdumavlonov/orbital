@@ -4,6 +4,15 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **Zoom with ⌘+ ⌘− ⌘0** (Ctrl on Windows and Linux): in a terminal they change its text size, in the editor the editor's, anywhere else the size of the whole interface. Each size is kept, and can also be set in Settings (Interface size is new).
+- **Go to folder** (Files, ⇧⌘G or Ctrl+Shift+G, or the toolbar button): type or paste a path to jump straight there, as in the Finder. Folders are suggested as you type (Tab completes), `~` is your home folder, relative paths start where you are, a file's path opens the file in its folder, and recent folders are remembered per server.
+- **Install Docker Compose** (Compose stacks tab): when Docker is there without its Compose plugin (as when only the engine and CLI were installed from Docker's own repository), one click installs Compose and Buildx with the packages that match how Docker came: docker-compose-plugin and docker-buildx-plugin for Docker CE, docker-compose-v2 and docker-buildx for Ubuntu's docker.io. Installing Docker from the "+" menu now brings Buildx along with Compose.
+
+### Fixed
+- **Smoother terminal**: the terminal now draws with the GPU (WebGL), like Warp or iTerm, instead of as page elements, so typing and fast output keep up with the screen. Without WebGL it falls back to the old way on its own.
+- **Copying between servers failed with "permission denied"** for files and folders only root may read (under /root, /etc, /var/lib…), even for admins. When either server refuses, Orbital now streams the copy with sudo on both sides (tar through this computer), keeping contents and permissions; downloading root-only files and folders to this computer works the same way.
+
 ## 1.11.0 (2026-11-28)
 
 ### Added

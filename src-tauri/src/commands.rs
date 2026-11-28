@@ -1559,6 +1559,20 @@ pub fn install_options(engine: Eng) -> Vec<orbital_core::install::InstallOption>
 }
 
 #[tauri::command]
+pub async fn docker_plugins(engine: Eng<'_>, session_id: String) -> R<orbital_core::install::DockerPlugins> {
+    engine.docker_plugins(&session_id).await
+}
+
+#[tauri::command]
+pub async fn install_docker_plugins(
+    engine: Eng<'_>,
+    session_id: String,
+    progress: Channel<ProgressEvent>,
+) -> R<orbital_core::install::DockerPlugins> {
+    progress::run_job(progress.id(), sink(progress), engine.install_docker_plugins(&session_id)).await
+}
+
+#[tauri::command]
 pub async fn install_software(
     engine: Eng<'_>,
     session_id: String,

@@ -23,6 +23,8 @@ export const DEFAULT_THRESHOLDS: Thresholds = { diskWarn: 85, diskBad: 95, memWa
 export interface Settings {
   theme: ThemePref;
   accent: Accent;
+  /** The whole interface's size (1 = 100 %), ⌘+ ⌘− ⌘0 outside the terminal and editor. */
+  uiZoom: number;
   editorFontSize: number;
   editorWordWrap: boolean;
   editorMinimap: boolean;
@@ -57,6 +59,7 @@ export interface Settings {
 const DEFAULTS: Settings = {
   theme: "system",
   accent: "amber",
+  uiZoom: 1,
   editorFontSize: 13,
   editorWordWrap: false,
   editorMinimap: false,

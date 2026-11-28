@@ -156,6 +156,10 @@ async fn full_workflow_password_auth() {
         .await
         .expect("reconnect with keychain secret");
     let sid = s.id.clone();
+    // Go to Folder tells a folder from a file or nothing by listing: both of those are errors.
+    assert!(engine.list_dir(&sid, "/etc").await.is_ok());
+    assert!(engine.list_dir(&sid, "/etc/hostname").await.is_err(), "a file isn't a folder");
+    assert!(engine.list_dir(&sid, "/no/such/folder").await.is_err());
     // A second window attaches to the same connection by its id.
     assert_eq!(engine.session_info(&sid).await.unwrap().profile_id, p.id);
 
@@ -3181,4 +3185,141 @@ async fn systemd_timer_create_and_remove() {
     engine.remove_timer(&s.id, "orbital-it-timer").await.unwrap();
     assert!(engine.remove_timer(&s.id, "ssh").await.is_err(), "only Orbital's timers");
     engine.disconnect(&s.id).await.unwrap();
+}
+
+/// Docker without its plugins (as when only docker-ce and docker-ce-cli were
+/// installed): the check says Compose is missing, and installing the plugins
+/// picks the packages for how Docker came and makes `docker compose` work.
+/// Needs Docker from the system's packages (the Ubuntu test server): ORBITAL_IT_USERS=1.
+#[tokio::test]
+async fn docker_plugins_are_found_missing_and_installed() {
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_USERS").is_err() || std::env::var("ORBITAL_IT_NO_PASSWORD").is_ok() {
+        return;
+    }
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    let p = engine.docker_plugins(&s.id).await.unwrap();
+    if !p.docker || p.source != "docker.io" {
+        eprintln!("skipped: needs Docker from the docker.io package ({p:?})");
+        return;
+    }
+    engine
+        .run_command(
+            &s.id,
+            "DEBIAN_FRONTEND=noninteractive apt-get remove -y -q docker-compose-v2 docker-buildx >/dev/null 2>&1; true",
+            true,
+        )
+        .await
+        .unwrap();
+    let before = engine.docker_plugins(&s.id).await.unwrap();
+    assert!(!before.compose, "{before:?}");
+    let after = engine.install_docker_plugins(&s.id).await.unwrap();
+    assert!(after.compose && after.buildx, "{after:?}");
+    let o = engine
+        .run_command(&s.id, "dpkg -s docker-compose-v2 docker-buildx >/dev/null && echo both", true)
+        .await
+        .unwrap();
+    assert!(o.stdout.contains("both"), "{o:?}");
+}
+
+/// The same with Docker CE from Docker's own repository (only docker-ce and
+/// docker-ce-cli installed): its plugin packages are the ones installed.
+/// Runs only where Docker CE is set up that way (ORBITAL_IT_DOCKER_CE=1).
+#[tokio::test]
+async fn docker_ce_plugins_come_from_dockers_repository() {
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_DOCKER_CE").is_err() {
+        return;
+    }
+    let engine = engine();
+    let s = sudo_session(&engine, &e).await;
+    let before = engine.docker_plugins(&s.id).await.unwrap();
+    assert_eq!(before.source, "docker-ce", "{before:?}");
+    assert!(!before.compose, "{before:?}");
+    let after = engine.install_docker_plugins(&s.id).await.unwrap();
+    assert!(after.compose && after.buildx, "{after:?}");
+    let o = engine
+        .run_command(
+            &s.id,
+            "dpkg -s docker-compose-plugin docker-buildx-plugin >/dev/null && dpkg -s docker-ce >/dev/null && echo ok",
+            true,
+        )
+        .await
+        .unwrap();
+    assert!(o.stdout.contains("ok"), "Docker CE kept, its plugins installed: {o:?}");
+}
+
+/// Admins copying what only root can read or write: a root-only file and a
+/// root-only folder go from one server to a root-only place on another (tar
+/// through this Mac with sudo on both sides), and a root-only file downloads.
+/// Two sessions stand in for two servers. Needs sudo: ORBITAL_IT_USERS=1.
+#[tokio::test]
+async fn root_only_files_copy_between_servers_and_download() {
+    let Some(e) = env() else { return };
+    if std::env::var("ORBITAL_IT_USERS").is_err() || std::env::var("ORBITAL_IT_NO_PASSWORD").is_ok() {
+        return;
+    }
+    let engine = engine();
+    let a = sudo_session(&engine, &e).await;
+    // A second connection to the same saved server (its key is trusted and its password saved now).
+    let b = engine.connect(&a.profile_id, ConnectOptions::default()).await.unwrap();
+    let tag = std::process::id();
+    let src_dir = format!("/root/orbital-src-{tag}");
+    let dst_dir = format!("/etc/orbital-dst-{tag}");
+    engine
+        .run_command(
+            &a.id,
+            &format!("mkdir -p {src_dir}/sub && echo top-secret > {src_dir}/sub/key.txt && chmod 700 {src_dir} && chmod 600 {src_dir}/sub/key.txt && mkdir -p {dst_dir} && chmod 755 {dst_dir}"),
+            true,
+        )
+        .await
+        .unwrap();
+    // A plain read is refused for the login user, so this goes through the sudo path.
+    let file = engine
+        .copy_between(
+            &a.id,
+            &format!("{src_dir}/sub/key.txt"),
+            &b.id,
+            &format!("{dst_dir}/key.txt"),
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(file.files, 1);
+    let folder = engine
+        .copy_between(&a.id, &src_dir, &b.id, &format!("{dst_dir}/tree"), false)
+        .await
+        .unwrap();
+    assert!(folder.files == 1 && folder.bytes > 0, "{folder:?}");
+    let check = engine
+        .run_command(
+            &b.id,
+            &format!("cat {dst_dir}/key.txt {dst_dir}/tree/sub/key.txt; stat -c '%a' {dst_dir}/tree/sub/key.txt"),
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!(check.stdout, "top-secret\ntop-secret\n600\n", "contents and mode kept");
+    // Not over an existing one unless asked.
+    assert!(engine
+        .copy_between(
+            &a.id,
+            &format!("{src_dir}/sub/key.txt"),
+            &b.id,
+            &format!("{dst_dir}/key.txt"),
+            false
+        )
+        .await
+        .is_err());
+    // Downloading a root-only file to this computer.
+    let local = std::env::temp_dir().join(format!("orbital-root-dl-{tag}.txt"));
+    let n = engine.download(&a.id, &format!("{src_dir}/sub/key.txt"), &local).await.unwrap();
+    assert_eq!(n, 11);
+    assert_eq!(std::fs::read_to_string(&local).unwrap(), "top-secret\n");
+    std::fs::remove_file(&local).ok();
+    engine
+        .run_command(&a.id, &format!("rm -rf {src_dir} {dst_dir}"), true)
+        .await
+        .unwrap();
 }

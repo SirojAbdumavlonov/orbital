@@ -570,6 +570,8 @@ export interface LogSearch { hits: { file: string; line: string }[]; truncated: 
 export interface Stack { name: string; status: string; files: string[]; running: boolean; ours: boolean }
 export type StackAction = "up" | "pullUp" | "restart" | "down" | "logs";
 /** A ready-made app (apps.rs): installed as a stack on 127.0.0.1:port. */
+/** Docker and its CLI plugins; `source`: "docker-ce" (Docker's own repository), "docker.io", "moby-engine" or "". */
+export interface DockerPlugins { docker: boolean; compose: boolean; buildx: boolean; source: string; version: string }
 export interface AppOption { id: string; name: string; category: string; hint: string; port: number; firstSteps: string; memoryMb: number; images: string[] }
 export interface AppInstalled { name: string; app: string; port: number; started: boolean; output: string; shown: { label: string; value: string }[]; firstSteps: string }
 
@@ -1415,6 +1417,9 @@ export const api = {
   createStack: (sessionId: string, name: string, content: string, deploy: boolean, onProgress?: OnProgress) =>
     invoke<ExecOutput | null>("create_stack", { sessionId, name, content, deploy, progress: progressChannel(onProgress) }),
   appOptions: () => invoke<AppOption[]>("app_options"),
+  dockerPlugins: (sessionId: string) => invoke<DockerPlugins>("docker_plugins", { sessionId }),
+  /** Install Docker Compose and Buildx with the packages that match how Docker was installed. */
+  installDockerPlugins: (sessionId: string, onProgress?: OnProgress) => invoke<DockerPlugins>("install_docker_plugins", { sessionId, progress: progressChannel(onProgress) }),
   /** Install a ready-made app as stack `name` on 127.0.0.1:`port`; generated passwords come back once in `shown`. */
   installApp: (sessionId: string, app: string, name: string, port: number, force: boolean, onProgress?: OnProgress) =>
     invoke<AppInstalled>("install_app", { sessionId, app, name, port, force, progress: progressChannel(onProgress) }),

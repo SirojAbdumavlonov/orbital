@@ -208,6 +208,48 @@ pub fn remove_command(path: &str, recursive: bool) -> String {
     }
 }
 
+/// `tar` the source (its folder or file, by name from its parent) to stdout.
+pub fn tar_out_command(src: &str) -> String {
+    let src = src.trim_end_matches('/');
+    let (parent, name) = match src.rsplit_once('/') {
+        Some(("", n)) => ("/", n),
+        Some((p, n)) => (p, n),
+        None => (".", src),
+    };
+    format!("tar -C {} -cf - -- {}", quote(parent), quote(name))
+}
+
+/// Unpack stdin into a private folder in /tmp, then put it in place at `dst`
+/// (merging into an existing folder) and remove the temporary copy.
+pub fn tar_in_command(src: &str, dst: &str) -> String {
+    let name = src.trim_end_matches('/').rsplit('/').next().unwrap_or("copy");
+    let staged = format!("\"$d\"/{}", quote(name));
+    let r = quote(dst);
+    format!(
+        "d=$(mktemp -d /tmp/orbital-copy-XXXXXX) || exit 1; trap 'rm -rf -- \"$d\"' EXIT; tar -C \"$d\" --no-same-owner -xf - || exit 1; \
+         if [ -d {staged} ]; then mkdir -p -- {r} && cp -R -- {staged}/. {r}; else mkdir -p -- \"$(dirname -- {r})\" && cp -- {staged} {r}; fi"
+    )
+}
+
+/// Counts files and folders under `src` (or 1 file): prints "FILES DIRS".
+pub fn tar_count_command(src: &str) -> String {
+    let q = quote(src);
+    format!("if [ -d {q} ]; then echo \"$(find {q} -type f | wc -l) $(find {q} -type d | wc -l)\"; elif [ -e {q} ]; then echo '1 0'; fi")
+}
+
+async fn run_on(s: &SshSession, root: bool, cmd: &str) -> Result<crate::ssh::ExecOutput> {
+    if root {
+        s.exec_privileged(cmd).await
+    } else {
+        s.exec(cmd).await
+    }
+}
+
+fn parse_count(out: &str) -> Option<(u64, u64)> {
+    let mut it = out.split_whitespace().map(|x| x.parse::<u64>().ok());
+    Some((it.next()??, it.next()??))
+}
+
 /// Put a staged upload in place as root (merging into an existing folder).
 pub fn place_command(staged: &str, remote: &str) -> String {
     let (s, r) = (quote(staged), quote(remote));
@@ -549,27 +591,41 @@ impl SshSession {
         Ok(n)
     }
 
-    /// Like [`copy_to`], into a place the destination login can't write:
-    /// staged in /tmp on `dst`, then put in place as root there.
-    pub async fn copy_to_as_root(&self, src_path: &str, dst: &SshSession, dst_path: &str, overwrite: bool) -> Result<TransferReport> {
+    /// [`copy_to`] when SFTP is refused on either server (a file only root may
+    /// read on the source, a folder only root may write on the destination):
+    /// `tar` streams it through this Mac, run with sudo on each side that
+    /// allows it, unpacked into a private folder in /tmp on the destination
+    /// and copied into place from there. Files end up owned by root on the
+    /// destination (like anything placed with sudo); modes are kept.
+    pub async fn copy_to_via_tar(&self, src_path: &str, dst: &SshSession, dst_path: &str, overwrite: bool) -> Result<TransferReport> {
+        validate_path(src_path)?;
         validate_path(dst_path)?;
-        if !overwrite && dst.exec_privileged(&format!("[ -e {} ]", quote(dst_path))).await?.ok() {
+        let (src_root, dst_root) = (self.elevation_needed(), dst.elevation_needed());
+        if !overwrite && run_on(dst, dst_root, &format!("[ -e {} ]", quote(dst_path))).await?.ok() {
             return Err(Error::InvalidInput(format!("{dst_path} already exists on {}", dst.label())));
         }
-        let o = dst.exec("mktemp -d /tmp/orbital-copy-XXXXXX").await?.check()?;
-        let tmp_dir = o.stdout.trim().to_string();
-        validate_path(&tmp_dir)?;
-        let name = dst_path.trim_end_matches('/').rsplit('/').next().unwrap_or("copy");
-        let staged = join(&tmp_dir, name);
-        let r = async {
-            let rep = self.copy_to(src_path, dst, &staged, true).await?;
-            crate::progress::step(format!("Putting it in place with sudo: {dst_path} …"));
-            dst.as_root(&place_command(&staged, dst_path)).await?;
-            Ok(rep)
-        }
-        .await;
-        let _ = dst.exec(&format!("rm -rf -- {}", quote(&tmp_dir))).await;
-        r
+        let o = run_on(self, src_root, &tar_count_command(src_path)).await?;
+        let (files, dirs) = parse_count(&o.stdout).ok_or_else(|| Error::NotFound(format!("{src_path} isn't on {}", self.label())))?;
+        crate::progress::step(format!(
+            "Copying {src_path} to {} with sudo (tar through this computer) …",
+            dst.label()
+        ));
+        let bytes = crate::migrate::pipe(
+            self,
+            &tar_out_command(src_path),
+            src_root,
+            dst,
+            &tar_in_command(src_path, dst_path),
+            dst_root,
+            src_path,
+        )
+        .await?;
+        Ok(TransferReport {
+            files,
+            dirs,
+            bytes,
+            skipped: 0,
+        })
     }
 
     /// Upload into a place the login user can't write: to a private folder in
@@ -900,5 +956,42 @@ mod tests {
         assert_eq!(mode_string(0o640), "rw-r-----");
         assert!(looks_binary(&[0x7f, b'E', b'L', b'F', 0]));
         assert!(!looks_binary(b"server { listen 80; }"));
+    }
+
+    #[test]
+    fn copies_through_tar_when_sftp_is_refused() {
+        assert_eq!(tar_out_command("/etc/ssl/private/"), "tar -C /etc/ssl -cf - -- private");
+        assert_eq!(tar_out_command("/root"), "tar -C / -cf - -- root");
+        assert_eq!(tar_out_command("/srv/my app/x.conf"), "tar -C '/srv/my app' -cf - -- x.conf");
+        let i = tar_in_command("/etc/nginx", "/etc/nginx-from-web");
+        assert!(
+            i.contains("--no-same-owner") && i.contains("cp -R -- \"$d\"/nginx/. /etc/nginx-from-web"),
+            "{i}"
+        );
+        assert_eq!(parse_count("12 3\n"), Some((12, 3)));
+        assert_eq!(parse_count(""), None);
+        for c in [tar_out_command("/a b/c"), i, tar_count_command("/x y")] {
+            let o = std::process::Command::new("sh").arg("-n").arg("-c").arg(&c).output().unwrap();
+            assert!(o.status.success(), "{c}");
+        }
+        // Run for real under sh: a folder with a file goes into place, merging.
+        let base = std::env::temp_dir().join(format!("orbital-tar-{}", std::process::id()));
+        let (src, dst) = (base.join("src/site"), base.join("dst/site"));
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("sub/a.txt"), "hello").unwrap();
+        let src_s = src.to_string_lossy().to_string();
+        let dst_s = dst.to_string_lossy().to_string();
+        let o = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "{} | sh -c {}",
+                tar_out_command(&src_s),
+                quote(&tar_in_command(&src_s, &dst_s))
+            ))
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        assert_eq!(std::fs::read_to_string(dst.join("sub/a.txt")).unwrap(), "hello");
+        std::fs::remove_dir_all(&base).ok();
     }
 }

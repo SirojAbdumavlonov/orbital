@@ -1319,3 +1319,14 @@ kbd { font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border: 1px
 .key-picker-head { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .key-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .key-chips .chip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 11.5px; }
+.plugin-notice { display: flex; align-items: center; gap: 10px; margin: 12px 16px 0; font-size: 12.5px; }
+.plugin-notice > span { flex: 1; }
+
+/* Files → Go to folder (components/GoToFolder.tsx) */
+.goto { display: flex; flex-direction: column; gap: 8px; min-width: 440px; }
+.goto-resolved { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goto-list { display: flex; flex-direction: column; max-height: 220px; overflow: auto; border: 1px solid var(--slate-4); border-radius: var(--radius-s); }
+.goto-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px 2px; font-size: 11.5px; }
+.goto-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: none; border: 0; color: var(--ink-2); text-align: left; cursor: pointer; font-size: 12.5px; }
+.goto-item:hover, .goto-item.on { background: var(--slate-3); color: var(--ink); }
+.goto-item .mono { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

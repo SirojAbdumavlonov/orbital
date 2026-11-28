@@ -44,6 +44,7 @@ import { useFailedPolling } from "./lib/health";
 import { useHistoryMigration } from "./lib/metricHistory";
 import { useRememberFolders } from "./lib/startFolder";
 import { isMainWindow, start as windowStart } from "./lib/windows";
+import { useZoom } from "./lib/zoom";
 import { useFleetUpdates } from "./lib/fleet";
 import { useSessionRestore } from "./lib/restore";
 import { useUptimeAlerts } from "./lib/uptime";
@@ -225,6 +226,7 @@ export default function App() {
   useApplyTheme();
   const sidebarHidden = useSettings((x) => x.sidebarHidden);
   usePanelResizing();
+  useZoom();
   useFailedPolling();
   useRememberFolders((f) => useStore.subscribe(f));
   useFleetUpdates();

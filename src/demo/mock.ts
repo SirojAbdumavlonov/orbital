@@ -243,6 +243,7 @@ let notifyChannels: any[] = [
   { id: "nc1", name: "My Telegram", enabled: true, events: ["health", "uptime"], config: { kind: "telegram", chatId: "100200300", chatName: "Alex (@alex)" }, createdAt: "2026-11-20T10:00:00Z" },
 ];
 let demoProtection: any = null;
+let demoComposeFixed = false;
 const demoJails: Record<string, any> = {};
 const DEMO_APPS = [
   { id: "uptime-kuma", name: "Uptime Kuma", category: "Monitoring", hint: "Status pages and uptime checks with alerts to Telegram, Slack, email and more", port: 3001, firstSteps: "Create the admin account on the first page.", memoryMb: 150, images: ["louislam/uptime-kuma:1"] },
@@ -1114,6 +1115,11 @@ export function install() {
         if (!/^\d{5,15}:[\w-]{30,64}$/.test(String(args.token).trim())) throw { kind: "InvalidInput", message: "Invalid input: that isn't a Telegram bot token: BotFather gives one like 123456789:AA… (digits, a colon, then letters)" };
         return { username: "my_servers_bot", chats: [{ id: "100200300", name: "Alex (@alex)", kind: "private" }, { id: "-1001234567890", name: "Ops team", kind: "supergroup" }] };
       case "send_alert": return notifyChannels.filter((c) => c.enabled && c.events.includes(args.alert.kind)).map((c) => ({ channelId: c.id, channel: c.name, ok: true, error: null }));
+      case "docker_plugins": return { docker: true, compose: args.sessionId !== "s-p2" || demoComposeFixed, buildx: args.sessionId !== "s-p2" || demoComposeFixed, source: "docker-ce", version: "29.0.1" };
+      case "install_docker_plugins":
+        await progress(args.progress, [[0, "step", "Installing Docker Compose and Buildx from the server's package repositories …"], [300, "line", "@@progress 10"], [900, "line", "pmstatus:docker-compose-plugin:60:Installing docker-compose-plugin"], [600, "line", "@@progress 96"], [200, "line", "Docker Compose version v2.40.3"]]);
+        demoComposeFixed = true;
+        return { docker: true, compose: true, buildx: true, source: "docker-ce", version: "29.0.1" };
       case "app_options": return DEMO_APPS;
       case "install_app": {
         const app = DEMO_APPS.find((a) => a.id === args.app)!;

@@ -1,4 +1,5 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { Columns2, CornerDownLeft, Layers, Plus, Radio, Rows2, ShieldAlert, Sparkles, Square, SquareTerminal, User, X } from "lucide-react";
@@ -191,6 +192,22 @@ const TERM_THEMES = {
   },
 };
 
+/** The WebGL renderer, when this computer's webview has it; `refresh` redraws its letters. */
+function attachGpuRenderer(term: Terminal): { refresh(): void; dispose(): void } {
+  let addon: WebglAddon | null = null;
+  try {
+    addon = new WebglAddon();
+    addon.onContextLoss(() => { addon?.dispose(); addon = null; });
+    term.loadAddon(addon);
+  } catch {
+    addon = null; // no WebGL here: the DOM renderer stays
+  }
+  return {
+    refresh() { try { addon?.clearTextureAtlas(); term.refresh(0, term.rows - 1); } catch { /* gone */ } },
+    dispose() { try { addon?.dispose(); } catch { /* gone */ } },
+  };
+}
+
 function decode(b64: string): Uint8Array {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -294,6 +311,7 @@ function TerminalPane({ sid, tab, visible, label, area }: { sid: string; tab: Te
   }, [theme, fontSize, accent]);
 
   useEffect(() => {
+    let disposed = false;
     const term = new Terminal({
       fontFamily: "JetBrains Mono, ui-monospace, Menlo, monospace",
       fontSize,
@@ -310,9 +328,14 @@ function TerminalPane({ sid, tab, visible, label, area }: { sid: string; tab: Te
     term.open(host.current!);
     termRef.current = term;
     fitRef.current = fit;
+    // Draw with the GPU (WebGL), like Warp or iTerm: typing and fast output stay
+    // smooth at the display's frame rate. Without WebGL, or if the GPU context is
+    // lost, xterm falls back to its DOM renderer.
+    const gpu = attachGpuRenderer(term);
     try { fit.fit(); } catch { /* hidden */ }
+    // The atlas of drawn letters must use the real font: redraw once it has loaded.
+    void document.fonts?.ready.then(() => { if (!disposed) { gpu.refresh(); try { fit.fit(); } catch { /* hidden */ } } });
 
-    let disposed = false;
     const recordThis = useSettings.getState().recordTerminals;
     api
       .openTerminal(sid, term.cols || 100, term.rows || 30, tab.cwd, tab.root, (m) => {
@@ -374,6 +397,7 @@ function TerminalPane({ sid, tab, visible, label, area }: { sid: string; tab: Te
       resize.dispose();
       unregisterTerminal(paneId);
       if (tidRef.current) api.terminalClose(tidRef.current);
+      gpu.dispose();
       term.dispose();
     };
   }, []);

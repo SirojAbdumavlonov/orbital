@@ -1,7 +1,7 @@
-import { Check, Copy, ExternalLink, FileText, Globe, LayoutGrid, Layers, Play, Plus, RefreshCw, RotateCw, ScrollText, Square } from "lucide-react";
+import { AlertTriangle, Check, Copy, ExternalLink, FileText, Globe, LayoutGrid, Layers, Play, Plus, RefreshCw, RotateCw, ScrollText, Square } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { confirm, Modal } from "../components/ui";
-import { api, AppInstalled, AppOption, asApiError, Stack, StackAction } from "../lib/api";
+import { api, AppInstalled, AppOption, asApiError, DockerPlugins, Stack, StackAction } from "../lib/api";
 import { runJob, useRunningJob } from "../lib/jobs";
 import { useKept } from "../lib/kept";
 import { openLocalPort } from "../lib/links";
@@ -31,9 +31,28 @@ export function StacksView({ s }: { s: SessionState }) {
   const [logs, setLogs] = useState<{ name: string; text: string } | null>(null);
   const { openFile } = useStore();
   const [mode, setMode] = useKept<"stacks" | "apps">(`${sid}:stacks:mode`, "stacks");
+  const [plugins, setPlugins] = useState<DockerPlugins | null>(null);
   const hasDocker = !!s.info.dockerVersion || !!s.tools?.some((t) => t.id === "docker");
   const load = () => api.stacks(sid).then((l) => { setList(l); setError(null); }, (e) => setError(asApiError(e).message));
-  useEffect(() => { if (hasDocker) void load(); }, [sid, hasDocker]);
+  useEffect(() => { if (hasDocker) { void load(); void api.dockerPlugins(sid).then(setPlugins, () => {}); } }, [sid, hasDocker]);
+  const pluginsJob = useRunningJob(`docker-plugins:${sid}`);
+  const installPlugins = async () => {
+    try {
+      setPlugins(await runJob((p) => api.installDockerPlugins(sid, p), { key: `docker-plugins:${sid}`, title: "Installing Docker Compose and Buildx", sid, done: (x) => (x.compose ? "Docker Compose is installed" : { failed: "Docker Compose is still missing" }) }));
+      void load();
+    } catch { /* the job reports it */ }
+  };
+  const pluginNotice = plugins && plugins.docker && !plugins.compose ? (
+    <div className="notice plugin-notice">
+      <AlertTriangle size={14} />
+      <span>
+        <b>Docker Compose isn't installed</b>, so stacks and apps can't run.{" "}
+        {plugins.source === "docker-ce" ? "Docker came from Docker's own repository; " : plugins.source ? `Docker came from the ${plugins.source} package; ` : ""}
+        Orbital installs the matching Compose{plugins.buildx ? "" : " and Buildx"} packages.
+      </span>
+      <button className="btn primary" disabled={!!pluginsJob} onClick={() => void installPlugins()}>{pluginsJob ? "Installing…" : "Install Docker Compose"}</button>
+    </div>
+  ) : null;
 
   const act = async (st: Stack, action: StackAction) => {
     const file = st.files[0];
@@ -73,7 +92,7 @@ export function StacksView({ s }: { s: SessionState }) {
     </div>
   );
   if (mode === "apps") {
-    return <AppsGallery s={s} stacks={list ?? []} modes={modes} onChanged={() => void load()} onShowStacks={() => setMode("stacks")} />;
+    return <AppsGallery s={s} stacks={list ?? []} modes={modes} notice={pluginNotice} onChanged={() => void load()} onShowStacks={() => setMode("stacks")} />;
   }
   return (
     <div className="view">
@@ -85,6 +104,7 @@ export function StacksView({ s }: { s: SessionState }) {
         <button className="icon-btn" aria-label="Refresh" onClick={() => void load()}><RefreshCw size={14} /></button>
       </div>
       <div className="scroll">
+        {pluginNotice}
         {error && <div className="alert" style={{ margin: 16 }}>{error}</div>}
         {list && list.length === 0 && <div className="empty"><div><Layers size={28} /><h3>No Compose stacks yet</h3><p>Install a ready-made app from <button className="link-btn" onClick={() => setMode("apps")}>Apps</button>, create one from a template, or deploy a compose file you already have on the server.</p></div></div>}
         <div className="backup-list">
@@ -174,7 +194,7 @@ function NewStackDialog({ sid, taken, onClose, onCreated }: { sid: string; taken
 /** The port each installed app was given (kept for this session, for Open). */
 const portsKey = (sid: string) => `${sid}:apps:ports`;
 
-function AppsGallery({ s, stacks, modes, onChanged, onShowStacks }: { s: SessionState; stacks: Stack[]; modes: ReactNode; onChanged: () => void; onShowStacks: () => void }) {
+function AppsGallery({ s, stacks, modes, notice, onChanged, onShowStacks }: { s: SessionState; stacks: Stack[]; modes: ReactNode; notice: ReactNode; onChanged: () => void; onShowStacks: () => void }) {
   const sid = s.info.id;
   const [apps, setApps] = useState<AppOption[] | null>(null);
   const [query, setQuery] = useKept(`${sid}:apps:query`, "");
@@ -194,6 +214,7 @@ function AppsGallery({ s, stacks, modes, onChanged, onShowStacks }: { s: Session
         <input className="input" style={{ width: 200 }} placeholder="Search apps" value={query} onChange={(e) => setQuery(e.target.value)} />
       </div>
       <div className="scroll">
+        {notice}
         <div className="app-grid">
           {shown.map((a) => {
             const st = stackOf(a);

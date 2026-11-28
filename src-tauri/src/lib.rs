@@ -338,6 +338,8 @@ pub fn run() {
             commands::net_check,
             commands::move_preview,
             commands::install_options,
+            commands::docker_plugins,
+            commands::install_docker_plugins,
             commands::website_test,
             commands::remove_website,
             commands::docker_version,

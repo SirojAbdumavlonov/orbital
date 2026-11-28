@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Every Orbital window (the main one and the ones opened for a server or tab): core APIs, window dragging from the top bars, native open/save dialogs, and checking for, installing and restarting into app updates, and notifications when an uptime check goes down or comes back, opening Orbital's own release notes on GitHub in the browser, and opening a forwarded app at http://localhost:<port>.",
+  "description": "Every Orbital window (the main one and the ones opened for a server or tab): core APIs, window dragging from the top bars, native open/save dialogs, and checking for, installing and restarting into app updates, and notifications when an uptime check goes down or comes back, opening Orbital's own release notes on GitHub in the browser, and opening a forwarded app at http://localhost:<port>, and zooming the interface (⌘+ ⌘− ⌘0).",
   "windows": [
     "main",
     "win-*"
@@ -14,6 +14,7 @@
     "dialog:allow-message",
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize",
+    "core:webview:allow-set-webview-zoom",
     "updater:default",
     "process:allow-restart",
     "notification:default",

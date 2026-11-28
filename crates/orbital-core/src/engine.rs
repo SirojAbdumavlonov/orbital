@@ -1169,9 +1169,10 @@ impl Engine {
         } else {
             progress::step(format!("Copying {src_path} from {} to {} …", src.label(), dst.label()));
             match src.copy_to(src_path, &dst, dst_path, overwrite).await {
-                // The destination folder needs root there: stage it in /tmp, then sudo.
-                Err(e) if crate::sftp::denied(&e) && dst.elevation_needed() => {
-                    src.copy_to_as_root(src_path, &dst, dst_path, overwrite).await
+                // Refused on either server (a file only root may read there, a folder only
+                // root may write here): tar it through this Mac with sudo where allowed.
+                Err(e) if crate::sftp::denied(&e) && (src.elevation_needed() || dst.elevation_needed()) => {
+                    src.copy_to_via_tar(src_path, &dst, dst_path, overwrite).await
                 }
                 r => r,
             }
@@ -3550,6 +3551,40 @@ impl Engine {
         )
         .await?
         .check()
+    }
+
+    /// Docker and its CLI plugins (Compose, Buildx), and where Docker came from. Read-only.
+    pub async fn docker_plugins(&self, sid: &str) -> Result<crate::install::DockerPlugins> {
+        let s = self.session(sid).await?;
+        let (o, _) = s.exec_inspect(crate::install::PLUGINS_CHECK).await?;
+        Ok(crate::install::parse_plugins(&o.stdout))
+    }
+
+    /// Installs Docker's missing plugins (Compose, Buildx) with the packages that
+    /// match how Docker was installed (Docker's own repository or the system's).
+    pub async fn install_docker_plugins(&self, sid: &str) -> Result<crate::install::DockerPlugins> {
+        let s = self.session(sid).await?;
+        progress::step("Installing Docker Compose and Buildx from the server's package repositories …");
+        let o = self
+            .system_exec(
+                &s,
+                "software.install",
+                "docker plugins",
+                &crate::install::plugins_script(),
+                std::time::Duration::from_secs(1800),
+            )
+            .await?;
+        if !o.ok() {
+            return Err(Error::Other(
+                o.stderr
+                    .trim()
+                    .lines()
+                    .last()
+                    .unwrap_or("installing the plugins failed")
+                    .to_string(),
+            ));
+        }
+        self.docker_plugins(sid).await
     }
 
     /// Reboot the server. The connection drops a few seconds later.
