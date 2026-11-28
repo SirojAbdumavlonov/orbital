@@ -4,6 +4,8 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+## 1.10.1 (2026-11-28)
+
 ### Added
 - **Protect SSH** (Fail2ban tab): choose how many failed logins within how long ban an address, and for how long; longer bans for repeat offenders, a week for addresses banned again and again, and your own address never banned. Checked by Fail2ban before it's kept; the stock files aren't changed.
 - **Banned now** (Fail2ban tab): every banned address is listed in the main view with its jail and an Unban button, and the tab refreshes on its own every 20 seconds.
