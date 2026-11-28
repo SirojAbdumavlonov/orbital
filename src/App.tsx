@@ -43,6 +43,7 @@ import { isPaneKey, usePanes } from "./lib/panes";
 import { useFailedPolling } from "./lib/health";
 import { useHistoryMigration } from "./lib/metricHistory";
 import { useRememberFolders } from "./lib/startFolder";
+import { isMainWindow, start as windowStart } from "./lib/windows";
 import { useFleetUpdates } from "./lib/fleet";
 import { useSessionRestore } from "./lib/restore";
 import { useUptimeAlerts } from "./lib/uptime";
@@ -205,25 +206,35 @@ function Workspace({ s, visible }: { s: SessionState; visible: boolean }) {
   );
 }
 
+/** What runs once for the whole app, in the main window only: update checks, statistics,
+ *  what's new, uptime alerts, moving old history, and saving/restoring the open servers. */
+function MainWindowJobs() {
+  useUpdateChecks();
+  useStatsPings();
+  useWhatsNewAnnounce();
+  useUptimeAlerts();
+  useHistoryMigration();
+  const profilesLoaded = useStore((x) => x.profilesLoaded);
+  useSessionRestore(profilesLoaded);
+  return null;
+}
+
 export default function App() {
   const { loadProfiles, order, sessions, active, globalView, setEditing, setGlobalView, newWebsite } = useStore();
   useNavigationGestures();
   useApplyTheme();
   const sidebarHidden = useSettings((x) => x.sidebarHidden);
   usePanelResizing();
-  useUpdateChecks();
-  useStatsPings();
-  useWhatsNewAnnounce();
-  useUptimeAlerts();
   useFailedPolling();
-  useHistoryMigration();
   useRememberFolders((f) => useStore.subscribe(f));
   useFleetUpdates();
-  const profilesLoaded = useStore((x) => x.profilesLoaded);
-  useSessionRestore(profilesLoaded);
 
   useEffect(() => {
-    loadProfiles();
+    // A window opened for a server: show it (same connection), or connect to it here.
+    void loadProfiles().then(() => {
+      if (windowStart.attach) void useStore.getState().attachSession(windowStart.attach, windowStart.tab);
+      else if (windowStart.connect) void useStore.getState().connect(windowStart.connect);
+    });
     const keys = (e: KeyboardEvent) => {
       // Ctrl shortcuts (Windows) mean something in a shell; the terminal keeps them.
       if ((e.target as Element | null)?.closest?.(".xterm")) return;
@@ -280,6 +291,7 @@ export default function App() {
       {newWebsite && sessions[newWebsite] && <NewWebsiteDialog sid={newWebsite} />}
     </div>
     {/* Outside the grid: these draw floating layers, not columns. */}
+    {isMainWindow && <MainWindowJobs />}
     <Toasts />
     <CommandMenu />
     <ShortcutSheet />

@@ -1,7 +1,7 @@
-import { Ban, FileText, FolderOpen, Play, RefreshCw, ShieldCheck, ShieldOff } from "lucide-react";
+import { Ban, FileText, FolderOpen, Layers, Play, RefreshCw, ShieldCheck, ShieldOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { confirm, Modal } from "../components/ui";
-import { api, asApiError, Fail2banStatus, SshProtection } from "../lib/api";
+import { api, asApiError, Fail2banStatus, JailOption, JailSetting, SshProtection } from "../lib/api";
 import { runJob } from "../lib/jobs";
 import { seconds, useRemote, withSafetyOverride } from "../lib/remote";
 import { SessionState, useStore } from "../store";
@@ -19,6 +19,7 @@ export function Fail2banView({ s }: { s: SessionState }) {
   const [anyIp, setAnyIp] = useState("");
   const [busy, setBusy] = useState(false);
   const [protecting, setProtecting] = useState(false);
+  const [moreJails, setMoreJails] = useState<string | null>(null);
   // Bans happen on their own: look again every 20 seconds while this tab is open, and when the window comes back.
   useEffect(() => {
     const t = setInterval(() => { if (document.visibilityState === "visible") void reload(); }, 20_000);
@@ -82,6 +83,7 @@ export function Fail2banView({ s }: { s: SessionState }) {
           ? <button className="btn" onClick={() => openFile(sid, jailLocal.path)}><FileText size={13} /> Edit jail.local</button>
           : <button className="btn" onClick={() => showFolder(sid, "/etc/fail2ban")}><FolderOpen size={13} /> Open /etc/fail2ban</button>}
         {st && <button className="btn primary" disabled={busy} onClick={() => setProtecting(true)}><ShieldCheck size={13} /> Protect SSH</button>}
+        {st && <button className="btn" disabled={busy} onClick={() => setMoreJails("")}><Layers size={13} /> More jails</button>}
         {st?.running && <button className="btn" disabled={busy} onClick={() => setUnbanAll(true)}><ShieldOff size={13} /> Unban an address</button>}
         <button className="icon-btn" aria-label="Refresh" onClick={reload}><RefreshCw size={14} className={loading ? "spin" : ""} /></button>
       </div>
@@ -137,6 +139,11 @@ export function Fail2banView({ s }: { s: SessionState }) {
                   <dt>Ban lasts</dt><dd>{seconds(jail.bantime)}</dd>
                   <dt>Never bans</dt><dd className="mono">{jail.ignoreIp.join(", ") || "—"}</dd>
                 </dl>
+                <div className="actions" style={{ paddingTop: 0 }}>
+                  {jail.name === "sshd"
+                    ? <button className="btn" onClick={() => setProtecting(true)}><ShieldCheck size={13} /> Change SSH limits</button>
+                    : <button className="btn" onClick={() => setMoreJails(jail.name)}><Layers size={13} /> Change limits</button>}
+                </div>
                 <div className="section-title">Banned addresses</div>
                 <div className="scroll" style={{ flex: "none", maxHeight: 280 }}>
                   <table className="table"><tbody>
@@ -159,6 +166,7 @@ export function Fail2banView({ s }: { s: SessionState }) {
           </aside>
         </div>
       )}
+      {moreJails !== null && <JailsDialog sid={sid} focus={moreJails} onClose={() => setMoreJails(null)} onDone={(x) => { setData(x); setMoreJails(null); }} />}
       {protecting && <ProtectDialog sid={sid} clientIp={st?.clientIp ?? null} onClose={() => setProtecting(false)} onDone={(x) => { setData(x); setProtecting(false); }} />}
       {unbanAll && (
         <Modal title="Unban an address" subtitle="Removes the address from every jail, for example when you locked yourself out from another machine." onClose={() => setUnbanAll(false)}
@@ -236,6 +244,70 @@ function ProtectDialog({ sid, clientIp, onClose, onDone }: { sid: string; client
         <p className="faint" style={{ margin: 0, fontSize: 12.5 }}>So: {p.maxRetry} wrong passwords or keys within {p.findTimeMins} min from one address and it's blocked {banLabel}.</p>
         {problem && <div className="alert" style={{ whiteSpace: "pre-wrap" }}>{problem}</div>}
       </div>
+    </Modal>
+  );
+}
+
+/** Fail2ban → More jails: turn on jails for other services this server runs, and set each one's limits. */
+function JailsDialog({ sid, focus, onClose, onDone }: { sid: string; focus: string; onClose: () => void; onDone: (st: Fail2banStatus) => void }) {
+  const [opts, setOpts] = useState<JailOption[] | null>(null);
+  const [edits, setEdits] = useState<Record<string, JailSetting>>({});
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  useEffect(() => {
+    api.fail2banJailOptions(sid).then((o) => {
+      setOpts(o);
+      setEdits(Object.fromEntries(o.filter((x) => x.setting).map((x) => [x.name, x.setting!])));
+    }, (e) => setProblem(asApiError(e).message));
+  }, [sid]);
+  const set = (name: string, x: Partial<JailSetting>) =>
+    setEdits((e) => ({ ...e, [name]: { ...(e[name] ?? { name, enabled: true, maxRetry: 5, findTimeMins: 10, banTimeMins: 60 }), ...x } }));
+  const go = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const st = await runJob((p) => api.fail2banSetJails(sid, Object.values(edits), p), { key: `f2b-jails:${sid}`, title: "Changing Fail2ban jails", sid, done: () => "Fail2ban jails changed" });
+      onDone(st);
+    } catch (e) {
+      setProblem(asApiError(e).message.replace(/^Invalid input: /, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const list = (opts ?? []).slice().sort((a, b) => Number(b.available) - Number(a.available) || Number(b.name === focus) - Number(a.name === focus));
+  return (
+    <Modal title="Jails for other services" wide keepOnOutsideClick onClose={onClose}
+      subtitle="Ban addresses that keep failing on websites, mail, FTP or the database, like Protect SSH does for SSH. Only these services' ports are blocked. Written to Orbital's own file and checked by fail2ban first."
+      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !opts || Object.keys(edits).length === 0} onClick={go}>{busy ? "Applying…" : "Save"}</button></>}>
+      {!opts && !problem && <p className="faint">Looking at what this server runs…</p>}
+      <div className="jail-options">
+        {list.map((o) => {
+          const e = edits[o.name];
+          const on = !!e?.enabled;
+          return (
+            <div key={o.name} className={`jail-option ${o.available ? "" : "off"} ${o.name === focus ? "focus" : ""}`}>
+              <label className="check" title={o.available ? undefined : `Needs ${o.log}`}>
+                <input type="checkbox" checked={on} disabled={!o.available && !on} onChange={(ev) => set(o.name, { enabled: ev.target.checked })} />
+                <span><b>{o.label}</b><small className="faint">{o.available ? o.hint : `Not on this server (no ${o.log})`}</small></span>
+              </label>
+              {on && (
+                <div className="protect-row">
+                  Ban after
+                  <input className="input mono" style={{ width: 58 }} type="number" min={2} max={20} value={e.maxRetry} onChange={(ev) => set(o.name, { maxRetry: Number(ev.target.value) || 0 })} aria-label={`${o.name} failed attempts`} />
+                  failures within
+                  <input className="input mono" style={{ width: 66 }} type="number" min={1} max={1440} value={e.findTimeMins} onChange={(ev) => set(o.name, { findTimeMins: Number(ev.target.value) || 0 })} aria-label={`${o.name} minutes`} />
+                  min, for
+                  <select className="input" value={e.banTimeMins} onChange={(ev) => set(o.name, { banTimeMins: Number(ev.target.value) })} aria-label={`${o.name} ban length`}>
+                    {BAN_CHOICES.map(([m, label]) => <option key={m} value={m}>{label.toLowerCase()}</option>)}
+                    {!BAN_CHOICES.some(([m]) => m === e.banTimeMins) && <option value={e.banTimeMins}>{e.banTimeMins} minutes</option>}
+                  </select>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {problem && <div className="alert" style={{ whiteSpace: "pre-wrap", marginTop: 10 }}>{problem}</div>}
     </Modal>
   );
 }

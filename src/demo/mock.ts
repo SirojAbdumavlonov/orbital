@@ -243,6 +243,7 @@ let notifyChannels: any[] = [
   { id: "nc1", name: "My Telegram", enabled: true, events: ["health", "uptime"], config: { kind: "telegram", chatId: "100200300", chatName: "Alex (@alex)" }, createdAt: "2026-11-20T10:00:00Z" },
 ];
 let demoProtection: any = null;
+const demoJails: Record<string, any> = {};
 const DEMO_APPS = [
   { id: "uptime-kuma", name: "Uptime Kuma", category: "Monitoring", hint: "Status pages and uptime checks with alerts to Telegram, Slack, email and more", port: 3001, firstSteps: "Create the admin account on the first page.", memoryMb: 150, images: ["louislam/uptime-kuma:1"] },
   { id: "portainer", name: "Portainer", category: "Containers", hint: "A web UI for this server's Docker: containers, images, volumes, stacks", port: 9000, firstSteps: "Create the admin user within 5 minutes of starting (after that Portainer locks setup until it's restarted).", memoryMb: 100, images: ["portainer/portainer-ce:lts"] },
@@ -894,6 +895,23 @@ export function install() {
           return { id: sid, profileId: p.id, label: `${p.protocol === "s3" ? "s3" : "https"}://${p.username}@${p.host}`, home: "/", hasSystemd: false, dockerVersion: null, elevation: false, via: [], connectedAt: new Date().toISOString(), protocol: p.protocol };
         return { protocol: "sftp", id: sid, profileId: p.id, label: `${p.username}@${p.host}`, home: "/home/deploy", hasSystemd: true, dockerVersion: "27.3.1", elevation: true, via: p.jumpProfileId ? ["deploy@203.0.113.10:22"] : [], connectedAt: new Date().toISOString() };
       }
+      case "session_info": {
+        // Each browser tab is its own demo: "s-<profile>" ids are rebuilt from the profile.
+        const m = /^s-(p\d+)/.exec(args.sessionId);
+        const p = m && profiles.find((x) => x.id === m[1]);
+        if (!p) throw { kind: "NotConnected", message: "not connected" };
+        trusted.add(p.id);
+        return { protocol: p.protocol, id: args.sessionId, profileId: p.id, label: `${p.username}@${p.host}`, home: "/home/deploy", hasSystemd: p.protocol === "sftp", dockerVersion: p.protocol === "sftp" ? "27.3.1" : null, elevation: p.protocol === "sftp", via: [], connectedAt: new Date().toISOString() };
+      }
+      case "open_window": {
+        // The demo runs in a browser: a new browser tab stands in for the window.
+        const q = new URLSearchParams();
+        if (args.attach) q.set("attach", args.attach);
+        if (args.connect) q.set("connect", args.connect);
+        if (args.tab) q.set("tab", args.tab);
+        window.open(`${location.pathname}?${q}`, "_blank");
+        return null;
+      }
       case "list_dir": return args.sessionId === "s-p4" ? storageListing(storage, args.path) : args.sessionId === "s-p5" ? storageListing(cloud, args.path) : listing(args.path);
       case "list_tunnels": return tunnels.map((t) => ({ ...t }));
       case "open_tunnel": {
@@ -1416,6 +1434,18 @@ export function install() {
       case "fail2ban_ban":
         if (args.ip === "203.0.113.9") throw { ...lockout, data: { check: "SSH access", output: "203.0.113.9 is the address this connection comes from; banning it would lock you out." } };
         banned[args.jail] = [...banned[args.jail], args.ip]; return f2b();
+      case "fail2ban_jail_options": return [
+        { name: "nginx-http-auth", label: "nginx: password-protected pages", hint: "Wrong passwords on pages behind HTTP auth", available: true, log: "/var/log/nginx/error.log", setting: demoJails["nginx-http-auth"] ?? null },
+        { name: "nginx-botsearch", label: "nginx: bots probing for files", hint: "Requests for admin pages, backups and leaked files that don't exist", available: true, log: "/var/log/nginx/access.log", setting: demoJails["nginx-botsearch"] ?? null },
+        { name: "nginx-bad-request", label: "nginx: malformed requests", hint: "Broken or malicious requests nginx answers with 400", available: true, log: "/var/log/nginx/access.log", setting: demoJails["nginx-bad-request"] ?? null },
+        { name: "postfix", label: "Postfix: mail sign-ins", hint: "Failed sign-ins and rejected senders on the mail server", available: false, log: "/var/log/mail.log", setting: null },
+        { name: "mysqld-auth", label: "MySQL / MariaDB: sign-ins", hint: "Wrong database passwords from the network", available: false, log: "/var/log/mysql/error.log", setting: null },
+      ];
+      case "fail2ban_set_jails": {
+        await progress(args.progress, [[0, "step", "Checking the jails with fail2ban-client -t …"], [600, "line", "OK: configuration test is successful"]]);
+        for (const j of args.settings) demoJails[j.name] = j;
+        return f2b();
+      }
       case "fail2ban_protection": return demoProtection;
       case "fail2ban_protect": {
         const pr = args.protection;

@@ -36,6 +36,8 @@ export interface TermTab {
 }
 
 export interface SessionState {
+  /** Shown in this window but opened by another one (same connection): closing it here leaves it connected. */
+  attached?: boolean;
   info: SessionInfo;
   profile: Profile;
   tab: Tab;
@@ -134,6 +136,8 @@ interface State {
   renameTerminal(sessionId: string, key: string, title: string): void;
   connect(profileId: string, opts?: ConnectOpts): Promise<void>;
   disconnect(sessionId: string): Promise<void>;
+  /** Show a session another window opened (this window was opened for it). */
+  attachSession(sessionId: string, tab: string | null): Promise<void>;
   setActive(sessionId: string): void;
   setTab(sessionId: string, tab: Tab): void;
   patch(sessionId: string, p: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)): void;
@@ -368,8 +372,28 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
+  async attachSession(sessionId, tab) {
+    try {
+      const info = await api.sessionInfo(sessionId);
+      if (!get().profilesLoaded) await get().loadProfiles();
+      const profile = get().profiles.find((p) => p.id === info.profileId);
+      if (!profile) return;
+      const session: SessionState = { ...newSession(info, profile), attached: true };
+      if (tab && (tab.startsWith("tool:") || ["files", "monitor", "terminal", "services", "activity"].includes(tab))) {
+        session.tab = tab as Tab;
+        if (tab.startsWith("tool:") && !session.toolTabs.includes(tab.slice(5))) session.toolTabs = [...session.toolTabs, tab.slice(5)];
+      }
+      set((s) => ({ sessions: { ...s.sessions, [info.id]: session }, order: [...s.order, info.id], active: info.id, globalView: null }));
+      if (info.protocol === "sftp") get().detectTools(info.id);
+    } catch {
+      // The other window closed it meanwhile: connect here instead.
+      get().toast({ kind: "info", title: "That server was closed in the other window", body: "Click it in the sidebar to connect here." });
+    }
+  },
+
   async disconnect(sessionId) {
-    await api.disconnect(sessionId).catch(() => {});
+    // A server another window opened stays connected there; this window just stops showing it.
+    if (!get().sessions[sessionId]?.attached) await api.disconnect(sessionId).catch(() => {});
     forgetKept(`${sessionId}:`);
     set((s) => {
       const sessions = { ...s.sessions };

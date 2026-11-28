@@ -86,6 +86,8 @@ pub struct Engine {
     secrets: Arc<GatedStore>,
     presence: Arc<dyn UserPresence>,
     sessions: RwLock<HashMap<String, Arc<SshSession>>>,
+    /// What `connect` returned for each open session, so another window can attach to it.
+    infos: RwLock<HashMap<String, SessionInfo>>,
     /// FTP, WebDAV and S3 connections: files only.
     storage: RwLock<HashMap<String, Arc<StorageSession>>>,
     terminals: Mutex<HashMap<String, (String, Arc<Terminal>)>>,
@@ -146,6 +148,7 @@ impl Engine {
             secrets: Arc::new(GatedStore::new(secrets)),
             presence,
             sessions: RwLock::new(HashMap::new()),
+            infos: RwLock::new(HashMap::new()),
             storage: RwLock::new(HashMap::new()),
             terminals: Mutex::new(HashMap::new()),
             last_metrics: Mutex::new(HashMap::new()),
@@ -404,6 +407,7 @@ impl Engine {
             },
         );
         self.storage.write().await.insert(s.id.clone(), Arc::new(s));
+        self.infos.write().await.insert(info.id.clone(), info.clone());
         Ok(info)
     }
 
@@ -852,10 +856,21 @@ impl Engine {
             },
         );
         self.sessions.write().await.insert(session.id.clone(), Arc::new(session));
+        self.infos.write().await.insert(info.id.clone(), info.clone());
         Ok(info)
     }
 
+    /// An open session's details, for a second window showing the same server.
+    pub async fn session_info(&self, session_id: &str) -> Result<SessionInfo> {
+        let open = self.sessions.read().await.contains_key(session_id) || self.storage.read().await.contains_key(session_id);
+        match self.infos.read().await.get(session_id) {
+            Some(i) if open => Ok(i.clone()),
+            _ => Err(Error::NotConnected(session_id.to_string())),
+        }
+    }
+
     pub async fn disconnect(&self, session_id: &str) -> Result<()> {
+        self.infos.write().await.remove(session_id);
         if let Some(st) = self.storage.write().await.remove(session_id) {
             st.close().await;
             self.record(
@@ -1753,7 +1768,53 @@ impl Engine {
                 &s,
                 ACTION,
                 &target,
-                fail2ban::PROTECT_APPLY,
+                &fail2ban::protect_apply(),
+                Some(file.as_bytes()),
+                std::time::Duration::from_secs(90),
+            )
+            .await?;
+        if !o.ok() {
+            return Err(Error::Other(o.stderr.trim().to_string()));
+        }
+        s.fail2ban_status().await
+    }
+
+    /// Jails for other services (nginx, Apache, mail, FTP, MySQL): which this server can run, and Orbital's settings.
+    pub async fn fail2ban_jail_options(&self, sid: &str) -> Result<Vec<fail2ban::JailOption>> {
+        let s = self.session(sid).await?;
+        let (o, _) = s.exec_inspect(&fail2ban::jails_script()).await?;
+        Ok(fail2ban::parse_jail_options(&o.stdout))
+    }
+
+    /// Turns jails on or off and sets their limits in Orbital's own file, checked
+    /// by `fail2ban-client -t` (the old file comes back if it's refused). These
+    /// jails ban web, mail or FTP ports, never SSH, so there's no lock-out check.
+    pub async fn fail2ban_set_jails(&self, sid: &str, settings: &[fail2ban::JailSetting]) -> Result<Fail2banStatus> {
+        let s = self.session(sid).await?;
+        const ACTION: &str = "fail2ban.jails";
+        let target = settings
+            .iter()
+            .map(|j| {
+                format!(
+                    "{} {}",
+                    j.name,
+                    if j.enabled {
+                        format!("{}/{}m", j.max_retry, j.find_time_mins)
+                    } else {
+                        "off".into()
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let file = fail2ban::render_jails(settings).map_err(|e| self.refused(&s, ACTION, &target, e))?;
+        progress::step("Checking the jails with fail2ban-client -t …");
+        let o = self
+            .system_exec_with(
+                &s,
+                ACTION,
+                &target,
+                &fail2ban::jails_apply(),
                 Some(file.as_bytes()),
                 std::time::Duration::from_secs(90),
             )

@@ -156,6 +156,8 @@ async fn full_workflow_password_auth() {
         .await
         .expect("reconnect with keychain secret");
     let sid = s.id.clone();
+    // A second window attaches to the same connection by its id.
+    assert_eq!(engine.session_info(&sid).await.unwrap().profile_id, p.id);
 
     // --- SFTP ---
     let dir = format!("{}/orbital-it-{}", s.home, std::process::id());
@@ -1088,6 +1090,44 @@ async fn fail2ban_ban_and_unban() {
         )
         .await
         .unwrap();
+
+    // More jails: nginx's auth jail (nginx is installed for these tests) turned on with
+    // its limits, read back, then removed; a jail Orbital doesn't know is refused.
+    use orbital_core::fail2ban::JailSetting;
+    let opts = engine.fail2ban_jail_options(&s.id).await.unwrap();
+    if opts.iter().any(|o| o.name == "nginx-http-auth" && o.available) {
+        let j = JailSetting {
+            name: "nginx-http-auth".into(),
+            enabled: true,
+            max_retry: 4,
+            find_time_mins: 15,
+            ban_time_mins: 30,
+        };
+        let st = engine.fail2ban_set_jails(&s.id, std::slice::from_ref(&j)).await.unwrap();
+        let nj = st.jails.iter().find(|x| x.name == "nginx-http-auth").expect("jail running");
+        assert_eq!(nj.maxretry.as_deref(), Some("4"));
+        let back = engine.fail2ban_jail_options(&s.id).await.unwrap();
+        assert_eq!(
+            back.iter().find(|o| o.name == "nginx-http-auth").unwrap().setting.as_ref(),
+            Some(&j)
+        );
+        engine
+            .run_command(
+                &s.id,
+                "rm -f /etc/fail2ban/jail.d/zz-orbital-jails.local && fail2ban-client reload",
+                true,
+            )
+            .await
+            .unwrap();
+    }
+    let bad = JailSetting {
+        name: "sshd".into(),
+        enabled: false,
+        max_retry: 5,
+        find_time_mins: 10,
+        ban_time_mins: 60,
+    };
+    assert!(engine.fail2ban_set_jails(&s.id, &[bad]).await.is_err());
 
     // certbot answers with root, and a dry run with nothing to renew succeeds.
     if let Ok(c) = engine.certbot_status(&s.id).await {

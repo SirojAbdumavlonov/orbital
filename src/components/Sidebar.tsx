@@ -1,10 +1,11 @@
 import { PROTOCOL_NAMES } from "./ProfileDialog";
 import { JobsMenu } from "./JobsMenu";
-import { Activity, HeartPulse, SquareCode, ChevronLeft, ChevronRight, FileInput, Globe, Home, KeyRound, LifeBuoy, Loader2, MessageSquare, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sparkles, SquareTerminal, Sun, Unplug } from "lucide-react";
+import { Activity, AppWindow, HeartPulse, SquareCode, ChevronLeft, ChevronRight, FileInput, Globe, Home, KeyRound, LifeBuoy, Loader2, MessageSquare, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Settings, Sparkles, SquareTerminal, Sun, Unplug } from "lucide-react";
 import { isMac, KEYS } from "../lib/platform";
 import { useResolvedTheme, useSettings } from "../lib/settings";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Profile } from "../lib/api";
+import { asApiError, Profile } from "../lib/api";
+import { openProfileWindow, openServerWindow } from "../lib/windows";
 import { sshCommand } from "../lib/sshCommand";
 import { goTo, useStore } from "../store";
 import { useSessionHealth } from "../lib/health";
@@ -84,6 +85,14 @@ export function Sidebar() {
                           <SquareTerminal size={13} />
                         </button>
                       )}
+                      <button className="icon-btn" aria-label={`Open ${p.name} in a new window`} title="Open in a new window" onClick={(e) => {
+                        e.stopPropagation();
+                        const fail = (err: unknown) => useStore.getState().toast({ kind: "error", title: "Couldn't open a window", body: asApiError(err).message });
+                        if (sid) void openServerWindow(sid, sessions[sid]?.tab ?? null, p.name).catch(fail);
+                        else void openProfileWindow(p.id, p.name).catch(fail);
+                      }}>
+                        <AppWindow size={13} />
+                      </button>
                       <button className="icon-btn" aria-label="Edit server" title="Edit" onClick={(e) => { e.stopPropagation(); setEditing(p); }}>
                         <Pencil size={13} />
                       </button>

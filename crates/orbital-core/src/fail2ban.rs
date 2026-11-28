@@ -295,25 +295,245 @@ pub fn render_protection(p: &SshProtection, client_ip: Option<&str>) -> Result<S
 /// Applies the file on stdin: keeps the old one, checks the whole config with
 /// `fail2ban-client -t`, puts the old one back if that fails, then reloads.
 /// On systems without auth.log (journal only) the sshd jail reads the journal.
-pub const PROTECT_APPLY: &str = r#"set -e
+const PROTECT_HEAD: &str = r#"set -e
 f=/etc/fail2ban/jail.d/zz-orbital-sshd.local
 tmp=$(mktemp)
 cat > "$tmp"
 if [ ! -e /var/log/auth.log ] && [ ! -e /var/log/secure ] && command -v journalctl >/dev/null 2>&1; then
   awk '{ print } $0 == "[sshd]" { print "backend = systemd" }' "$tmp" > "$tmp.b" && mv "$tmp.b" "$tmp"
 fi
-[ -e "$f" ] && cp -p "$f" "$f.orbital-prev" || rm -f "$f.orbital-prev"
+"#;
+
+/// Puts `$tmp` in place as `$f`, keeps the old file, checks the whole config
+/// with `fail2ban-client -t`, puts the old one back if that fails, then reloads.
+const APPLY_TAIL: &str = r#"[ -e "$f" ] && cp -p "$f" "$f.orbital-prev" || rm -f "$f.orbital-prev"
 install -m 0644 "$tmp" "$f"; rm -f "$tmp"
 if ! out=$(fail2ban-client -t 2>&1); then
   if [ -e "$f.orbital-prev" ]; then mv "$f.orbital-prev" "$f"; else rm -f "$f"; fi
   echo "fail2ban rejected the settings, so the old ones were kept:" >&2
-  printf '%s
-' "$out" | tail -n 15 >&2
+  printf '%s\n' "$out" | tail -n 15 >&2
   exit 3
 fi
 rm -f "$f.orbital-prev"
 if systemctl is-active --quiet fail2ban 2>/dev/null; then fail2ban-client reload >/dev/null; else systemctl enable --now fail2ban >/dev/null 2>&1 || fail2ban-client start >/dev/null; fi
 echo ok"#;
+
+/// The SSH protection file from stdin, checked and applied.
+pub fn protect_apply() -> String {
+    format!("{PROTECT_HEAD}{APPLY_TAIL}")
+}
+
+// ---------- other jails (Fail2ban → Jails for other services) ----------
+
+/// Orbital's file for every jail other than sshd (Protect SSH has its own).
+pub const JAILS_FILE: &str = "/etc/fail2ban/jail.d/zz-orbital-jails.local";
+
+/// Jails worth offering: Fail2ban's own filter for a service, and the log it reads.
+pub struct KnownJail {
+    pub name: &'static str,
+    pub label: &'static str,
+    pub hint: &'static str,
+    /// The log that must exist for the jail to start.
+    pub log: &'static str,
+}
+
+pub const KNOWN_JAILS: &[KnownJail] = &[
+    KnownJail {
+        name: "nginx-http-auth",
+        label: "nginx: password-protected pages",
+        hint: "Wrong passwords on pages behind HTTP auth",
+        log: "/var/log/nginx/error.log",
+    },
+    KnownJail {
+        name: "nginx-botsearch",
+        label: "nginx: bots probing for files",
+        hint: "Requests for admin pages, backups and leaked files that don't exist",
+        log: "/var/log/nginx/access.log",
+    },
+    KnownJail {
+        name: "nginx-bad-request",
+        label: "nginx: malformed requests",
+        hint: "Broken or malicious requests nginx answers with 400",
+        log: "/var/log/nginx/access.log",
+    },
+    KnownJail {
+        name: "nginx-limit-req",
+        label: "nginx: over the rate limit",
+        hint: "Clients nginx's limit_req keeps refusing (needs limit_req in your config)",
+        log: "/var/log/nginx/error.log",
+    },
+    KnownJail {
+        name: "apache-auth",
+        label: "Apache: password-protected pages",
+        hint: "Wrong passwords on pages behind HTTP auth",
+        log: "/var/log/apache2/error.log",
+    },
+    KnownJail {
+        name: "apache-badbots",
+        label: "Apache: bad bots",
+        hint: "Known spam and scraping bots",
+        log: "/var/log/apache2/access.log",
+    },
+    KnownJail {
+        name: "postfix",
+        label: "Postfix: mail sign-ins",
+        hint: "Failed sign-ins and rejected senders on the mail server",
+        log: "/var/log/mail.log",
+    },
+    KnownJail {
+        name: "dovecot",
+        label: "Dovecot: mailbox sign-ins",
+        hint: "Wrong passwords for IMAP and POP3",
+        log: "/var/log/mail.log",
+    },
+    KnownJail {
+        name: "vsftpd",
+        label: "vsftpd: FTP sign-ins",
+        hint: "Wrong FTP passwords",
+        log: "/var/log/vsftpd.log",
+    },
+    KnownJail {
+        name: "proftpd",
+        label: "ProFTPD: FTP sign-ins",
+        hint: "Wrong FTP passwords",
+        log: "/var/log/proftpd/proftpd.log",
+    },
+    KnownJail {
+        name: "mysqld-auth",
+        label: "MySQL / MariaDB: sign-ins",
+        hint: "Wrong database passwords from the network",
+        log: "/var/log/mysql/error.log",
+    },
+];
+
+/// One jail's limits: `max_retry` failures within `find_time_mins` ban for `ban_time_mins` (-1 = for good).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JailSetting {
+    pub name: String,
+    pub enabled: bool,
+    pub max_retry: u32,
+    pub find_time_mins: u32,
+    pub ban_time_mins: i64,
+}
+
+/// A jail the user can turn on or tune.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JailOption {
+    pub name: String,
+    pub label: String,
+    pub hint: String,
+    /// Its filter and log exist on this server.
+    pub available: bool,
+    /// The log it needs (to say why it isn't available).
+    pub log: String,
+    /// What Orbital's file says now, if it has a section for it.
+    pub setting: Option<JailSetting>,
+}
+
+/// Lists the known jails' filters and logs, and Orbital's file. Fixed and read-only.
+pub fn jails_script() -> String {
+    let mut s = String::from("export LC_ALL=C\n");
+    for j in KNOWN_JAILS {
+        s.push_str(&format!(
+            "if [ -f /etc/fail2ban/filter.d/{n}.conf ] && [ -e {log} ]; then echo '@@yes {n}'; else echo '@@no {n}'; fi\n",
+            n = j.name,
+            log = quote(j.log)
+        ));
+    }
+    s.push_str(&format!("echo @@file; cat {JAILS_FILE} 2>/dev/null; true\n"));
+    s
+}
+
+fn setting_of(section: &str, body: &[&str]) -> JailSetting {
+    let mut j = JailSetting {
+        name: section.to_string(),
+        enabled: true,
+        max_retry: 5,
+        find_time_mins: 10,
+        ban_time_mins: 60,
+    };
+    for l in body {
+        let Some((k, v)) = l.split_once('=') else { continue };
+        let v = v.trim();
+        match k.trim() {
+            "enabled" => j.enabled = v == "true",
+            "maxretry" => j.max_retry = v.parse().unwrap_or(j.max_retry),
+            "findtime" => j.find_time_mins = minutes_of(v).map(|m| m.max(1) as u32).unwrap_or(j.find_time_mins),
+            "bantime" => j.ban_time_mins = minutes_of(v).unwrap_or(j.ban_time_mins),
+            _ => {}
+        }
+    }
+    j
+}
+
+/// The settings in Orbital's jails file.
+pub fn parse_jails_file(file: &str) -> Vec<JailSetting> {
+    let mut out = Vec::new();
+    let mut cur: Option<(String, Vec<&str>)> = None;
+    for l in file.lines().map(str::trim) {
+        if let Some(name) = l.strip_prefix('[').and_then(|x| x.strip_suffix(']')) {
+            if let Some((n, b)) = cur.take() {
+                out.push(setting_of(&n, &b));
+            }
+            cur = Some((name.to_string(), Vec::new()));
+        } else if let Some((_, b)) = cur.as_mut() {
+            b.push(l);
+        }
+    }
+    if let Some((n, b)) = cur {
+        out.push(setting_of(&n, &b));
+    }
+    out
+}
+
+pub fn parse_jail_options(out: &str) -> Vec<JailOption> {
+    let file = out.split_once("@@file").map(|x| x.1).unwrap_or("");
+    let settings = parse_jails_file(file);
+    KNOWN_JAILS
+        .iter()
+        .map(|k| JailOption {
+            name: k.name.into(),
+            label: k.label.into(),
+            hint: k.hint.into(),
+            available: out.lines().any(|l| l.trim() == format!("@@yes {}", k.name)),
+            log: k.log.into(),
+            setting: settings.iter().find(|s| s.name == k.name).cloned(),
+        })
+        .collect()
+}
+
+/// Orbital's jails file from the settings: only known jails (sshd has Protect SSH), only numbers.
+pub fn render_jails(settings: &[JailSetting]) -> Result<String> {
+    let mut s = String::from("# Written by Orbital (Fail2ban → Jails); change it there or remove this file.\n");
+    for j in settings {
+        if !KNOWN_JAILS.iter().any(|k| k.name == j.name) {
+            return Err(Error::InvalidInput(format!("Orbital doesn't manage the {:?} jail here", j.name)));
+        }
+        validate_protection(&SshProtection {
+            max_retry: j.max_retry,
+            find_time_mins: j.find_time_mins,
+            ban_time_mins: j.ban_time_mins,
+            ..Default::default()
+        })?;
+        let ban = if j.ban_time_mins == -1 {
+            "-1".to_string()
+        } else {
+            format!("{}m", j.ban_time_mins)
+        };
+        s.push_str(&format!(
+            "\n[{}]\nenabled = {}\nmaxretry = {}\nfindtime = {}m\nbantime = {ban}\n",
+            j.name, j.enabled, j.max_retry, j.find_time_mins
+        ));
+    }
+    Ok(s)
+}
+
+/// The jails file from stdin, checked and applied like the SSH protection.
+pub fn jails_apply() -> String {
+    format!("set -e\nf={JAILS_FILE}\ntmp=$(mktemp)\ncat > \"$tmp\"\n{APPLY_TAIL}")
+}
 
 /// Reads the file back (to fill the form), or None when Orbital hasn't written one.
 pub const PROTECT_READ: &str = "cat /etc/fail2ban/jail.d/zz-orbital-sshd.local 2>/dev/null || true";
@@ -559,9 +779,46 @@ No IP address/network is ignored
         let o = std::process::Command::new("sh")
             .arg("-n")
             .arg("-c")
-            .arg(PROTECT_APPLY)
+            .arg(protect_apply())
             .output()
             .unwrap();
         assert!(o.status.success());
+    }
+
+    #[test]
+    fn other_jails_are_listed_tuned_and_written() {
+        let out = "@@yes nginx-http-auth\n@@no apache-auth\n@@yes nginx-botsearch\n@@file\n# Written by Orbital\n\n[nginx-http-auth]\nenabled = true\nmaxretry = 3\nfindtime = 30m\nbantime = 1d\n";
+        let o = parse_jail_options(out);
+        assert_eq!(o.len(), KNOWN_JAILS.len());
+        let auth = o.iter().find(|x| x.name == "nginx-http-auth").unwrap();
+        assert!(auth.available);
+        assert_eq!(
+            auth.setting.as_ref().map(|s| (s.max_retry, s.find_time_mins, s.ban_time_mins)),
+            Some((3, 30, 1440))
+        );
+        assert!(!o.iter().find(|x| x.name == "apache-auth").unwrap().available);
+        assert!(o.iter().find(|x| x.name == "nginx-botsearch").unwrap().setting.is_none());
+        let set = |name: &str, enabled| JailSetting {
+            name: name.into(),
+            enabled,
+            max_retry: 4,
+            find_time_mins: 10,
+            ban_time_mins: -1,
+        };
+        let f = render_jails(&[set("nginx-http-auth", true), set("postfix", false)]).unwrap();
+        assert!(
+            f.contains("[nginx-http-auth]\nenabled = true\nmaxretry = 4\nfindtime = 10m\nbantime = -1\n"),
+            "{f}"
+        );
+        assert!(f.contains("[postfix]\nenabled = false"));
+        assert_eq!(parse_jails_file(&f).len(), 2);
+        assert!(render_jails(&[set("sshd", true)]).is_err(), "Protect SSH handles sshd");
+        assert!(render_jails(&[set("x]\n[sshd", true)]).is_err());
+        assert!(render_jails(&[JailSetting {
+            max_retry: 99,
+            ..set("postfix", true)
+        }])
+        .is_err());
+        assert!(!jails_script().contains("$("), "nothing from outside goes in");
     }
 }

@@ -22,7 +22,7 @@ const reconnecting = new Map<string, Promise<string | null>>();
 const replacedBy = new Map<string, string>();
 
 /** Calls that are never repeated on a new connection: connecting itself, and terminals (they died with it). */
-export const NO_RETRY = /^(connect|disconnect|terminal_|open_terminal|close_terminal|resize_terminal|write_terminal|tmux_)/;
+export const NO_RETRY = /^(connect|disconnect|session_info|open_window|terminal_|open_terminal|close_terminal|resize_terminal|write_terminal|tmux_)/;
 
 /** The same arguments, pointing at the new session. */
 export function withSession(args: Record<string, unknown>, from: string, to: string): Record<string, unknown> {
@@ -922,6 +922,9 @@ export interface Jail {
 
 /** Fail2ban → Protection: `maxRetry` failures within `findTimeMins` ban for `banTimeMins` (-1 = for good). */
 export interface SshProtection { maxRetry: number; findTimeMins: number; banTimeMins: number; increment: boolean; ignoreSelf: boolean; recidive: boolean; ignore: string[] }
+/** A jail's limits (Fail2ban → More jails): `maxRetry` failures within `findTimeMins` ban for `banTimeMins` (-1 = for good). */
+export interface JailSetting { name: string; enabled: boolean; maxRetry: number; findTimeMins: number; banTimeMins: number }
+export interface JailOption { name: string; label: string; hint: string; available: boolean; log: string; setting: JailSetting | null }
 export interface Fail2banStatus {
   version: string | null;
   running: boolean;
@@ -1340,6 +1343,9 @@ export const api = {
   fail2banStatus: (sessionId: string) => invoke<Fail2banStatus>("fail2ban_status", { sessionId }),
   fail2banUnban: (sessionId: string, jail: string | null, ip: string) => invoke<Fail2banStatus>("fail2ban_unban", { sessionId, jail, ip }),
   fail2banBan: (sessionId: string, jail: string, ip: string) => invoke<Fail2banStatus>("fail2ban_ban", { sessionId, jail, ip }),
+  fail2banJailOptions: (sessionId: string) => invoke<JailOption[]>("fail2ban_jail_options", { sessionId }),
+  fail2banSetJails: (sessionId: string, settings: JailSetting[], onProgress?: OnProgress) =>
+    invoke<Fail2banStatus>("fail2ban_set_jails", { sessionId, settings, progress: progressChannel(onProgress) }),
   /** The SSH limits Orbital wrote, or null when it hasn't. */
   fail2banProtection: (sessionId: string) => invoke<SshProtection | null>("fail2ban_protection", { sessionId }),
   fail2banProtect: (sessionId: string, protection: SshProtection, force: boolean, onProgress?: OnProgress) =>
@@ -1513,6 +1519,11 @@ export const api = {
   metricEvents: (profileId: string, from: number, to: number) => invoke<MetricEvent[]>("metric_events", { profileId, from, to }),
   importMetricHistory: (profileId: string, points: MetricPoint[]) => invoke<number>("import_metric_history", { profileId, points }),
   uptimeRange: (from: number, to: number, max: number) => invoke<UptimeRange[]>("uptime_range", { from, to, max }),
+  /** An open session's details (for a second window on the same server). */
+  sessionInfo: (sessionId: string) => invoke<SessionInfo>("session_info", { sessionId }),
+  /** Another Orbital window: on an open server (`attach`), connecting to a saved one (`connect`), or empty. */
+  openWindow: (w: { attach?: string | null; connect?: string | null; tab?: string | null; title?: string }) =>
+    invoke<void>("open_window", { attach: w.attach ?? null, connect: w.connect ?? null, tab: w.tab ?? null, title: w.title ?? null }),
   notifyChannels: () => invoke<NotifyChannel[]>("notify_channels"),
   saveNotifyChannel: (id: string | null, input: NotifyChannelInput) => invoke<NotifyChannel>("save_notify_channel", { id, input }),
   deleteNotifyChannel: (id: string) => invoke<void>("delete_notify_channel", { id }),

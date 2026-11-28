@@ -5,6 +5,7 @@ import { api, asApiError, NewUser, UserAccount, UserChange, UsersReport } from "
 import { useRemote, withSafetyOverride } from "../lib/remote";
 import { SessionState, useStore } from "../store";
 import { useKept } from "../lib/kept";
+import { LocalKeyPicker } from "../components/LocalKeyPicker";
 
 /** Groups people are usually added to, with what they grant. */
 const COMMON_GROUPS: Record<string, string> = {
@@ -112,7 +113,8 @@ function AddUserDialog({ s, report, onClose, onDone }: { s: SessionState; report
         {useKeys && (
           <label className="field"><span>SSH public keys {signIn === "both" && "(optional)"}</span>
             <textarea className="input mono" rows={3} value={keys} onChange={(e) => setKeys(e.target.value)} placeholder="ssh-ed25519 AAAAC3Nza… anna@laptop" />
-            <small className="hint">One per line: the contents of the person's ~/.ssh/id_ed25519.pub. Orbital writes them to ~/.ssh/authorized_keys with the right permissions.</small>
+            <LocalKeyPicker value={keys} onChange={setKeys} forUser={u.name} server={s.profile.name} />
+            <small className="hint">Pick keys from this computer, make a new one, or paste the person's own (their ~/.ssh/id_ed25519.pub), one per line. Orbital writes them to ~/.ssh/authorized_keys with the right permissions.</small>
           </label>
         )}
 

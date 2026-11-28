@@ -1305,3 +1305,17 @@ kbd { font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border: 1px
 .compare-swatch { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
 .compare-table { font-size: 12.5px; }
 .protect-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.jail-options { display: flex; flex-direction: column; gap: 8px; }
+.jail-option { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--slate-4); border-radius: var(--radius-m); background: var(--slate-1); }
+.jail-option.off { opacity: .55; }
+.jail-option.focus { border-color: var(--btn-hover-line); }
+.jail-option .check { align-items: flex-start; gap: 8px; }
+.jail-option .check span { display: flex; flex-direction: column; gap: 2px; }
+.jail-option .check small { font-size: 12px; }
+.jail-option .protect-row { padding-left: 24px; font-size: 12.5px; }
+
+/* Public keys from this computer (components/LocalKeyPicker.tsx) */
+.key-picker { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.key-picker-head { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.key-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.key-chips .chip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 11.5px; }

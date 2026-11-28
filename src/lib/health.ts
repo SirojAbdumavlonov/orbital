@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { api, Metrics } from "./api";
 import { goTo, isSsh, useStore } from "../store";
 import { DEFAULT_THRESHOLDS, Thresholds, useSettings } from "./settings";
+import { isMainWindow } from "./windows";
 
 // How a connected server is doing, at a glance (the sidebar's dot and the
 // overview on Home): from its latest metrics (already polled) and the failed
@@ -249,7 +250,8 @@ function showServer(profileId: string) {
 
 /** Runs after each minute's check: notifies (and toasts) health changes worth knowing. */
 export function checkAlerts() {
-  if (!useSettings.getState().healthAlerts) return;
+  // Alerts go out once: from the main window, not from every window showing the server.
+  if (!isMainWindow || !useSettings.getState().healthAlerts) return;
   const st = useStore.getState();
   const muted = useHealthMute.getState().muted;
   const now = Date.now();

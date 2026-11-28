@@ -39,11 +39,17 @@ async function offerKeyLogin(s: SessionState, key: LocalKey) {
   });
 }
 
-function NewKeyDialog({ s, existing, onClose, onMade }: { s: SessionState; existing: string[]; onClose: () => void; onMade: (k: LocalKey) => void }) {
-  const base = "id_ed25519";
-  const free = !existing.includes(base) ? base : [`${base}_orbital`, ...Array.from({ length: 20 }, (_, i) => `${base}_${i + 2}`)].find((n) => !existing.includes(n))!;
-  const [name, setName] = useState(free);
-  const [comment, setComment] = useState(`${s.profile.username}@orbital`);
+/** A key file name in ~/.ssh that isn't taken: `base`, else `base_2`, `base_3`… Pure; tested. */
+export function freeKeyName(base: string, existing: string[]): string {
+  if (!existing.includes(base)) return base;
+  for (let i = 2; i < 100; i++) if (!existing.includes(`${base}_${i}`)) return `${base}_${i}`;
+  return `${base}_${Date.now()}`;
+}
+
+/** Makes an Ed25519 key pair in ~/.ssh on this computer (SSH keys tab, and New user on any server). */
+export function NewKeyDialog({ existing, base = "id_ed25519", defaultComment, subtitle, onClose, onMade }: { existing: string[]; base?: string; defaultComment: string; subtitle?: string; onClose: () => void; onMade: (k: LocalKey) => void }) {
+  const [name, setName] = useState(freeKeyName(base, existing));
+  const [comment, setComment] = useState(defaultComment);
   const [pass, setPass] = useState("");
   const [pass2, setPass2] = useState("");
   const [busy, setBusy] = useState(false);
@@ -61,7 +67,7 @@ function NewKeyDialog({ s, existing, onClose, onMade }: { s: SessionState; exist
     }
   }
   return (
-    <Modal title="New SSH key" subtitle="An Ed25519 key pair, made on this computer and saved in ~/.ssh. The private key never leaves this computer." onClose={onClose}
+    <Modal title="New SSH key" subtitle={subtitle ?? "An Ed25519 key pair, made on this computer and saved in ~/.ssh. The private key never leaves this computer."} onClose={onClose}
       footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !name.trim() || mismatch} onClick={make}>{busy ? "Making the key…" : "Make key"}</button></>}>
       <div className="form">
         <label className="field"><span>File name</span>
@@ -268,7 +274,7 @@ export function SshKeysView({ s }: { s: SessionState }) {
           onAdded={(r, from) => { setData(r); setAdding(false); if (from) offerKeyLogin(s, from); else toast({ kind: "success", title: "Key allowed" }); }} />
       )}
       {making && (
-        <NewKeyDialog s={s} existing={local.map((k) => k.name)} onClose={() => setMaking(false)}
+        <NewKeyDialog existing={local.map((k) => k.name)} defaultComment={`${s.profile.username}@orbital`} onClose={() => setMaking(false)}
           onMade={(k) => { setMaking(false); loadLocal(); toast({ kind: "success", title: `Made ${k.path}`, body: "Click \"Allow on this server\" to sign in with it here." }); }} />
       )}
     </div>

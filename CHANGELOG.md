@@ -4,6 +4,11 @@ All notable changes to Orbital are listed here. The format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+- **SSH keys for a new user without leaving the dialog** (Users → Add user): the public keys in ~/.ssh on this computer are listed under the key box and added with a click, and New key makes a key pair for that user on the spot (named after them), its public half added at once.
+- **Open in a new window**: the window button at the end of a server's tabs opens that tab in a window of its own, on the same connection; the one on a server in the sidebar opens the whole server in a new window (connecting there if it isn't open yet). Each window works on its own; alerts, update checks and reopening servers at launch stay with the main window, so nothing is sent twice.
+- **More jails** (Fail2ban tab): ban addresses that keep failing on other services, like Protect SSH does for SSH: nginx password-protected pages, bots probing for files and malformed requests, Apache, Postfix, Dovecot, FTP and MySQL. Choose how many failures within how long, and how long the ban lasts, for each one; only services this server runs can be turned on. Every jail's limits can also be changed from its panel.
+
 ## 1.10.1 (2026-11-28)
 
 ### Added

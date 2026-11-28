@@ -1,4 +1,4 @@
-import { Archive, Bot, FileSearch, Layers, LogIn, NotebookPen, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound, Radar, Download, ListTree, PackageSearch } from "lucide-react";
+import { AppWindow, Archive, Bot, FileSearch, Layers, LogIn, NotebookPen, HardDrive, PackageCheck, Stethoscope, ArrowLeftRight, Rocket, ScrollText, Users as UsersIcon, KeyRound, Radar, Download, ListTree, PackageSearch } from "lucide-react";
 import { Activity, Boxes, Cable, Clock, Cpu, Database, FolderTree, Gauge, Globe, ListChecks, LockKeyhole, Network, PanelRightClose, PanelRightOpen, Plus, RefreshCw, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, asApiError, DetectedTool, InstallOption } from "../lib/api";
@@ -9,6 +9,7 @@ import { useSettings } from "../lib/settings";
 import { usePanes } from "../lib/panes";
 import { FavouriteAdd, FavouriteBar } from "./Favourites";
 import { KEYS } from "../lib/platform";
+import { openServerWindow } from "../lib/windows";
 import { ALWAYS_TOOLS, DEDICATED_TOOLS, isSsh, SessionState, Tab, useStore } from "../store";
 import { PROTOCOL_NAMES } from "./ProfileDialog";
 import { confirm, LiveNumber, Modal, Sparkline, StateDot } from "./ui";
@@ -301,6 +302,10 @@ export function ServerHeader({ s, hasPane }: { s: SessionState; hasPane?: boolea
         {isSsh(s) && <AddToolMenu s={s} />}
         <span className="tabs-end">
           <FavouriteAdd s={s} />
+          <button className="icon-btn" aria-label="Open this tab in a new window" title="Open this tab in a new window (same connection)"
+            onClick={() => void openServerWindow(s.info.id, s.tab, s.profile.name).catch((e) => useStore.getState().toast({ kind: "error", title: "Couldn't open a window", body: asApiError(e).message }))}>
+            <AppWindow size={15} />
+          </button>
           {hasPane && <PaneToggle tab={s.tab} />}
         </span>
       </nav>

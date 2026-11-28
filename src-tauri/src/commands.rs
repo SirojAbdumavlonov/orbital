@@ -670,6 +670,21 @@ pub async fn fail2ban_unban(engine: Eng<'_>, session_id: String, jail: Option<St
 }
 
 #[tauri::command]
+pub async fn fail2ban_jail_options(engine: Eng<'_>, session_id: String) -> R<Vec<orbital_core::fail2ban::JailOption>> {
+    engine.fail2ban_jail_options(&session_id).await
+}
+
+#[tauri::command]
+pub async fn fail2ban_set_jails(
+    engine: Eng<'_>,
+    session_id: String,
+    settings: Vec<orbital_core::fail2ban::JailSetting>,
+    progress: Channel<ProgressEvent>,
+) -> R<Fail2banStatus> {
+    progress::run_job(progress.id(), sink(progress), engine.fail2ban_set_jails(&session_id, &settings)).await
+}
+
+#[tauri::command]
 pub async fn fail2ban_protection(engine: Eng<'_>, session_id: String) -> R<Option<orbital_core::fail2ban::SshProtection>> {
     engine.fail2ban_protection(&session_id).await
 }
@@ -1277,6 +1292,87 @@ pub async fn run_snippet(
 
 /// A system notification for a job that finished while Orbital was in the
 /// background. Text only: the UI never puts command output or secrets in it.
+/// An open session's details, for a window that shows the same server.
+#[tauri::command]
+pub async fn session_info(engine: Eng<'_>, session_id: String) -> R<SessionInfo> {
+    engine.session_info(&session_id).await
+}
+
+/// Which window a new one starts as: an open server (`attach`, a session id),
+/// a saved server to connect to (`connect`, a profile id), and optionally on a tab.
+fn window_query(attach: Option<&str>, connect: Option<&str>, tab: Option<&str>) -> Result<String, Error> {
+    let id_ok = |v: &str| !v.is_empty() && v.len() <= 64 && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    let tab_ok = |v: &str| !v.is_empty() && v.len() <= 64 && v.chars().all(|c| c.is_ascii_alphanumeric() || "-_:".contains(c));
+    let mut q = Vec::new();
+    for (k, v, ok) in [
+        ("attach", attach, id_ok as fn(&str) -> bool),
+        ("connect", connect, id_ok),
+        ("tab", tab, tab_ok),
+    ] {
+        if let Some(v) = v {
+            if !ok(v) {
+                return Err(Error::InvalidInput(format!("bad {k} for a new window")));
+            }
+            q.push(format!("{k}={v}"));
+        }
+    }
+    Ok(q.join("&"))
+}
+
+/// Opens another Orbital window, on a server (and tab) or empty. Windows share
+/// the engine: an attached window uses the same connection.
+#[tauri::command]
+pub fn open_window(
+    app: tauri::AppHandle,
+    attach: Option<String>,
+    connect: Option<String>,
+    tab: Option<String>,
+    title: Option<String>,
+) -> R<()> {
+    let q = window_query(attach.as_deref(), connect.as_deref(), tab.as_deref())?;
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let label = format!("win-{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    let url = if q.is_empty() {
+        "index.html".to_string()
+    } else {
+        format!("index.html?{q}")
+    };
+    let title: String = title
+        .unwrap_or_else(|| "Orbital".into())
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(80)
+        .collect();
+    #[allow(unused_mut)]
+    let mut b = tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(1240.0, 820.0)
+        .min_inner_size(980.0, 620.0);
+    #[cfg(target_os = "macos")]
+    {
+        b = b
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .traffic_light_position(tauri::LogicalPosition::new(18.0, 22.0));
+    }
+    b.build().map_err(|e| Error::Other(format!("couldn't open a window: {e}")))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod window_tests {
+    #[test]
+    fn window_query_takes_only_ids_and_tab_names() {
+        assert_eq!(
+            super::window_query(Some("a1b2-c3"), None, Some("tool:docker")).unwrap(),
+            "attach=a1b2-c3&tab=tool:docker"
+        );
+        assert_eq!(super::window_query(None, None, None).unwrap(), "");
+        assert!(super::window_query(Some("x&connect=y"), None, None).is_err());
+        assert!(super::window_query(None, None, Some("files#<script>")).is_err());
+    }
+}
+
 #[tauri::command]
 pub fn notify(app: tauri::AppHandle, title: String, body: String) {
     use tauri_plugin_notification::NotificationExt;

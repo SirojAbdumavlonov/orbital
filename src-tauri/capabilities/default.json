@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: core APIs, window dragging from the top bars, native open/save dialogs, and checking for, installing and restarting into app updates, and notifications when an uptime check goes down or comes back, opening Orbital's own release notes on GitHub in the browser, and opening a forwarded app at http://localhost:<port>.",
+  "description": "Every Orbital window (the main one and the ones opened for a server or tab): core APIs, window dragging from the top bars, native open/save dialogs, and checking for, installing and restarting into app updates, and notifications when an uptime check goes down or comes back, opening Orbital's own release notes on GitHub in the browser, and opening a forwarded app at http://localhost:<port>.",
   "windows": [
-    "main"
+    "main",
+    "win-*"
   ],
   "permissions": [
     "core:default",
